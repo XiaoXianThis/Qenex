@@ -1,0 +1,33 @@
+[package]
+name = "qenex-desktop"
+version = "0.1.0"
+description = "Qenex Desktop"
+authors = ["Qenex"]
+edition = "2021"
+
+[workspace]
+
+[lib]
+name = "qenex_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["time"] }
+dirs = "6"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,8 @@
+{
+  "projectName": "agent-center",
+  "displayTitle": "Qenex",
+  "description": "ACP → AG-UI Bridge for Qenex Desktop",
+  "agentCommand": ["opencode", "acp"],
+  "backendPort": 8000,
+  "corsOrigins": []
+}

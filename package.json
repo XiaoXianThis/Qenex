@@ -9,13 +9,17 @@
   "scripts": {
     "dev": "bun scripts/dev.mjs",
     "dev:web": "bun run --filter @qenex/web dev",
+    "dev:desktop": "bun run --filter @qenex/desktop tauri:dev",
     "dev:rust": "cargo run --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui -- --config crates/bridge/bridge.config.json",
     "build": "bun scripts/build-all.mjs",
     "build:web": "bun scripts/build-web.mjs",
     "build:rust": "bun scripts/build-rust.mjs",
     "build:vscode": "bun scripts/build-vscode.mjs",
+    "build:desktop": "bun scripts/build-desktop.mjs",
     "verify:vscode": "bun scripts/verify-vscode.mjs",
+    "verify:desktop": "bun scripts/verify-desktop.mjs",
     "package:vscode": "bun run build:vscode && cd apps/vscode && bun run package",
+    "package:desktop": "bun scripts/build-desktop.mjs --package",
     "start": "bun scripts/start-build.mjs",
     "lint": "bun run --filter @qenex/web lint"
   }

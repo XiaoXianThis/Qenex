@@ -110,6 +110,17 @@ bun run package:vscode  # 生成 apps/vscode/qenex-*.vsix
 
 用 VS Code 打开 `apps/vscode` 目录，F5 启动 **Run Qenex Extension**。详见 [apps/vscode/README.md](apps/vscode/README.md)。
 
+### Tauri Desktop
+
+```bash
+bun run build:desktop    # 构建 sidecar + 前端
+bun run verify:desktop   # 自动验收
+bun run dev:desktop      # 开发模式（需先 build:desktop）
+bun run package:desktop  # 生成安装包
+```
+
+详见 [apps/desktop/README.md](apps/desktop/README.md)。
+
 ### 3. 使用
 
 1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
@@ -129,7 +140,7 @@ Qenex/
 ├── apps/
 │   ├── web/               # @qenex/web — 浏览器开发壳
 │   ├── vscode/            # VS Code 扩展（Activity Bar Webview）
-│   ├── desktop/           # Tauri 桌面端（待实现）
+│   ├── desktop/           # Tauri 桌面端（sidecar + Webview）
 │   └── jetbrains/         # JetBrains 插件（待实现）
 ├── crates/
 │   └── bridge/            # Rust ACP → AG-UI 桥接服务
@@ -190,8 +201,12 @@ Qenex/
 | `bun run build:web` | 仅构建前端 → `build/web/` |
 | `bun run build:rust` | 仅构建 Rust → `build/`（自动确保前端 dist 存在） |
 | `bun run build:vscode` | 构建 VS Code 扩展（Bridge + Webview + 宿主） |
+| `bun run build:desktop` | 构建 Tauri Desktop（sidecar + 前端） |
 | `bun run verify:vscode` | 自动验收 VS Code 扩展构建产物 |
+| `bun run verify:desktop` | 自动验收 Tauri Desktop 构建产物 |
+| `bun run dev:desktop` | Tauri 开发模式（:1420 + sidecar） |
 | `bun run package:vscode` | 打包 `.vsix`（需先 `build:vscode`） |
+| `bun run package:desktop` | 打包 Desktop 安装程序（需先 `build:desktop`） |
 | `bun run start` | 运行 `build/` 中的 release 二进制 |
 
 ```bash

@@ -100,6 +100,8 @@ fn build_cors_layer(config: &BridgeConfig) -> CorsLayer {
             };
 
             if origin_str.starts_with("vscode-webview://")
+                || origin_str.starts_with("tauri://")
+                || origin_str.starts_with("https://tauri.localhost")
                 || origin_str.starts_with("http://127.0.0.1:")
                 || origin_str.starts_with("http://localhost:")
             {

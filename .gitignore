@@ -13,6 +13,10 @@ apps/vscode/out/
 apps/vscode/*.vsix
 apps/vscode/webview/src/**/*.js
 apps/vscode/webview/node_modules/.tmp/
+apps/desktop/dist/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
 build/
 
 # Python
