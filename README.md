@@ -4,12 +4,12 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  frontend/          React + AG-UI + assistant-ui            │
+│  packages/ui + apps/*   React + AG-UI + assistant-ui      │
 │  多 Tab · 审批 · 历史回放 · 会话配置                          │
 └──────────────────────────┬──────────────────────────────────┘
                            │ HTTP / SSE
 ┌──────────────────────────▼──────────────────────────────────┐
-│  backend-rs/        Rust ACP → AG-UI Bridge (axum)          │
+│  crates/bridge      Rust ACP → AG-UI Bridge (axum)          │
 │  任务管理 · 事件持久化 · 进程清理 · 文件/Git API              │
 └──────────────────────────┬──────────────────────────────────┘
                            │ JSON-RPC over stdio
@@ -38,16 +38,55 @@
 - **Node.js** 18+（前端）
 - 至少一个已在 PATH 中的 ACP Agent（如 `opencode acp`、`kiro-cli acp`）
 
-### 1. 启动后端
+### 1. 构建并启动（推荐）
 
 ```bash
-cd backend-rs
-cargo run --features server --bin acp-to-agui
+bun install
+bun run build      # 构建前后端，产物输出到 build/
+bun run start      # 运行 build/ 中的二进制
 ```
 
-默认读取 `backend-rs/bridge.config.json`，监听 `http://localhost:8000`。
+或直接运行：
 
-配置示例：
+```bash
+# Windows
+.\build\start.ps1
+
+# Unix
+./build/start.sh
+```
+
+打开 `http://localhost:8000` 即可使用，无需单独启动 Vite。
+
+`build/` 目录结构：
+
+```
+build/
+├── acp-to-agui.exe   # 或 acp-to-agui（UI 已嵌入 + API）
+├── bridge.config.json
+├── web/              # 前端静态文件副本（参考用）
+├── start.ps1
+└── start.sh
+```
+
+### 2. 开发模式
+
+一键启动前后端（前端 HMR :3000，后端 API :8000）：
+
+```bash
+bun run dev
+```
+
+也可分别启动：
+
+```bash
+bun run dev:rust   # Rust bridge → :8000
+bun run dev:web    # Vite HMR   → :3000
+```
+
+前端通过 Vite 代理将 `/ag-ui`、`/v2`、`/health` 转发到后端。
+
+### 配置示例
 
 ```json
 {
@@ -55,23 +94,15 @@ cargo run --features server --bin acp-to-agui
   "displayTitle": "Agent Center",
   "agentCommand": ["opencode", "acp"],
   "backendPort": 8000,
-  "corsOrigins": ["http://localhost:5173", "http://localhost:3000"]
+  "corsOrigins": ["http://localhost:5173", "http://localhost:3000", "http://localhost:8000"]
 }
 ```
 
-### 2. 启动前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-前端默认运行在 `http://localhost:3000`，通过 Vite 代理将 `/ag-ui`、`/v2`、`/health` 转发到后端。
+默认读取 `crates/bridge/bridge.config.json`，监听 `http://localhost:8000`。
 
 ### 3. 使用
 
-1. 打开浏览器访问 `http://localhost:3000`
+1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
 2. 点击 **+** 创建新会话，选择 Agent 与工作目录
 3. 在对话区与 Agent 交互；工具审批请求会自动弹出
 4. 通过 Tab 栏切换会话，历史记录可恢复已归档的 Tab
@@ -79,19 +110,21 @@ npm run dev
 ## 项目结构
 
 ```
-AgentCenter/
-├── backend-rs/          # Rust ACP → AG-UI 桥接服务（主后端）
-│   ├── src/             # 库 + axum HTTP 服务
-│   ├── bridge.config.json
-│   └── README.md        # 后端详细文档
-├── frontend/            # React Web UI
-│   ├── src/
-│   │   ├── components/  # Thread、TabBar、ApprovalBridge 等
-│   │   ├── store/       # Zustand 多 Tab 状态
-│   │   └── lib/         # Bridge API、历史回放适配器
-│   └── FRONTEND_TABS.md # 前端多 Tab 设计说明
-├── acp-to-agui/         # 上游 Python 参考实现（协议契约来源）
-└── CHANGELOG.md         # 变更记录
+Qenex/
+├── packages/
+│   ├── platform/        # @qenex/platform — 宿主抽象（QenexHost）
+│   ├── core/              # @qenex/core — API、状态、会话逻辑
+│   ├── ui/                # @qenex/ui — 共享 React 组件
+│   └── tsconfig/          # 共享 TypeScript 配置
+├── apps/
+│   ├── web/               # @qenex/web — 浏览器开发壳
+│   ├── vscode/            # VS Code 扩展（待实现）
+│   ├── desktop/           # Tauri 桌面端（待实现）
+│   └── jetbrains/         # JetBrains 插件（待实现）
+├── crates/
+│   └── bridge/            # Rust ACP → AG-UI 桥接服务
+├── acp-to-agui/           # 上游 Python 参考实现
+└── CHANGELOG.md
 ```
 
 ## 支持的 Agent
@@ -131,29 +164,39 @@ AgentCenter/
 
 | 文档 | 说明 |
 |------|------|
-| [backend-rs/README.md](backend-rs/README.md) | 后端 API、配置、协议映射、库用法 |
-| [frontend/FRONTEND_TABS.md](frontend/FRONTEND_TABS.md) | 多 Tab 会话管理设计 |
+| [crates/bridge/README.md](crates/bridge/README.md) | 后端 API、配置、协议映射、库用法 |
+| [packages/ui/FRONTEND_TABS.md](packages/ui/FRONTEND_TABS.md) | 多 Tab 会话管理设计 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [acp-to-agui/docs/](acp-to-agui/docs/) | 上游协议契约与集成说明 |
 
 ## 开发
 
-```bash
-# 后端测试
-cd backend-rs && cargo test && cargo test --features server
+| 命令 | 说明 |
+|------|------|
+| `bun run dev` | 同时启动前后端开发服务 |
+| `bun run dev:web` | 仅 Vite 前端 (:3000) |
+| `bun run dev:rust` | 仅 Rust bridge (:8000) |
+| `bun run build` | 构建前后端并输出到 `build/` |
+| `bun run build:web` | 仅构建前端 → `build/web/` |
+| `bun run build:rust` | 仅构建 Rust → `build/`（自动确保前端 dist 存在） |
+| `bun run start` | 运行 `build/` 中的 release 二进制 |
 
-# 前端构建
-cd frontend && npm run build
+```bash
+# 前端构建 + 后端测试
+bun run build:web
+cd crates/bridge && cargo test && cargo test --features server
 
 # 后端调试日志
-RUST_LOG=acp_to_agui=debug cargo run --features server --bin acp-to-agui
+bun run dev:rust
+# 或
+cd crates/bridge && RUST_LOG=acp_to_agui=debug cargo run --features server --bin acp-to-agui
 ```
 
 ## 与 Python 参考版
 
 本仓库以 Rust 后端 + 定制前端为主开发路径。`acp-to-agui/` 目录保留上游 Python/FastAPI 参考实现，用于协议契约对齐。
 
-| | Python (`acp-to-agui`) | Rust (`backend-rs`) |
+| | Python (`acp-to-agui`) | Rust (`crates/bridge`) |
 |--|------------------------|---------------------|
 | HTTP | FastAPI | axum |
 | 持久化 | aiosqlite | sqlx + SQLite |
