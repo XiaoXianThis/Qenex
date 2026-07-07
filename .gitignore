@@ -23,6 +23,7 @@ apps/jetbrains/build/
 apps/jetbrains/.gradle/
 apps/jetbrains/.intellijPlatform/
 build/
+dist-artifacts/
 
 # Python
 .venv/

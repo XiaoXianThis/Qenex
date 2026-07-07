@@ -132,6 +132,35 @@ bun run package:jetbrains  # 生成 apps/jetbrains/build/distributions/*.zip
 
 详见 [apps/jetbrains/README.md](apps/jetbrains/README.md)。
 
+### GitHub Release（多平台产物）
+
+推送 `v*` tag 后，GitHub Actions 会在 Windows / macOS / Linux 上并行构建并发布四类产物：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+也可在 GitHub **Actions → Release → Run workflow** 手动触发（手动触发仅上传 Artifacts，不创建 Release）。
+
+| 产物 | 文件名模式 | 使用方式 |
+|------|-----------|----------|
+| 一体服务端 | `qenex-server-{version}-{platform}.zip` | 解压后运行 `start.ps1` / `start.sh`，浏览器访问 `:8000` |
+| VS Code 插件 | `qenex-vscode-{version}-{platform}.vsix` | VS Code → 从 VSIX 安装 |
+| JetBrains 插件 | `qenex-jetbrains-{version}-{platform}.zip` | IDE → 从磁盘安装插件 |
+| Desktop 安装包 | `qenex-desktop-{version}-{platform}-*` | 运行对应 OS 安装程序 |
+
+`platform` 为 `win32-x64`、`darwin-arm64`（Apple Silicon）、`linux-x64`。
+
+本地模拟单平台 Release 构建：
+
+```bash
+bun run ci:release -- --platform win32-x64
+# 产物输出到 dist-artifacts/
+```
+
+PR / `main` 分支推送会运行轻量 CI（lint、Rust 测试、web + bridge 构建），见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+
 ### 3. 使用
 
 1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
@@ -222,6 +251,8 @@ Qenex/
 | `bun run package:vscode` | 打包 `.vsix`（需先 `build:vscode`） |
 | `bun run package:desktop` | 打包 Desktop 安装程序（需先 `build:desktop`） |
 | `bun run package:jetbrains` | 打包 JetBrains 插件 zip（需先 `build:jetbrains`） |
+| `bun run ci:release` | CI / 本地 Release 构建（需 `--platform`） |
+| `bun run verify:all` | 验收 VS Code + Desktop + JetBrains 构建产物 |
 | `bun run start` | 运行 `build/` 中的 release 二进制 |
 
 ```bash

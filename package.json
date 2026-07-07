@@ -25,6 +25,8 @@
     "package:vscode": "bun run build:vscode && cd apps/vscode && bun run package",
     "package:desktop": "bun scripts/build-desktop.mjs --package",
     "package:jetbrains": "bun run build:jetbrains && node scripts/package-jetbrains.mjs",
+    "ci:release": "node scripts/ci-release.mjs",
+    "verify:all": "bun run verify:vscode && bun run verify:desktop && bun run verify:jetbrains",
     "start": "bun scripts/start-build.mjs",
     "lint": "bun run --filter @qenex/web lint"
   }

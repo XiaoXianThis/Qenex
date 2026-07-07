@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  verify:
+    name: Lint, test, and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bridge
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test Rust bridge
+        run: cargo test --manifest-path crates/bridge/Cargo.toml
+
+      - name: Test Rust bridge (server feature)
+        run: cargo test --manifest-path crates/bridge/Cargo.toml --features server
+
+      - name: Build web frontend
+        run: bun run build:web
+
+      - name: Build Rust bridge binary
+        run: cargo build --release --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui
