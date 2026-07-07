@@ -4,22 +4,27 @@
   "workspaces": [
     "packages/*",
     "apps/*",
-    "apps/vscode/webview"
+    "apps/vscode/webview",
+    "apps/jetbrains/webview"
   ],
   "scripts": {
     "dev": "bun scripts/dev.mjs",
     "dev:web": "bun run --filter @qenex/web dev",
     "dev:desktop": "bun run --filter @qenex/desktop tauri:dev",
+    "dev:jetbrains": "bun scripts/dev-jetbrains.mjs",
     "dev:rust": "cargo run --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui -- --config crates/bridge/bridge.config.json",
     "build": "bun scripts/build-all.mjs",
     "build:web": "bun scripts/build-web.mjs",
     "build:rust": "bun scripts/build-rust.mjs",
     "build:vscode": "bun scripts/build-vscode.mjs",
     "build:desktop": "bun scripts/build-desktop.mjs",
+    "build:jetbrains": "bun scripts/build-jetbrains.mjs",
     "verify:vscode": "bun scripts/verify-vscode.mjs",
     "verify:desktop": "bun scripts/verify-desktop.mjs",
+    "verify:jetbrains": "bun scripts/verify-jetbrains.mjs",
     "package:vscode": "bun run build:vscode && cd apps/vscode && bun run package",
     "package:desktop": "bun scripts/build-desktop.mjs --package",
+    "package:jetbrains": "bun run build:jetbrains && node scripts/package-jetbrains.mjs",
     "start": "bun scripts/start-build.mjs",
     "lint": "bun run --filter @qenex/web lint"
   }

@@ -1,0 +1,8 @@
+{
+  "projectName": "agent-center",
+  "displayTitle": "Qenex",
+  "description": "ACP → AG-UI Bridge for Qenex JetBrains Plugin",
+  "agentCommand": ["opencode", "acp"],
+  "backendPort": 8000,
+  "corsOrigins": []
+}

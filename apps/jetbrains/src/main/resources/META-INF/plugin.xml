@@ -1,0 +1,25 @@
+<idea-plugin>
+    <id>com.qenex.jetbrains</id>
+    <name>Qenex</name>
+    <vendor>qenex</vendor>
+    <description><![CDATA[
+        ACP Agent Center — multi-tab agent UI for JetBrains IDEs.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="com.qenex.BridgeProcessManager"/>
+        <toolWindow
+            id="Qenex"
+            anchor="right"
+            icon="/icons/qenex.svg"
+            factoryClass="com.qenex.QenexToolWindowFactory"/>
+    </extensions>
+
+    <applicationListeners>
+        <listener
+            class="com.qenex.QenexAppListener"
+            topic="com.intellij.ide.AppLifecycleListener"/>
+    </applicationListeners>
+</idea-plugin>

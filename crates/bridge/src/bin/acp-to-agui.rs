@@ -99,7 +99,10 @@ fn build_cors_layer(config: &BridgeConfig) -> CorsLayer {
                 return false;
             };
 
-            if origin_str.starts_with("vscode-webview://")
+            if origin_str == "null"
+                || origin_str.starts_with("jar:")
+                || origin_str.starts_with("file://")
+                || origin_str.starts_with("vscode-webview://")
                 || origin_str.starts_with("tauri://")
                 || origin_str.starts_with("https://tauri.localhost")
                 || origin_str.starts_with("http://127.0.0.1:")

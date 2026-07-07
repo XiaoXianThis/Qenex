@@ -31,6 +31,29 @@
         "vite": "^8.1.1",
       },
     },
+    "apps/jetbrains/webview": {
+      "name": "@qenex/jetbrains-webview",
+      "version": "0.0.0",
+      "dependencies": {
+        "@qenex/core": "workspace:*",
+        "@qenex/platform": "workspace:*",
+        "@qenex/ui": "workspace:*",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
+      },
+      "devDependencies": {
+        "@qenex/tsconfig": "workspace:*",
+        "@tailwindcss/vite": "^4.3.2",
+        "@types/node": "^26.1.0",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^6.0.3",
+        "oxlint": "^1.71.0",
+        "tailwindcss": "^4.3.2",
+        "typescript": "~6.0.2",
+        "vite": "^8.1.1",
+      },
+    },
     "apps/vscode": {
       "name": "qenex",
       "version": "0.1.0",
@@ -340,6 +363,8 @@
     "@qenex/core": ["@qenex/core@workspace:packages/core"],
 
     "@qenex/desktop": ["@qenex/desktop@workspace:apps/desktop"],
+
+    "@qenex/jetbrains-webview": ["@qenex/jetbrains-webview@workspace:apps/jetbrains/webview"],
 
     "@qenex/platform": ["@qenex/platform@workspace:packages/platform"],
 
