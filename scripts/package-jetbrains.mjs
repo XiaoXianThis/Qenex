@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jetbrainsDir = join(root, "apps", "jetbrains");
 const isWin = process.platform === "win32";
 const gradlew = isWin ? "gradlew.bat" : "./gradlew";
+
+if (!isWin) {
+  chmodSync(join(jetbrainsDir, "gradlew"), 0o755);
+}
 
 execSync(`${gradlew} buildPlugin`, {
   cwd: jetbrainsDir,

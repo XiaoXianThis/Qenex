@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jetbrainsDir = join(root, "apps", "jetbrains");
 const isWin = process.platform === "win32";
 const binName = isWin ? "acp-to-agui.exe" : "acp-to-agui";
-const gradlew = isWin ? "gradlew.bat" : "gradlew";
+const gradlew = isWin ? "gradlew.bat" : "./gradlew";
 
 const required = [
   join(jetbrainsDir, "src", "main", "resources", "webview", "index.html"),
@@ -34,6 +34,10 @@ execSync("bunx tsc --noEmit -p tsconfig.json", {
   cwd: join(jetbrainsDir, "webview"),
   stdio: "inherit",
 });
+
+if (!isWin) {
+  chmodSync(join(jetbrainsDir, "gradlew"), 0o755);
+}
 
 console.log("Compiling Kotlin plugin...");
 execSync(`${gradlew} compileKotlin`, {

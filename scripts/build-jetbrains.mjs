@@ -9,7 +9,7 @@ const binDir = join(jetbrainsDir, "bin");
 const isWin = process.platform === "win32";
 const binName = isWin ? "acp-to-agui.exe" : "acp-to-agui";
 const releaseBin = join(root, "target", "release", binName);
-const gradlew = isWin ? "gradlew.bat" : "gradlew";
+const gradlew = isWin ? "gradlew.bat" : "./gradlew";
 
 console.log("Building Rust bridge...");
 execSync("bun scripts/build-rust.mjs", { cwd: root, stdio: "inherit" });
@@ -30,6 +30,10 @@ execSync("bun run build", {
   cwd: join(jetbrainsDir, "webview"),
   stdio: "inherit",
 });
+
+if (!isWin) {
+  chmodSync(join(jetbrainsDir, "gradlew"), 0o755);
+}
 
 console.log("Compiling Kotlin plugin...");
 execSync(`${gradlew} compileKotlin`, {
