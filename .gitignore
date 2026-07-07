@@ -1,0 +1,24 @@
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environment and secrets
+.env
+.env.*
+*.db
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
