@@ -1,5 +1,7 @@
 export * from "./config/agents.ts";
+export * from "./context/HostContext.tsx";
 export * from "./context/SessionConfigContext.tsx";
+export { getAguiUrl, resolveAguiUrl } from "./lib/bridge-client.ts";
 export * from "./lib/bridge-agent.ts";
 export * from "./lib/bridge-api.ts";
 export * from "./lib/bridge-history-adapter.ts";

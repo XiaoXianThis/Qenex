@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Thread } from "@/components/assistant-ui/thread";
 import { AgentRuntimeProvider } from "@/components/AgentRuntimeProvider";
 import { TabBar } from "@/components/TabBar";
 import { HistoryPanel } from "@/components/HistoryPanel";
-import { useTabsStore } from "@qenex/core";
+import { useHost, useTabsStore } from "@qenex/core";
 import {
   AGENT_PRESETS,
   DEFAULT_AGENT_ID,
@@ -11,10 +11,30 @@ import {
 } from "@qenex/core";
 
 export default function App() {
+  const host = useHost();
   const [showHistory, setShowHistory] = useState(false);
   const [showNewTabDialog, setShowNewTabDialog] = useState(false);
   const [draftAgentId, setDraftAgentId] = useState(DEFAULT_AGENT_ID);
   const [draftCwd, setDraftCwd] = useState(".");
+
+  useEffect(() => {
+    let cancelled = false;
+    void host.getDefaultWorkspace().then((cwd) => {
+      if (!cancelled && cwd) {
+        setDraftCwd(cwd);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
+
+  const handlePickWorkspace = async () => {
+    const picked = await host.pickWorkspace();
+    if (picked) {
+      setDraftCwd(picked);
+    }
+  };
 
   const tabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
@@ -121,12 +141,21 @@ export default function App() {
 
               <label className="flex flex-col gap-1.5 text-sm">
                 <span className="text-muted-foreground">工作目录 (cwd)</span>
-                <input
-                  className="h-9 rounded-md border bg-background px-3"
-                  value={draftCwd}
-                  onChange={(e) => setDraftCwd(e.target.value)}
-                  placeholder="."
-                />
+                <div className="flex gap-2">
+                  <input
+                    className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3"
+                    value={draftCwd}
+                    onChange={(e) => setDraftCwd(e.target.value)}
+                    placeholder="."
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handlePickWorkspace()}
+                    className="h-9 shrink-0 rounded-md border px-3 text-sm hover:bg-muted transition-colors"
+                  >
+                    选择
+                  </button>
+                </div>
               </label>
 
               <div className="flex gap-2">

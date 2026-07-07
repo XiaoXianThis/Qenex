@@ -27,6 +27,3 @@ export function getAgentPreset(id: string): AgentPreset {
     AGENT_PRESETS.find((agent) => agent.id === DEFAULT_AGENT_ID)!
   );
 }
-
-/** AG-UI endpoint — defaults to Vite dev proxy `/ag-ui` */
-export const AGUI_URL = import.meta.env.VITE_AGUI_URL ?? "/ag-ui";

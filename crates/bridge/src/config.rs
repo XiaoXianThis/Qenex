@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use serde_json::Value;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,22 +111,15 @@ impl BridgeConfig {
 
 pub fn load_config(path: &str) -> BridgeConfig {
     match std::fs::read_to_string(path) {
-        Ok(text) if !text.trim().is_empty() => match serde_json::from_str::<Value>(&text) {
-            Ok(value) => {
-                let mapped = camel_to_snake_keys(value);
-                match serde_json::from_value::<BridgeConfigFile>(mapped) {
-                    Ok(file) => BridgeConfig::from_file(file),
-                    Err(e) => {
-                        tracing::warn!("invalid config values in '{path}': {e} — using defaults");
-                        BridgeConfig::default()
-                    }
+        Ok(text) if !text.trim().is_empty() => {
+            match serde_json::from_str::<BridgeConfigFile>(&text) {
+                Ok(file) => BridgeConfig::from_file(file),
+                Err(e) => {
+                    tracing::warn!("invalid config values in '{path}': {e} — using defaults");
+                    BridgeConfig::default()
                 }
             }
-            Err(e) => {
-                tracing::warn!("invalid JSON in '{path}': {e} — using defaults");
-                BridgeConfig::default()
-            }
-        },
+        }
         Ok(_) => {
             tracing::warn!("config '{path}' is empty — using defaults");
             BridgeConfig::default()
@@ -143,29 +135,4 @@ fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-}
-
-fn camel_to_snake_keys(value: Value) -> Value {
-    let map = match value {
-        Value::Object(m) => m,
-        other => return other,
-    };
-
-    let mut out = serde_json::Map::new();
-    for (k, v) in map {
-        let key = match k.as_str() {
-            "projectName" => "project_name",
-            "displayTitle" => "display_title",
-            "description" => "description",
-            "agentCommand" => "agent_command",
-            "backendPort" => "backend_port",
-            "corsOrigins" => "cors_origins",
-            "dbDirectory" => "db_directory",
-            "demoMode" => "demo_mode",
-            "eventTtlDays" => "event_ttl_days",
-            other => other,
-        };
-        out.insert(key.to_string(), v);
-    }
-    Value::Object(out)
 }

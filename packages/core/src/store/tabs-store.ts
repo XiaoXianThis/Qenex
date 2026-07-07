@@ -1,6 +1,8 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { deleteTask as deleteTaskOnServer } from "../lib/bridge-api.ts";
+import { getBridgeHost } from "../lib/bridge-client.ts";
+import { getHostPersistStorage } from "../lib/host-storage.ts";
 import { DEFAULT_AGENT_ID, getAgentPreset } from "../config/agents.ts";
 
 const MAX_ACTIVE_TABS = 5;
@@ -37,7 +39,7 @@ type TabsActions = {
   updateTabTitle: (tabId: string, title: string) => void;
   setAgentSessionId: (tabId: string, agentSessionId: string) => void;
   clearHistoryLoad: (tabId: string) => void;
-  ensureInitialTab: () => void;
+  ensureInitialTab: () => Promise<void>;
 };
 
 export const useTabsStore = create<TabsState & TabsActions>()(
@@ -63,14 +65,13 @@ export const useTabsStore = create<TabsState & TabsActions>()(
           status: "active",
         };
 
-        // If >= 5 active tabs, archive the oldest by lastActiveAt
         if (activeTabs.length >= MAX_ACTIVE_TABS) {
           const oldest = activeTabs.sort(
-            (a, b) => a.lastActiveAt - b.lastActiveAt
+            (a, b) => a.lastActiveAt - b.lastActiveAt,
           )[0];
           set((state) => ({
             tabs: state.tabs.map((t) =>
-              t.id === oldest.id ? { ...t, status: "archived" as const } : t
+              t.id === oldest.id ? { ...t, status: "archived" as const } : t,
             ),
           }));
         }
@@ -85,7 +86,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
         set((state) => ({
           activeTabId: tabId,
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, lastActiveAt: Date.now() } : t
+            t.id === tabId ? { ...t, lastActiveAt: Date.now() } : t,
           ),
         }));
       },
@@ -93,7 +94,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
       closeTab: (tabId) => {
         set((state) => {
           const remaining = state.tabs.map((t) =>
-            t.id === tabId ? { ...t, status: "archived" as const } : t
+            t.id === tabId ? { ...t, status: "archived" as const } : t,
           );
           const newActiveId =
             state.activeTabId === tabId
@@ -106,21 +107,22 @@ export const useTabsStore = create<TabsState & TabsActions>()(
       restoreTab: (tabId) => {
         const activeTabs = get().tabs.filter((t) => t.status === "active");
         if (activeTabs.length >= MAX_ACTIVE_TABS) {
-          // Archive oldest active tab
           const oldest = activeTabs.sort(
-            (a, b) => a.lastActiveAt - b.lastActiveAt
+            (a, b) => a.lastActiveAt - b.lastActiveAt,
           )[0];
           set((state) => ({
             tabs: state.tabs.map((t) => {
-              if (t.id === oldest.id)
+              if (t.id === oldest.id) {
                 return { ...t, status: "archived" as const };
-              if (t.id === tabId)
+              }
+              if (t.id === tabId) {
                 return {
                   ...t,
                   status: "active" as const,
                   lastActiveAt: Date.now(),
                   needsHistoryLoad: true,
                 };
+              }
               return t;
             }),
           }));
@@ -134,7 +136,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
                     lastActiveAt: Date.now(),
                     needsHistoryLoad: true,
                   }
-                : t
+                : t,
             ),
           }));
         }
@@ -153,7 +155,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
           const remaining = state.tabs.filter((t) => t.id !== tabId);
           const newActiveId =
             state.activeTabId === tabId
-              ? remaining.find((t) => t.status === "active")?.id ?? null
+              ? (remaining.find((t) => t.status === "active")?.id ?? null)
               : state.activeTabId;
           return { tabs: remaining, activeTabId: newActiveId };
         });
@@ -168,7 +170,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
       setAgentSessionId: (tabId, agentSessionId) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, agentSessionId } : t
+            t.id === tabId ? { ...t, agentSessionId } : t,
           ),
         }));
       },
@@ -176,12 +178,12 @@ export const useTabsStore = create<TabsState & TabsActions>()(
       clearHistoryLoad: (tabId) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, needsHistoryLoad: false } : t
+            t.id === tabId ? { ...t, needsHistoryLoad: false } : t,
           ),
         }));
       },
 
-      ensureInitialTab: () => {
+      ensureInitialTab: async () => {
         const state = get();
         const activeTabs = state.tabs.filter((t) => t.status === "active");
 
@@ -192,21 +194,19 @@ export const useTabsStore = create<TabsState & TabsActions>()(
           return;
         }
 
+        const defaultCwd =
+          (await getBridgeHost().getDefaultWorkspace()) ?? ".";
+
         get().createTab({
           agentId: DEFAULT_AGENT_ID,
-          cwd: ".",
+          cwd: defaultCwd,
         });
       },
     }),
     {
       name: "agent-center-tabs",
-      onRehydrateStorage: () => (_state, error) => {
-        if (!error) {
-          queueMicrotask(() => {
-            useTabsStore.getState().ensureInitialTab();
-          });
-        }
-      },
-    }
-  )
+      storage: createJSONStorage(() => getHostPersistStorage()),
+      skipHydration: true,
+    },
+  ),
 );

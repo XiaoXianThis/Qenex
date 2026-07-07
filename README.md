@@ -100,6 +100,16 @@ bun run dev:web    # Vite HMR   → :3000
 
 默认读取 `crates/bridge/bridge.config.json`，监听 `http://localhost:8000`。
 
+### VS Code 扩展
+
+```bash
+bun run build:vscode    # 构建扩展
+bun run verify:vscode   # 自动验收
+bun run package:vscode  # 生成 apps/vscode/qenex-*.vsix
+```
+
+用 VS Code 打开 `apps/vscode` 目录，F5 启动 **Run Qenex Extension**。详见 [apps/vscode/README.md](apps/vscode/README.md)。
+
 ### 3. 使用
 
 1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
@@ -118,7 +128,7 @@ Qenex/
 │   └── tsconfig/          # 共享 TypeScript 配置
 ├── apps/
 │   ├── web/               # @qenex/web — 浏览器开发壳
-│   ├── vscode/            # VS Code 扩展（待实现）
+│   ├── vscode/            # VS Code 扩展（Activity Bar Webview）
 │   ├── desktop/           # Tauri 桌面端（待实现）
 │   └── jetbrains/         # JetBrains 插件（待实现）
 ├── crates/
@@ -179,6 +189,9 @@ Qenex/
 | `bun run build` | 构建前后端并输出到 `build/` |
 | `bun run build:web` | 仅构建前端 → `build/web/` |
 | `bun run build:rust` | 仅构建 Rust → `build/`（自动确保前端 dist 存在） |
+| `bun run build:vscode` | 构建 VS Code 扩展（Bridge + Webview + 宿主） |
+| `bun run verify:vscode` | 自动验收 VS Code 扩展构建产物 |
+| `bun run package:vscode` | 打包 `.vsix`（需先 `build:vscode`） |
 | `bun run start` | 运行 `build/` 中的 release 二进制 |
 
 ```bash

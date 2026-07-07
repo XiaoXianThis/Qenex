@@ -7,6 +7,12 @@ node_modules/
 dist/
 dist-ssr/
 apps/*/dist/
+apps/vscode/media/
+apps/vscode/bin/
+apps/vscode/out/
+apps/vscode/*.vsix
+apps/vscode/webview/src/**/*.js
+apps/vscode/webview/node_modules/.tmp/
 build/
 
 # Python
@@ -24,4 +30,5 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+!apps/vscode/.vscode/**
 *.log

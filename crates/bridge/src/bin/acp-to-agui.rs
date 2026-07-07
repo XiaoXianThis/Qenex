@@ -5,7 +5,7 @@ use clap::Parser;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
-use acp_to_agui::config::load_config;
+use acp_to_agui::config::{load_config, BridgeConfig};
 use acp_to_agui::server::{build_router, build_state};
 
 #[derive(Parser)]
@@ -64,29 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let origins: Result<Vec<HeaderValue>, _> = config
-        .cors_origins
-        .iter()
-        .map(|o| HeaderValue::from_str(o))
-        .collect();
-    let origins = origins.unwrap_or_default();
-
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            header::AUTHORIZATION,
-            header::ACCEPT,
-        ])
-        .allow_credentials(true);
+    let cors = build_cors_layer(&config);
 
     let app = build_router(state).layer(cors);
 
@@ -106,4 +84,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
+}
+
+fn build_cors_layer(config: &BridgeConfig) -> CorsLayer {
+    let listed_origins: Vec<String> = config
+        .cors_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok().and_then(|v| v.to_str().ok().map(str::to_string)))
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _parts| {
+            let Ok(origin_str) = origin.to_str() else {
+                return false;
+            };
+
+            if origin_str.starts_with("vscode-webview://")
+                || origin_str.starts_with("http://127.0.0.1:")
+                || origin_str.starts_with("http://localhost:")
+            {
+                return true;
+            }
+
+            listed_origins.iter().any(|allowed| allowed == origin_str)
+        }))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::ACCEPT,
+            header::CACHE_CONTROL,
+        ])
+        .allow_credentials(true)
 }

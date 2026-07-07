@@ -62,28 +62,7 @@ export type TaskListResponse = {
   tasks: TaskSummary[];
 };
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: response.statusText }));
-    const detail =
-      typeof error === "object" && error && "detail" in error
-        ? String((error as { detail?: string }).detail)
-        : response.statusText;
-    throw new Error(detail || `HTTP ${response.status}`);
-  }
-
-  return response.json() as Promise<T>;
-}
+import { fetchJson } from "./bridge-client.ts";
 
 function toSessionConfig(
   payload: EnsureSessionResponse | SessionConfigResponse,

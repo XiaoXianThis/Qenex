@@ -3,9 +3,14 @@ import { createRoot } from "react-dom/client";
 import { QenexHostProvider } from "@qenex/core";
 import { App } from "@qenex/ui";
 import "@qenex/ui/styles.css";
-import { createWebHost } from "./host/web-host";
+import {
+  createVscodeHost,
+  installVscodeMessageBridge,
+} from "./host/vscode-host";
 
-const host = createWebHost();
+const vscode = acquireVsCodeApi();
+installVscodeMessageBridge(vscode);
+const host = createVscodeHost(vscode);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -1,5 +1,6 @@
 import { HttpAgent, type RunAgentInput } from "@ag-ui/client";
 import type { RunAgentParameters } from "@ag-ui/client";
+import { bridgeFetch } from "./bridge-client.ts";
 
 export type SessionProps = {
   cwd: string;
@@ -30,7 +31,7 @@ export class BridgeHttpAgent extends HttpAgent {
 
   async loadHistory(taskId: string): Promise<AguiEvent[]> {
     try {
-      const response = await fetch(`/v2/tasks/${taskId}/messages`);
+      const response = await bridgeFetch(`/v2/tasks/${taskId}/messages`);
       if (!response.ok) {
         console.warn(`Failed to load history for task ${taskId}:`, response.statusText);
         return [];

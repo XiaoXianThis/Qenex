@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "apps/vscode/webview"
   ],
   "scripts": {
     "dev": "bun scripts/dev.mjs",
@@ -12,6 +13,9 @@
     "build": "bun scripts/build-all.mjs",
     "build:web": "bun scripts/build-web.mjs",
     "build:rust": "bun scripts/build-rust.mjs",
+    "build:vscode": "bun scripts/build-vscode.mjs",
+    "verify:vscode": "bun scripts/verify-vscode.mjs",
+    "package:vscode": "bun run build:vscode && cd apps/vscode && bun run package",
     "start": "bun scripts/start-build.mjs",
     "lint": "bun run --filter @qenex/web lint"
   }

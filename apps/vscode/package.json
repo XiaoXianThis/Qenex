@@ -1,0 +1,47 @@
+{
+  "name": "qenex",
+  "displayName": "Qenex",
+  "description": "ACP Agent Center — multi-tab agent UI in VS Code",
+  "version": "0.1.0",
+  "publisher": "qenex",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onView:qenex.sidebar"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "qenex",
+          "title": "Qenex",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "qenex": [
+        {
+          "type": "webview",
+          "id": "qenex.sidebar",
+          "name": "Agent"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "build:webview": "cd webview && bun run build",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.3",
+    "typescript": "~6.0.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "projectName": "agent-center",
+  "displayTitle": "Agent Center",
+  "description": "ACP → AG-UI Bridge for Agent Center",
+  "agentCommand": ["opencode", "acp"],
+  "backendPort": 8000,
+  "corsOrigins": []
+}

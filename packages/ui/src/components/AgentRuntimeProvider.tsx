@@ -1,13 +1,13 @@
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ApprovalBridge } from "@/components/ApprovalBridge";
 import { TabTitleBridge } from "@/components/TabTitleBridge";
 import {
-  AGUI_URL,
   BridgeHttpAgent,
   SessionConfigProvider,
   createBridgeHistoryAdapter,
+  getAguiUrl,
   useTabsStore,
   type RuntimeSessionConfig,
 } from "@qenex/core";
@@ -17,20 +17,25 @@ type AgentRuntimeProviderProps = {
   children: React.ReactNode;
 };
 
-export function AgentRuntimeProvider({
+type AgentRuntimeProviderInnerProps = AgentRuntimeProviderProps & {
+  aguiUrl: string;
+};
+
+function AgentRuntimeProviderInner({
   session,
+  aguiUrl,
   children,
-}: AgentRuntimeProviderProps) {
+}: AgentRuntimeProviderInnerProps) {
   const clearHistoryLoad = useTabsStore((s) => s.clearHistoryLoad);
 
   const agent = useMemo(
     () =>
       new BridgeHttpAgent(
-        AGUI_URL,
+        aguiUrl,
         { cwd: session.cwd, agentCommand: session.agentCommand },
         session.threadId,
       ),
-    [session.threadId, session.cwd, session.agentCommand],
+    [aguiUrl, session.threadId, session.cwd, session.agentCommand],
   );
 
   const shouldLoadHistory =
@@ -76,5 +81,34 @@ export function AgentRuntimeProvider({
         {children}
       </AssistantRuntimeProvider>
     </SessionConfigProvider>
+  );
+}
+
+export function AgentRuntimeProvider({
+  session,
+  children,
+}: AgentRuntimeProviderProps) {
+  const [aguiUrl, setAguiUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAguiUrl().then((url) => {
+      if (!cancelled) {
+        setAguiUrl(url);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!aguiUrl) {
+    return null;
+  }
+
+  return (
+    <AgentRuntimeProviderInner session={session} aguiUrl={aguiUrl}>
+      {children}
+    </AgentRuntimeProviderInner>
   );
 }
