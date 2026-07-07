@@ -8,6 +8,8 @@ pub struct CreateTaskRequest {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
     pub resume_session_id: Option<String>,
     #[serde(default)]
     pub mode: Option<String>,
@@ -65,6 +67,13 @@ pub struct ExecuteCommandRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetConfigOptionRequest {
+    pub config_id: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateTaskResponse {
     pub task_id: String,
     pub agent_session_id: String,
@@ -76,6 +85,33 @@ pub struct CreateTaskResponse {
     pub models: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_mode_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_levels: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_level_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_thought_level_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfigResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_mode_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_levels: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_level_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_thought_level_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,6 +6,7 @@ import {
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
+import { SessionConfigBar } from "@/components/SessionConfigBar";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
   Reasoning,
@@ -242,6 +243,7 @@ const Composer: FC = () => {
             enterKeyHint="send"
             aria-label="Message input"
           />
+          <SessionConfigBar />
           <ComposerAction />
         </div>
       </ComposerPrimitive.AttachmentDropzone>

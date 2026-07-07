@@ -4,17 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ContentBlock, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate,
 };
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use crate::agui::events::{AguiEvent, AguiEventType};
-use crate::policy::{PolicyDecision, ToolPolicyEngine};
+use crate::policy::ToolPolicyEngine;
 
-type PermissionWaiter = oneshot::Sender<RequestPermissionResponse>;
+use super::permission::{PermissionRegistry, PermissionWaitHandle};
 
 /// Stateful translator from ACP SDK callbacks to AG-UI events.
 pub struct AcpToAguiBridge {
@@ -31,12 +30,17 @@ pub struct AcpToAguiBridge {
     has_reasoning_session: bool,
     open_tool_calls: HashSet<String>,
     pending_notifications: Vec<(String, Value)>,
-    permission_waiters: HashMap<String, PermissionWaiter>,
+    permissions: PermissionRegistry,
     approval_state_seeded: bool,
+    persist_callback: Option<Arc<dyn Fn(String, String, AguiEvent) + Send + Sync>>,
 }
 
 impl AcpToAguiBridge {
-    pub fn new(task_id: impl Into<String>, policy: ToolPolicyEngine) -> Self {
+    pub fn new(
+        task_id: impl Into<String>,
+        policy: ToolPolicyEngine,
+        permissions: PermissionRegistry,
+    ) -> Self {
         Self {
             task_id: task_id.into(),
             policy,
@@ -50,9 +54,14 @@ impl AcpToAguiBridge {
             has_reasoning_session: false,
             open_tool_calls: HashSet::new(),
             pending_notifications: Vec::new(),
-            permission_waiters: HashMap::new(),
+            permissions,
             approval_state_seeded: false,
+            persist_callback: None,
         }
+    }
+
+    pub fn permissions(&self) -> &PermissionRegistry {
+        &self.permissions
     }
 
     pub fn set_cwd(&mut self, cwd: impl Into<String>) {
@@ -71,16 +80,23 @@ impl AcpToAguiBridge {
         self.run_id.is_some()
     }
 
-    pub fn evaluate_tool_policy(
-        &self,
-        tool_name: &str,
-        input: &HashMap<String, Value>,
-        kiro_requires: bool,
-    ) -> PolicyDecision {
-        self.policy.evaluate(tool_name, input, kiro_requires)
+    pub fn tool_category(&self, tool_name: &str) -> &'static str {
+        self.policy.category_for(tool_name).as_str()
+    }
+
+    pub fn set_persist_callback(
+        &mut self,
+        callback: impl Fn(String, String, AguiEvent) + Send + Sync + 'static,
+    ) {
+        self.persist_callback = Some(Arc::new(callback));
     }
 
     pub fn start_run(&mut self, run_id: impl Into<String>, tx: mpsc::UnboundedSender<AguiEvent>) {
+        if self.is_run_active() {
+            self.finish_run();
+        }
+        self.cancel_all_permission_waiters();
+
         let run_id = run_id.into();
         self.run_id = Some(run_id.clone());
         self.event_tx = Some(tx);
@@ -111,6 +127,8 @@ impl AcpToAguiBridge {
         if let Some(run_id) = self.run_id.take() {
             self.emit(AguiEvent::run_finished(run_id, self.task_id.clone()));
         }
+        self.event_tx = None;
+        self.clear_stale_approval_ui();
     }
 
     pub fn error_run(&mut self, message: impl Into<String>, code: Option<String>) {
@@ -125,10 +143,16 @@ impl AcpToAguiBridge {
                 code,
             ));
         }
+        self.event_tx = None;
+        self.clear_stale_approval_ui();
+    }
+
+    fn run_is_accepting_events(&self) -> bool {
+        self.is_run_active() && self.event_tx.is_some()
     }
 
     pub fn handle_session_update(&mut self, update: SessionUpdate) {
-        if self.event_tx.is_none() {
+        if !self.run_is_accepting_events() {
             tracing::warn!("session_update received but no active run");
             return;
         }
@@ -165,7 +189,7 @@ impl AcpToAguiBridge {
     }
 
     pub fn handle_session_update_value(&mut self, update: &Value) {
-        if self.event_tx.is_none() {
+        if !self.run_is_accepting_events() {
             return;
         }
 
@@ -225,15 +249,15 @@ impl AcpToAguiBridge {
         self.handle_agent_extension(method, params);
     }
 
-    /// Prepare a permission request: emit STATE_DELTA and return a receiver for the response.
-    pub fn begin_permission_request(
+    /// Register a permission request and emit STATE_DELTA.
+    pub fn start_permission_request(
         &mut self,
         call_id: impl Into<String>,
         tool_name: impl Into<String>,
         options: Value,
         summary: impl Into<String>,
         category: Option<&str>,
-    ) -> oneshot::Receiver<RequestPermissionResponse> {
+    ) -> PermissionWaitHandle {
         let call_id = call_id.into();
         let tool_name = tool_name.into();
         let summary = summary.into();
@@ -250,60 +274,28 @@ impl AcpToAguiBridge {
         }
 
         self.emit_approval_state(approval);
-
-        let (tx, rx) = oneshot::channel();
-        self.permission_waiters.insert(call_id, tx);
-        rx
+        self.permissions.register(call_id)
     }
 
-    pub async fn wait_permission(
-        &mut self,
-        call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        options: Value,
-    ) -> RequestPermissionResponse {
-        let call_id = call_id.into();
-        let tool_name = tool_name.into();
-        let rx = self.begin_permission_request(
-            call_id.clone(),
-            tool_name.clone(),
-            options,
-            format!("Permission required: {tool_name}"),
-            None,
-        );
-
-        match rx.await {
-            Ok(response) => response,
-            Err(_) => RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
-        }
-    }
-
-    pub fn resolve_permission(
-        &mut self,
-        call_id: &str,
-        approved: bool,
-        option_id: Option<&str>,
-    ) -> Option<RequestPermissionResponse> {
-        let waiter = self.permission_waiters.remove(call_id)?;
-        let response = if approved {
-            RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-                SelectedPermissionOutcome::new(
-                    option_id.unwrap_or("allow_once").to_string(),
-                ),
-            ))
-        } else {
-            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-        };
-
-        let _ = waiter.send(response.clone());
-
+    pub fn emit_approval_resolved(&mut self, call_id: &str, approved: bool) {
         self.emit_approval_state(json!({
             "pending": false,
             "callId": call_id,
             "approved": approved,
         }));
+    }
 
-        Some(response)
+    pub async fn wait_for_permission_request(
+        &mut self,
+        call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        options: Value,
+        summary: impl Into<String>,
+        category: Option<&str>,
+    ) -> agent_client_protocol::schema::v1::RequestPermissionResponse {
+        self.start_permission_request(call_id, tool_name, options, summary, category)
+            .wait()
+            .await
     }
 
     pub async fn read_text_file(
@@ -418,7 +410,7 @@ impl AcpToAguiBridge {
 
     fn handle_tool_call(&mut self, update: &ToolCall) {
         self.close_open_reasoning();
-        self.close_open_message();
+        let parent_message_id = self.close_open_message();
 
         let tool_call_id = update.tool_call_id.to_string();
         let tool_name = update.title.clone();
@@ -430,59 +422,12 @@ impl AcpToAguiBridge {
         self.emit(AguiEvent::tool_call_start(
             tool_call_id.clone(),
             tool_name.clone(),
-            self.current_message_id.clone(),
+            parent_message_id,
         ));
         self.open_tool_calls.insert(tool_call_id.clone());
 
         let args_json = serde_json::to_string(&raw_input).unwrap_or_else(|_| "{}".to_string());
         self.emit(AguiEvent::tool_call_args(tool_call_id.clone(), args_json));
-
-        let input_map: HashMap<String, Value> = raw_input
-            .as_object()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
-
-        let kiro_requires = matches!(update.status, ToolCallStatus::Pending);
-        let decision = self
-            .policy
-            .evaluate(&tool_name, &input_map, kiro_requires);
-
-        if decision.requires_approval {
-            let permission_options = Self::permission_options_from_tool_call(update);
-            self.emit_approval_state(json!({
-                "pending": true,
-                "callId": tool_call_id,
-                "toolName": tool_name,
-                "summary": format!("Tool call: {tool_name}"),
-                "options": permission_options,
-                "category": decision.category.as_str(),
-            }));
-        }
-    }
-
-    fn permission_options_from_tool_call(update: &ToolCall) -> Value {
-        if let Ok(value) = serde_json::to_value(update) {
-            return Self::permission_options_from_value(&value);
-        }
-        json!([])
-    }
-
-    fn permission_options_from_value(value: &Value) -> Value {
-        if let Some(opts) = value
-            .get("permissionOptions")
-            .or_else(|| value.get("permission_options"))
-        {
-            return opts.clone();
-        }
-        if let Some(meta) = value.get("_meta").or_else(|| value.get("meta")) {
-            if let Some(opts) = meta
-                .get("permissionOptions")
-                .or_else(|| meta.get("permission_options"))
-            {
-                return opts.clone();
-            }
-        }
-        json!([])
     }
 
     fn handle_tool_call_update(&mut self, update: &ToolCallUpdate) {
@@ -496,8 +441,7 @@ impl AcpToAguiBridge {
 
         if matches!(status, Some(ToolCallStatus::Completed | ToolCallStatus::Failed)) {
             if self.open_tool_calls.remove(&tool_call_id) {
-                let result_str = result.map(|r| r.to_string());
-                self.emit(AguiEvent::tool_call_end(tool_call_id, result_str));
+                self.emit_tool_call_completed(&tool_call_id, result);
             }
         } else if let Some(result) = result {
             let delta = serde_json::to_string(&json!({ "_progress": result }))
@@ -508,7 +452,7 @@ impl AcpToAguiBridge {
 
     fn handle_tool_call_dict(&mut self, update: &Value) {
         self.close_open_reasoning();
-        self.close_open_message();
+        let parent_message_id = self.close_open_message();
 
         let tool_call_id = update
             .get("toolCallId")
@@ -530,39 +474,12 @@ impl AcpToAguiBridge {
         self.emit(AguiEvent::tool_call_start(
             tool_call_id.clone(),
             tool_name.clone(),
-            self.current_message_id.clone(),
+            parent_message_id,
         ));
         self.open_tool_calls.insert(tool_call_id.clone());
 
         let args_json = serde_json::to_string(&raw_input).unwrap_or_else(|_| "{}".to_string());
         self.emit(AguiEvent::tool_call_args(tool_call_id.clone(), args_json));
-
-        let input_map: HashMap<String, Value> = raw_input
-            .as_object()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
-
-        let kiro_requires = update
-            .get("requiresApproval")
-            .or_else(|| update.get("requires_approval"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let decision = self
-            .policy
-            .evaluate(&tool_name, &input_map, kiro_requires);
-
-        if decision.requires_approval {
-            let permission_options = Self::permission_options_from_value(update);
-            self.emit_approval_state(json!({
-                "pending": true,
-                "callId": tool_call_id,
-                "toolName": tool_name,
-                "summary": format!("Tool call: {tool_name}"),
-                "options": permission_options,
-                "category": decision.category.as_str(),
-            }));
-        }
     }
 
     fn handle_tool_call_update_dict(&mut self, update: &Value) {
@@ -576,8 +493,7 @@ impl AcpToAguiBridge {
 
         if status == "completed" || status == "failed" {
             if self.open_tool_calls.remove(&tool_call_id) {
-                let result_str = result.map(|r| r.to_string());
-                self.emit(AguiEvent::tool_call_end(tool_call_id, result_str));
+                self.emit_tool_call_completed(&tool_call_id, result);
             }
         } else if let Some(result) = result {
             let delta = serde_json::to_string(&json!({ "_progress": result }))
@@ -613,13 +529,16 @@ impl AcpToAguiBridge {
         self.emit(AguiEvent::custom(event_name, params));
     }
 
-    fn close_open_message(&mut self) {
+    fn close_open_message(&mut self) -> Option<String> {
         if self.has_open_message {
             if let Some(msg_id) = self.current_message_id.take() {
-                self.emit(AguiEvent::text_message_end(msg_id));
+                self.emit(AguiEvent::text_message_end(msg_id.clone()));
+                self.has_open_message = false;
+                return Some(msg_id);
             }
             self.has_open_message = false;
         }
+        None
     }
 
     fn close_open_reasoning(&mut self) {
@@ -639,7 +558,38 @@ impl AcpToAguiBridge {
 
     fn close_all_tool_calls(&mut self) {
         for tc_id in self.open_tool_calls.drain().collect::<Vec<_>>() {
-            self.emit(AguiEvent::tool_call_end(tc_id, None));
+            self.emit(AguiEvent::tool_call_end(tc_id));
+        }
+    }
+
+    fn emit_tool_call_completed(&mut self, tool_call_id: &str, result: Option<Value>) {
+        if let Some(output) = result {
+            self.emit(AguiEvent::tool_call_result(
+                Uuid::new_v4().to_string(),
+                tool_call_id,
+                output.to_string(),
+            ));
+        }
+        self.emit(AguiEvent::tool_call_end(tool_call_id));
+    }
+
+    fn cancel_all_permission_waiters(&mut self) {
+        let cleared = self.permissions.cancel_all();
+        for call_id in cleared {
+            self.emit_approval_state(json!({
+                "pending": false,
+                "callId": call_id,
+                "approved": false,
+            }));
+        }
+    }
+
+    /// Clear approval UI when the run ends and no permission is still pending.
+    fn clear_stale_approval_ui(&mut self) {
+        if self.approval_state_seeded && !self.permissions.has_pending() {
+            self.emit_approval_state(json!({
+                "pending": false,
+            }));
         }
     }
 
@@ -657,13 +607,29 @@ impl AcpToAguiBridge {
         }])));
     }
 
+    pub fn record_user_message(&mut self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        self.emit(AguiEvent::custom(
+            "user_message",
+            json!({ "content": content }),
+        ));
+    }
+
     fn emit(&mut self, event: AguiEvent) {
         if let Some(tx) = &self.event_tx {
-            if tx.send(event).is_err() {
+            if tx.send(event.clone()).is_err() {
                 tracing::error!("event channel closed, dropping event");
             }
         } else {
             tracing::warn!("cannot emit — no active run");
+        }
+
+        // Persist the event asynchronously if a store callback is registered
+        if let Some(persist_fn) = &self.persist_callback {
+            let run_id = self.run_id.clone().unwrap_or_default();
+            persist_fn(self.task_id.clone(), run_id, event);
         }
     }
 }
@@ -671,19 +637,34 @@ impl AcpToAguiBridge {
 /// Thread-safe wrapper around the bridge.
 pub type SharedBridge = Arc<Mutex<AcpToAguiBridge>>;
 
-pub fn shared_bridge(task_id: impl Into<String>, policy: ToolPolicyEngine) -> SharedBridge {
-    Arc::new(Mutex::new(AcpToAguiBridge::new(task_id, policy)))
+pub fn shared_bridge(
+    task_id: impl Into<String>,
+    policy: ToolPolicyEngine,
+    permissions: PermissionRegistry,
+) -> SharedBridge {
+    Arc::new(Mutex::new(AcpToAguiBridge::new(
+        task_id,
+        policy,
+        permissions,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agui::events::AguiEventType;
-    use agent_client_protocol::schema::v1::{ContentChunk, TextContent, ToolCallId};
+    use agent_client_protocol::schema::v1::{
+        ContentChunk, RequestPermissionOutcome, TextContent, ToolCallId, ToolCallStatus,
+        ToolCallUpdate, ToolCallUpdateFields,
+    };
 
     fn test_bridge() -> (AcpToAguiBridge, mpsc::UnboundedReceiver<AguiEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut bridge = AcpToAguiBridge::new("task-1", ToolPolicyEngine::new(None));
+        let mut bridge = AcpToAguiBridge::new(
+            "task-1",
+            ToolPolicyEngine::new(None),
+            PermissionRegistry::new(),
+        );
         bridge.start_run("run-1", tx);
         (bridge, rx)
     }
@@ -767,7 +748,11 @@ mod tests {
 
     #[test]
     fn extension_buffer_flushed_on_start_run() {
-        let mut bridge = AcpToAguiBridge::new("task-1", ToolPolicyEngine::new(None));
+        let mut bridge = AcpToAguiBridge::new(
+            "task-1",
+            ToolPolicyEngine::new(None),
+            PermissionRegistry::new(),
+        );
         bridge.ext_notification("_kiro.dev/metadata", json!({ "version": "1" }));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -781,7 +766,7 @@ mod tests {
     #[tokio::test]
     async fn permission_resolve_flow() {
         let (mut bridge, _rx) = test_bridge();
-        let mut rx_perm = bridge.begin_permission_request(
+        let handle = bridge.start_permission_request(
             "call-1",
             "bash",
             json!([]),
@@ -789,8 +774,8 @@ mod tests {
             None,
         );
 
-        bridge.resolve_permission("call-1", true, Some("allow_once"));
-        let response = rx_perm.await.unwrap();
+        assert!(bridge.permissions().resolve("call-1", true, Some("allow_once")));
+        let response = handle.wait().await;
         matches!(
             response.outcome,
             RequestPermissionOutcome::Selected(_)
@@ -838,14 +823,18 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_closes_message() {
+    fn tool_call_closes_message_and_sets_parent_id() {
         let (mut bridge, mut rx) = test_bridge();
         let _ = rx.try_recv().unwrap();
 
         let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("before")));
         bridge.handle_session_update(SessionUpdate::AgentMessageChunk(chunk));
 
-        let _ = rx.try_recv().unwrap(); // TEXT_MESSAGE_START
+        let start = rx.try_recv().unwrap();
+        let parent_id = match start {
+            AguiEvent::TextMessageStart { message_id, .. } => message_id,
+            other => panic!("expected TEXT_MESSAGE_START, got {:?}", other.event_type()),
+        };
         let _ = rx.try_recv().unwrap(); // TEXT_MESSAGE_CONTENT
 
         let tool = ToolCall::new(ToolCallId::new("tc-1"), "read_file");
@@ -855,9 +844,173 @@ mod tests {
             rx.try_recv().unwrap().event_type(),
             AguiEventType::TextMessageEnd
         );
+        let tool_start = rx.try_recv().unwrap();
+        match tool_start {
+            AguiEvent::ToolCallStart {
+                parent_message_id, ..
+            } => assert_eq!(parent_message_id.as_deref(), Some(parent_id.as_str())),
+            other => panic!("expected TOOL_CALL_START, got {:?}", other.event_type()),
+        }
+    }
+
+    #[test]
+    fn tool_call_completion_emits_result() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap();
+
+        let tool = ToolCall::new(ToolCallId::new("tc-1"), "bash");
+        bridge.handle_session_update(SessionUpdate::ToolCall(tool));
+        let _ = rx.try_recv().unwrap(); // TOOL_CALL_START
+        let _ = rx.try_recv().unwrap(); // TOOL_CALL_ARGS
+
+        let update = ToolCallUpdate::new(
+            ToolCallId::new("tc-1"),
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(json!({"stdout": "ok"})),
+        );
+        bridge.handle_session_update(SessionUpdate::ToolCallUpdate(update));
+
+        let mut saw_result = false;
+        let mut saw_end = false;
+        while let Ok(event) = rx.try_recv() {
+            match event.event_type() {
+                AguiEventType::ToolCallResult => saw_result = true,
+                AguiEventType::ToolCallEnd => saw_end = true,
+                AguiEventType::StateDelta => {}
+                other => panic!("unexpected event {:?}", other),
+            }
+        }
+        assert!(saw_result);
+        assert!(saw_end);
+    }
+
+    #[test]
+    fn finish_run_clears_active_state() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap();
+        bridge.finish_run();
+        let _ = rx.try_recv().unwrap(); // RUN_FINISHED
+
+        bridge.handle_session_update_value(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "text": "late" }
+        }));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn start_run_clears_permission_waiters() {
+        let (mut bridge, _rx) = test_bridge();
+        let handle = bridge.start_permission_request(
+            "call-1",
+            "bash",
+            json!([]),
+            "Permission required: bash",
+            None,
+        );
+
+        let (tx, _rx2) = mpsc::unbounded_channel();
+        bridge.start_run("run-2", tx);
+
+        let response = handle.wait().await;
+        matches!(response.outcome, RequestPermissionOutcome::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn finish_run_preserves_permission_waiters() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        let handle = bridge.start_permission_request(
+            "call-1",
+            "bash",
+            json!([]),
+            "Permission required: bash",
+            None,
+        );
+
+        bridge.finish_run();
+        let _ = rx.try_recv().unwrap(); // RUN_FINISHED
+
+        assert!(bridge.permissions().resolve("call-1", true, Some("allow_once")));
+        let response = handle.wait().await;
+        matches!(response.outcome, RequestPermissionOutcome::Selected(_));
+    }
+
+    #[test]
+    fn tool_call_does_not_emit_approval() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        let tool = ToolCall::new(ToolCallId::new("tc-approve"), "bash")
+            .status(ToolCallStatus::Pending);
+        bridge.handle_session_update(SessionUpdate::ToolCall(tool));
+
+        while let Ok(event) = rx.try_recv() {
+            assert_ne!(
+                event.event_type(),
+                AguiEventType::StateDelta,
+                "tool_call must not emit approval STATE_DELTA"
+            );
+        }
+    }
+
+    #[test]
+    fn request_permission_emits_approval_state() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        bridge.start_permission_request(
+            "call-1",
+            "bash",
+            json!([]),
+            "Permission required: bash",
+            Some("command"),
+        );
+
+        let mut saw_approval = false;
+        while let Ok(event) = rx.try_recv() {
+            if event.event_type() == AguiEventType::StateDelta {
+                saw_approval = true;
+            }
+        }
+        assert!(saw_approval);
+    }
+
+    #[test]
+    fn tool_call_closes_reasoning() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap();
+
+        bridge.handle_session_update_value(&json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": { "text": "thinking" }
+        }));
+        let _ = rx.try_recv().unwrap(); // REASONING_START
+        let _ = rx.try_recv().unwrap(); // REASONING_MESSAGE_START
+        let _ = rx.try_recv().unwrap(); // REASONING_MESSAGE_CONTENT
+
+        let tool = ToolCall::new(ToolCallId::new("tc-1"), "read_file");
+        bridge.handle_session_update(SessionUpdate::ToolCall(tool));
+
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ReasoningMessageEnd
+        );
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ReasoningEnd
+        );
         assert_eq!(
             rx.try_recv().unwrap().event_type(),
             AguiEventType::ToolCallStart
         );
+    }
+
+    #[test]
+    fn resolve_permission_missing_returns_false() {
+        let registry = PermissionRegistry::new();
+        assert!(!registry.resolve("missing", true, None));
     }
 }

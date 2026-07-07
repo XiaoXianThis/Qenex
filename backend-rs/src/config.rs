@@ -22,6 +22,8 @@ pub struct BridgeConfigFile {
     pub db_directory: String,
     #[serde(default)]
     pub demo_mode: bool,
+    #[serde(default = "default_event_ttl_days")]
+    pub event_ttl_days: u32,
 }
 
 fn default_project_name() -> String {
@@ -45,6 +47,9 @@ fn default_cors_origins() -> Vec<String> {
         "http://localhost:3000".into(),
     ]
 }
+fn default_event_ttl_days() -> u32 {
+    30
+}
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
@@ -56,6 +61,7 @@ pub struct BridgeConfig {
     pub cors_origins: Vec<String>,
     pub db_path: PathBuf,
     pub demo_mode: bool,
+    pub event_ttl_days: u32,
 }
 
 impl Default for BridgeConfig {
@@ -75,6 +81,7 @@ impl Default for BridgeConfigFile {
             cors_origins: default_cors_origins(),
             db_directory: String::new(),
             demo_mode: false,
+            event_ttl_days: default_event_ttl_days(),
         }
     }
 }
@@ -98,6 +105,7 @@ impl BridgeConfig {
             cors_origins: file.cors_origins,
             db_path,
             demo_mode: file.demo_mode,
+            event_ttl_days: file.event_ttl_days,
         }
     }
 }
@@ -154,6 +162,7 @@ fn camel_to_snake_keys(value: Value) -> Value {
             "corsOrigins" => "cors_origins",
             "dbDirectory" => "db_directory",
             "demoMode" => "demo_mode",
+            "eventTtlDays" => "event_ttl_days",
             other => other,
         };
         out.insert(key.to_string(), v);

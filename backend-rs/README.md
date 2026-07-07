@@ -109,9 +109,11 @@ ACP `session/update` → AG-UI 事件的核心映射：
 | `agent_message_chunk` | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` |
 | `agent_thought_chunk` | `REASONING_START` + `REASONING_MESSAGE_*` |
 | `tool_call` | `TOOL_CALL_START` + `TOOL_CALL_ARGS` |
-| `tool_call_update` (completed) | `TOOL_CALL_END` |
-| `request_permission` | `STATE_DELTA` (approval pending) |
+| `tool_call_update` (completed) | `TOOL_CALL_RESULT` + `TOOL_CALL_END` |
+| `request_permission` | `STATE_DELTA` (approval pending) + 阻塞至用户审批 |
 | `_kiro.dev/*` | `CUSTOM` |
+
+**审批原则**：仅当 Agent 通过 ACP `session/request_permission` 主动请求时，bridge 才向前端发送 `STATE_DELTA` 审批状态并阻塞执行。`tool_call` 通知不会触发审批 UI。
 
 完整说明见 [`protocol-translation.md`](../acp-to-agui/docs/protocol-translation.md)。
 
@@ -133,7 +135,9 @@ cargo test --features server
 | 环境变量 | `python-dotenv` | 无（使用 `bridge.config.json`） |
 | 单元测试 | 无 | 桥接、SSE、策略、session_init 集成测试 |
 
-已对齐：SSE 终态关流、`load_session` / MCP、`set_model` / `execute_command`、CORS 白名单、`demoMode`、Windows cmd shim、tool approval options、`threadId` on lifecycle events。
+已对齐：SSE 终态关流、`load_session` / MCP、`set_model` / `execute_command`、CORS 白名单、`demoMode`、Windows cmd shim、`threadId` on lifecycle events。
+
+与 Python 版差异：Rust 版**不在** `tool_call` 路径自发审批 UI，仅以 Agent `request_permission` 为准。
 
 ## 许可证
 

@@ -6,6 +6,11 @@ export type SessionProps = {
   agentCommand: string[];
 };
 
+export type AguiEvent = {
+  type: string;
+  [key: string]: unknown;
+};
+
 export class BridgeHttpAgent extends HttpAgent {
   private sessionProps: SessionProps;
 
@@ -21,6 +26,22 @@ export class BridgeHttpAgent extends HttpAgent {
   updateSessionProps(sessionProps: SessionProps, threadId: string) {
     this.sessionProps = sessionProps;
     this.threadId = threadId;
+  }
+
+  async loadHistory(taskId: string): Promise<AguiEvent[]> {
+    try {
+      const response = await fetch(`/v2/tasks/${taskId}/messages`);
+      if (!response.ok) {
+        console.warn(`Failed to load history for task ${taskId}:`, response.statusText);
+        return [];
+      }
+
+      const data = await response.json();
+      return data.events as AguiEvent[];
+    } catch (error) {
+      console.error("Failed to load session history:", error);
+      return [];
+    }
   }
 
   protected prepareRunAgentInput(

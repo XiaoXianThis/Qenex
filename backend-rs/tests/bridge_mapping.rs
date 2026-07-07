@@ -1,6 +1,6 @@
 use acp_to_agui::agui::events::{AguiEvent, AguiEventType};
 use acp_to_agui::agui::sse::{collect_events_until_done, encode_sse_event};
-use acp_to_agui::bridge::AcpToAguiBridge;
+use acp_to_agui::bridge::{AcpToAguiBridge, PermissionRegistry};
 use acp_to_agui::policy::ToolPolicyEngine;
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, TextContent, ToolCall, ToolCallId, ToolCallStatus,
@@ -21,7 +21,11 @@ fn sse_encoding_matches_spec() {
 #[tokio::test]
 async fn full_message_sequence() {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut bridge = AcpToAguiBridge::new("t1", ToolPolicyEngine::new(None));
+    let mut bridge = AcpToAguiBridge::new(
+        "t1",
+        ToolPolicyEngine::new(None),
+        PermissionRegistry::new(),
+    );
     bridge.start_run("r1", tx);
 
     let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("Hello world")));
@@ -41,7 +45,11 @@ async fn full_message_sequence() {
 #[test]
 fn tool_call_completion_emits_end() {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut bridge = AcpToAguiBridge::new("t1", ToolPolicyEngine::new(None));
+    let mut bridge = AcpToAguiBridge::new(
+        "t1",
+        ToolPolicyEngine::new(None),
+        PermissionRegistry::new(),
+    );
     bridge.start_run("r1", tx);
 
     let tool = ToolCall::new(ToolCallId::new("tc-1"), "bash");
@@ -78,7 +86,11 @@ async fn demo_events_finish_run() {
 #[test]
 fn dict_turn_end_finishes_run() {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut bridge = AcpToAguiBridge::new("t1", ToolPolicyEngine::new(None));
+    let mut bridge = AcpToAguiBridge::new(
+        "t1",
+        ToolPolicyEngine::new(None),
+        PermissionRegistry::new(),
+    );
     bridge.start_run("r1", tx);
 
     bridge.handle_session_update_value(&json!({ "sessionUpdate": "turn_end" }));

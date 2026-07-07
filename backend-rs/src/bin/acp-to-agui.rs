@@ -29,6 +29,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = build_state(config.clone()).await?;
     let manager = state.session_manager.clone();
+    let store = state.session_store.clone();
+    let event_ttl_days = config.event_ttl_days;
+
+    // Run initial cleanup on startup
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            match store.lock().await.delete_old_events(event_ttl_days).await {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!("Startup cleanup: deleted {deleted} old events");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Startup cleanup failed: {e}"),
+            }
+        });
+    }
+
+    // Schedule periodic cleanup every 24 hours
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(86400));
+            loop {
+                interval.tick().await;
+                match store.lock().await.delete_old_events(event_ttl_days).await {
+                    Ok(deleted) if deleted > 0 => {
+                        tracing::info!("Periodic cleanup: deleted {deleted} old events");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Periodic cleanup failed: {e}"),
+                }
+            }
+        });
+    }
 
     let origins: Result<Vec<HeaderValue>, _> = config
         .cors_origins

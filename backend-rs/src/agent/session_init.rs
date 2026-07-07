@@ -49,25 +49,116 @@ fn parse_one_mcp_server(item: &Value) -> Option<McpServer> {
         })
 }
 
-/// Extract model list from session `config_options` (ACP 1.1) or legacy `_meta`.
-pub fn extract_models(config_options: Option<&[SessionConfigOption]>) -> Option<Vec<Value>> {
-    let options = config_options?;
+#[derive(Debug, Clone)]
+pub struct SelectConfigSnapshot {
+    pub config_id: String,
+    pub options: Vec<Value>,
+    pub current_value: Option<String>,
+}
 
+fn is_model_option(opt: &SessionConfigOption) -> bool {
+    matches!(opt.category, Some(SessionConfigOptionCategory::Model))
+        || opt.id.to_string() == "model"
+}
+
+fn is_mode_option(opt: &SessionConfigOption) -> bool {
+    matches!(opt.category, Some(SessionConfigOptionCategory::Mode))
+        || opt.id.to_string() == "mode"
+}
+
+fn is_thought_level_option(opt: &SessionConfigOption) -> bool {
+    matches!(
+        opt.category,
+        Some(SessionConfigOptionCategory::ThoughtLevel)
+    ) || matches!(
+        opt.id.to_string().as_str(),
+        "effort" | "thought_level" | "thoughtLevel" | "thinking"
+    )
+}
+
+fn extract_select_config(
+    config_options: Option<&[SessionConfigOption]>,
+    predicate: impl Fn(&SessionConfigOption) -> bool,
+) -> Option<SelectConfigSnapshot> {
+    let options = config_options?;
     for opt in options {
-        let is_model = matches!(opt.category, Some(SessionConfigOptionCategory::Model))
-            || opt.id.to_string() == "model";
-        if !is_model {
+        if !predicate(opt) {
             continue;
         }
         if let SessionConfigKind::Select(select) = &opt.kind {
-            let models = select_options_to_models(&select.options);
-            if !models.is_empty() {
-                return Some(models);
+            let items = select_options_to_models(&select.options);
+            if !items.is_empty() {
+                return Some(SelectConfigSnapshot {
+                    config_id: opt.id.to_string(),
+                    options: items,
+                    current_value: Some(select.current_value.to_string()),
+                });
             }
         }
     }
-
     None
+}
+
+/// Extract model list from session `config_options` (ACP 1.1) or legacy `_meta`.
+pub fn extract_models(config_options: Option<&[SessionConfigOption]>) -> Option<Vec<Value>> {
+    extract_select_config(config_options, is_model_option).map(|snapshot| snapshot.options)
+}
+
+pub fn extract_model_config(
+    config_options: Option<&[SessionConfigOption]>,
+) -> Option<SelectConfigSnapshot> {
+    extract_select_config(config_options, is_model_option)
+}
+
+/// Parsed session selectors from ACP `config_options`.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedConfigOptions {
+    pub models: Option<Vec<Value>>,
+    pub current_model_id: Option<String>,
+    pub model_config_id: Option<String>,
+    pub modes: Option<Vec<Value>>,
+    pub current_mode_id: Option<String>,
+    pub mode_config_id: Option<String>,
+    pub thought_levels: Option<Vec<Value>>,
+    pub current_thought_level_id: Option<String>,
+    pub thought_level_config_id: Option<String>,
+}
+
+pub fn parse_config_options(
+    config_options: Option<&[SessionConfigOption]>,
+) -> ParsedConfigOptions {
+    let model = extract_select_config(config_options, is_model_option);
+    let mode = extract_select_config(config_options, is_mode_option);
+    let thought = extract_select_config(config_options, is_thought_level_option);
+
+    ParsedConfigOptions {
+        models: model.as_ref().map(|snapshot| snapshot.options.clone()),
+        current_model_id: model.as_ref().and_then(|snapshot| snapshot.current_value.clone()),
+        model_config_id: model.as_ref().map(|snapshot| snapshot.config_id.clone()),
+        modes: mode.as_ref().map(|snapshot| snapshot.options.clone()),
+        current_mode_id: mode.as_ref().and_then(|snapshot| snapshot.current_value.clone()),
+        mode_config_id: mode.as_ref().map(|snapshot| snapshot.config_id.clone()),
+        thought_levels: thought.as_ref().map(|snapshot| snapshot.options.clone()),
+        current_thought_level_id: thought
+            .as_ref()
+            .and_then(|snapshot| snapshot.current_value.clone()),
+        thought_level_config_id: thought
+            .as_ref()
+            .map(|snapshot| snapshot.config_id.clone()),
+    }
+}
+
+pub fn extract_mode_config(
+    config_options: Option<&[SessionConfigOption]>,
+) -> Option<SelectConfigSnapshot> {
+    extract_select_config(config_options, is_mode_option)
+}
+
+/// Extract thinking intensity / thought level options from session `config_options`.
+pub fn extract_thought_levels(
+    config_options: Option<&[SessionConfigOption]>,
+) -> Option<SelectConfigSnapshot> {
+    extract_select_config(config_options, is_thought_level_option)
 }
 
 fn select_options_to_models(options: &SessionConfigSelectOptions) -> Vec<Value> {
@@ -115,12 +206,20 @@ pub fn extract_models_from_legacy(value: &Value) -> Option<Vec<Value>> {
     }
 }
 
-pub fn modes_to_json(modes: Option<&agent_client_protocol::schema::v1::SessionModeState>) -> Option<Vec<Value>> {
+pub fn modes_to_json(
+    modes: Option<&agent_client_protocol::schema::v1::SessionModeState>,
+) -> Option<Vec<Value>> {
     modes.map(|m| {
-        serde_json::to_value(&m.available_modes)
-            .ok()
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default()
+        m.available_modes
+            .iter()
+            .map(|mode| {
+                json!({
+                    "id": mode.id.to_string(),
+                    "name": mode.name,
+                    "description": mode.description,
+                })
+            })
+            .collect()
     })
 }
 
@@ -155,5 +254,55 @@ mod tests {
     fn canonicalize_relative_cwd() {
         let cwd = canonicalize_cwd(".");
         assert!(cwd.is_absolute());
+    }
+
+    #[test]
+    fn extract_mode_from_config_options() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigId, SessionConfigSelectOption, SessionConfigSelectOptions,
+            SessionConfigValueId,
+        };
+
+        let mut opt = SessionConfigOption::select(
+            SessionConfigId::new("mode"),
+            "Session Mode",
+            SessionConfigValueId::new("agent"),
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("agent"), "Agent"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("ask"), "Ask"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("debug"), "Debug"),
+            ]),
+        );
+        opt.category = Some(SessionConfigOptionCategory::Mode);
+
+        let parsed = parse_config_options(Some(&[opt]));
+        assert_eq!(parsed.mode_config_id.as_deref(), Some("mode"));
+        assert_eq!(parsed.current_mode_id.as_deref(), Some("agent"));
+        assert_eq!(parsed.modes.as_ref().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn extract_thought_level_by_category() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigId, SessionConfigSelectOption, SessionConfigSelectOptions,
+            SessionConfigValueId,
+        };
+
+        let mut opt = SessionConfigOption::select(
+            SessionConfigId::new("effort"),
+            "Thinking",
+            SessionConfigValueId::new("medium"),
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("low"), "Low"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("medium"), "Medium"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("high"), "High"),
+            ]),
+        );
+        opt.category = Some(SessionConfigOptionCategory::ThoughtLevel);
+
+        let snapshot = extract_thought_levels(Some(&[opt])).expect("thought levels");
+        assert_eq!(snapshot.config_id, "effort");
+        assert_eq!(snapshot.current_value.as_deref(), Some("medium"));
+        assert_eq!(snapshot.options.len(), 3);
     }
 }

@@ -32,6 +32,10 @@ impl ToolPolicyEngine {
         PolicyDecision::no_approval()
     }
 
+    pub fn category_for(&self, tool_name: &str) -> PolicyCategory {
+        Self::categorise(tool_name)
+    }
+
     fn categorise(tool_name: &str) -> PolicyCategory {
         let name = tool_name.to_lowercase();
         if ["file", "write", "read", "delete", "mkdir", "fs"]

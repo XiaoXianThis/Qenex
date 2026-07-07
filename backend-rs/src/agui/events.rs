@@ -19,6 +19,7 @@ pub enum AguiEventType {
     ToolCallStart,
     ToolCallArgs,
     ToolCallEnd,
+    ToolCallResult,
     StateDelta,
     StateSnapshot,
     Custom,
@@ -41,6 +42,7 @@ impl AguiEventType {
             Self::ToolCallStart => "TOOL_CALL_START",
             Self::ToolCallArgs => "TOOL_CALL_ARGS",
             Self::ToolCallEnd => "TOOL_CALL_END",
+            Self::ToolCallResult => "TOOL_CALL_RESULT",
             Self::StateDelta => "STATE_DELTA",
             Self::StateSnapshot => "STATE_SNAPSHOT",
             Self::Custom => "CUSTOM",
@@ -194,8 +196,19 @@ pub enum AguiEvent {
     ToolCallEnd {
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
+        timestamp: f64,
+        #[serde(rename = "rawEvent", skip_serializing_if = "Option::is_none")]
+        raw_event: Option<Value>,
+    },
+    #[serde(rename = "TOOL_CALL_RESULT")]
+    ToolCallResult {
+        #[serde(rename = "messageId")]
+        message_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<String>,
+        role: Option<String>,
         timestamp: f64,
         #[serde(rename = "rawEvent", skip_serializing_if = "Option::is_none")]
         raw_event: Option<Value>,
@@ -241,9 +254,33 @@ impl AguiEvent {
             Self::ToolCallStart { .. } => AguiEventType::ToolCallStart,
             Self::ToolCallArgs { .. } => AguiEventType::ToolCallArgs,
             Self::ToolCallEnd { .. } => AguiEventType::ToolCallEnd,
+            Self::ToolCallResult { .. } => AguiEventType::ToolCallResult,
             Self::StateDelta { .. } => AguiEventType::StateDelta,
             Self::StateSnapshot { .. } => AguiEventType::StateSnapshot,
             Self::Custom { .. } => AguiEventType::Custom,
+        }
+    }
+
+    pub fn timestamp(&self) -> f64 {
+        match self {
+            Self::RunStarted { timestamp, .. } => *timestamp,
+            Self::RunFinished { timestamp, .. } => *timestamp,
+            Self::RunError { timestamp, .. } => *timestamp,
+            Self::TextMessageStart { timestamp, .. } => *timestamp,
+            Self::TextMessageContent { timestamp, .. } => *timestamp,
+            Self::TextMessageEnd { timestamp, .. } => *timestamp,
+            Self::ReasoningStart { timestamp, .. } => *timestamp,
+            Self::ReasoningMessageStart { timestamp, .. } => *timestamp,
+            Self::ReasoningMessageContent { timestamp, .. } => *timestamp,
+            Self::ReasoningMessageEnd { timestamp, .. } => *timestamp,
+            Self::ReasoningEnd { timestamp, .. } => *timestamp,
+            Self::ToolCallStart { timestamp, .. } => *timestamp,
+            Self::ToolCallArgs { timestamp, .. } => *timestamp,
+            Self::ToolCallEnd { timestamp, .. } => *timestamp,
+            Self::ToolCallResult { timestamp, .. } => *timestamp,
+            Self::StateDelta { timestamp, .. } => *timestamp,
+            Self::StateSnapshot { timestamp, .. } => *timestamp,
+            Self::Custom { timestamp, .. } => *timestamp,
         }
     }
 
@@ -392,10 +429,24 @@ impl AguiEvent {
         }
     }
 
-    pub fn tool_call_end(tool_call_id: impl Into<String>, result: Option<String>) -> Self {
+    pub fn tool_call_end(tool_call_id: impl Into<String>) -> Self {
         Self::ToolCallEnd {
             tool_call_id: tool_call_id.into(),
-            result,
+            timestamp: now_timestamp(),
+            raw_event: None,
+        }
+    }
+
+    pub fn tool_call_result(
+        message_id: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self::ToolCallResult {
+            message_id: message_id.into(),
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            role: Some("tool".to_string()),
             timestamp: now_timestamp(),
             raw_event: None,
         }

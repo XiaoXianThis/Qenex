@@ -16,7 +16,8 @@ use uuid::Uuid;
 use crate::agui::events::AguiEvent;
 use crate::sessions::{
     ApprovalRequest, ApprovalResponse, CreateTaskRequest, CreateTaskResponse, ManagerError,
-    StartRunRequest, StartRunResponse, TaskListResponse, UpdateTaskRequest,
+    SessionConfigResponse, SetConfigOptionRequest, StartRunRequest, StartRunResponse,
+    TaskListResponse, UpdateTaskRequest,
 };
 use crate::types::HealthResponse;
 use crate::VERSION;
@@ -39,6 +40,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/messages", get(get_messages))
         .route("/v2/tasks/{task_id}/mode", post(set_mode))
         .route("/v2/tasks/{task_id}/model", post(set_model))
+        .route("/v2/tasks/{task_id}/config", get(get_session_config))
+        .route("/v2/tasks/{task_id}/config-option", post(set_config_option))
         .route("/v2/tasks/{task_id}/command", post(execute_command))
         .route(
             "/api/files",
@@ -133,13 +136,24 @@ async fn ag_ui_run(
                     .collect::<Vec<_>>()
             })
             .filter(|cmd| !cmd.is_empty());
+
+        let stored = match state.session_store.lock().await.get(&thread_id).await {
+            Ok(task) => task,
+            Err(e) => return error_sse(&e.to_string(), Some(&thread_id)),
+        };
+        let resume_session_id = stored.as_ref().map(|t| t.agent_session_id.as_str());
+        let title = stored
+            .as_ref()
+            .map(|t| t.title.as_str())
+            .unwrap_or("AG-UI Session");
+
         if let Err(e) = state
             .session_manager
-            .create_task(
+            .ensure_task(
                 thread_id.as_str(),
                 cwd,
-                "AG-UI Session",
-                None,
+                title,
+                resume_session_id,
                 None,
                 None,
                 None,
@@ -147,7 +161,7 @@ async fn ag_ui_run(
             )
             .await
         {
-            return error_sse(&e.to_string());
+            return error_sse(&e.to_string(), Some(&thread_id));
         }
     }
 
@@ -155,7 +169,7 @@ async fn ag_ui_run(
 
     if user_message.is_empty() {
         tracing::warn!("ag-ui: no user message in {} message(s)", body.messages.len());
-        return error_sse("No user message provided");
+        return error_sse("No user message provided", Some(&thread_id));
     }
 
     tracing::info!(
@@ -174,7 +188,7 @@ async fn ag_ui_run(
         .await
     {
         Ok(id) => id,
-        Err(e) => return error_sse(&e.to_string()),
+        Err(e) => return error_sse(&e.to_string(), Some(&thread_id)),
     };
 
     match state
@@ -183,7 +197,7 @@ async fn ag_ui_run(
         .await
     {
         Ok(rx) => sse_response(rx),
-        Err(e) => error_sse(&e.to_string()),
+        Err(e) => error_sse(&e.to_string(), Some(&thread_id)),
     }
 }
 
@@ -191,10 +205,13 @@ async fn create_task(
     State(state): State<AppState>,
     Json(body): Json<CreateTaskRequest>,
 ) -> Result<Json<CreateTaskResponse>, StatusCode> {
-    let task_id = Uuid::new_v4().to_string();
+    let task_id = body
+        .task_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let active = state
         .session_manager
-        .create_task(
+        .ensure_task(
             &task_id,
             &body.cwd,
             body.title.as_deref().unwrap_or("New Task"),
@@ -207,15 +224,23 @@ async fn create_task(
         .await
         .map_err(manager_status)?;
 
-    Ok(Json(CreateTaskResponse {
+    Ok(Json(task_response_from_active(&active)))
+}
+
+fn task_response_from_active(active: &crate::sessions::ActiveSession) -> CreateTaskResponse {
+    CreateTaskResponse {
         task_id: active.task_id.clone(),
-        agent_session_id: active.agent_session_id,
+        agent_session_id: active.agent_session_id.clone(),
         run_url: format!("/v2/tasks/{}/run", active.task_id),
         events_url: format!("/v2/tasks/{}/events", active.task_id),
-        modes: active.modes,
-        models: active.models,
-        current_mode_id: active.current_mode_id,
-    }))
+        modes: active.modes.clone(),
+        models: active.models.clone(),
+        current_mode_id: active.current_mode_id.clone(),
+        thought_levels: active.thought_levels.clone(),
+        thought_level_config_id: active.thought_level_config_id.clone(),
+        current_thought_level_id: active.current_thought_level_id.clone(),
+        current_model_id: active.current_model_id.clone(),
+    }
 }
 
 async fn list_tasks(State(state): State<AppState>) -> Result<Json<TaskListResponse>, StatusCode> {
@@ -379,7 +404,16 @@ async fn get_messages(
     if task.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
-    Ok(Json(json!({ "messages": [] })))
+
+    let events = state
+        .session_store
+        .lock()
+        .await
+        .get_events_for_task(&task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({ "events": events })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,6 +454,41 @@ async fn set_model(
     Ok(Json(json!({ "success": true, "modelId": body.model_id })))
 }
 
+async fn get_session_config(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<SessionConfigResponse>, StatusCode> {
+    let config = state
+        .session_manager
+        .get_session_config(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(SessionConfigResponse {
+        modes: config.modes,
+        models: config.models,
+        current_mode_id: config.current_mode_id,
+        thought_levels: config.thought_levels,
+        thought_level_config_id: config.thought_level_config_id,
+        current_thought_level_id: config.current_thought_level_id,
+        current_model_id: config.current_model_id,
+    }))
+}
+
+async fn set_config_option(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<SetConfigOptionRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    state
+        .session_manager
+        .set_config_option(&task_id, &body.config_id, &body.value)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(
+        json!({ "success": true, "configId": body.config_id, "value": body.value }),
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct CommandBody {
     command: String,
@@ -442,7 +511,7 @@ async fn execute_command(
 fn manager_status(err: ManagerError) -> StatusCode {
     match err {
         ManagerError::NoSession(_) => StatusCode::CONFLICT,
-        ManagerError::NoRun(_) => StatusCode::NOT_FOUND,
+        ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -477,10 +546,11 @@ fn sse_response(rx: mpsc::UnboundedReceiver<AguiEvent>) -> Response {
     response
 }
 
-fn error_sse(message: &str) -> Response {
+fn error_sse(message: &str, thread_id: Option<&str>) -> Response {
+    let thread = thread_id.unwrap_or("error").to_string();
     let event = AguiEvent::run_error(
         Uuid::new_v4().to_string(),
-        "error",
+        thread.clone(),
         message,
         None,
     );

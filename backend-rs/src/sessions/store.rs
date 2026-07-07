@@ -5,6 +5,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use thiserror::Error;
 
 use super::types::TaskSummary;
+use crate::agui::AguiEvent;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -67,6 +68,36 @@ impl SessionStore {
         .execute(&pool)
         .await?;
 
+        // Events table for conversation history
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_data TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_events_task_run ON events(task_id, run_id, id ASC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
+        )
+        .execute(&pool)
+        .await?;
+
         self.pool = Some(pool);
         Ok(())
     }
@@ -85,7 +116,15 @@ impl SessionStore {
         let pool = self.pool()?;
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO tasks (task_id, agent_session_id, cwd, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'idle', ?, ?)",
+            r#"
+            INSERT INTO tasks (task_id, agent_session_id, cwd, title, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'idle', ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                agent_session_id = excluded.agent_session_id,
+                cwd = excluded.cwd,
+                title = excluded.title,
+                updated_at = excluded.updated_at
+            "#,
         )
         .bind(task_id)
         .bind(agent_session_id)
@@ -182,6 +221,100 @@ impl SessionStore {
         if let Some(pool) = self.pool.take() {
             pool.close().await;
         }
+    }
+
+    /// Save an event to the events table
+    pub async fn save_event(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        event_type: &str,
+        event_data: &str,
+        timestamp: f64,
+    ) -> Result<(), StoreError> {
+        let pool = self.pool()?;
+        let created_at = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO events (task_id, run_id, event_type, event_data, timestamp, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .bind(event_type)
+        .bind(event_data)
+        .bind(timestamp)
+        .bind(&created_at)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get all events for a task in chronological order
+    pub async fn get_events_for_task(&self, task_id: &str) -> Result<Vec<AguiEvent>, StoreError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            "SELECT event_data FROM events WHERE task_id = ? ORDER BY id ASC",
+        )
+        .bind(task_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            let event_data: String = row.get("event_data");
+            if let Ok(event) = serde_json::from_str::<AguiEvent>(&event_data) {
+                events.push(event);
+            } else {
+                tracing::warn!("failed to deserialize event: {}", event_data);
+            }
+        }
+        Ok(events)
+    }
+
+    /// Get all events for a specific run
+    pub async fn get_events_for_run(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<AguiEvent>, StoreError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            "SELECT event_data FROM events WHERE task_id = ? AND run_id = ? ORDER BY id ASC",
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            let event_data: String = row.get("event_data");
+            if let Ok(event) = serde_json::from_str::<AguiEvent>(&event_data) {
+                events.push(event);
+            } else {
+                tracing::warn!("failed to deserialize event for run: {}", event_data);
+            }
+        }
+        Ok(events)
+    }
+
+    /// Delete events older than the specified number of days
+    pub async fn delete_old_events(&self, days: u32) -> Result<u64, StoreError> {
+        let pool = self.pool()?;
+        let cutoff = Utc::now() - chrono::Duration::days(days as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        let result = sqlx::query("DELETE FROM events WHERE created_at < ?")
+            .bind(&cutoff_str)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Cleanup old events using default TTL of 30 days
+    pub async fn cleanup_events(&self) -> Result<u64, StoreError> {
+        self.delete_old_events(30).await
     }
 }
 
