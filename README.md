@@ -1,41 +1,55 @@
-# Qenex (Agent Center)
+# Qenex
 
-为任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent 提供现代化 Web UI 的 monorepo。Rust 后端将 Agent 协议转为 [AG-UI](https://docs.ag-ui.com/) 事件流，React 前端提供多标签会话、工具审批、历史回放与工作区集成。
+**统一的 AI 编码 Agent 工作台** — 一套界面，连接多种 Agent，随处可用。
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  packages/ui + apps/*   React + AG-UI + assistant-ui      │
-│  多 Tab · 审批 · 历史回放 · 会话配置                          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ HTTP / SSE
-┌──────────────────────────▼──────────────────────────────────┐
-│  crates/bridge      Rust ACP → AG-UI Bridge (axum)          │
-│  任务管理 · 事件持久化 · 进程清理 · 文件/Git API              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ JSON-RPC over stdio
-┌──────────────────────────▼──────────────────────────────────┐
-│  ACP Agent          opencode · kiro-cli · claude · codex …  │
-└─────────────────────────────────────────────────────────────┘
-```
+Qenex 让你用现代化的对话界面驱动任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent（OpenCode、Kiro、Claude、Codex 等），无需为每个 Agent 单独学习一套 UI。无论你习惯在浏览器、VS Code、JetBrains IDE 还是独立桌面应用里工作，Qenex 都提供一致的体验：多会话并行、工具审批、历史回放、断线恢复。
 
-## 功能
+## 为什么选择 Qenex
 
-| 模块 | 能力 |
-|------|------|
-| **协议桥接** | ACP `session/update` → AG-UI 事件（消息、推理、工具调用） |
-| **多 Tab 前端** | 最多 5 个活跃会话，归档与恢复，localStorage 持久化 |
-| **工具审批** | Agent `request_permission` 时弹出审批 UI，阻塞至用户操作 |
-| **会话持久化** | SQLite 存储 AG-UI 事件，支持 `GET /messages` 历史回放 |
-| **断线恢复** | `resumeSessionId` 恢复 Agent 上下文，前端重放事件重建 UI |
-| **进程管理** | 跟踪 Agent PID，任务关闭时递归清理子进程树 |
-| **工作区 API** | 文件读写、Git 状态/提交等辅助接口 |
+- **Agent 无关** — 通过标准 ACP 协议接入，切换 Agent 只需改一行配置，不必换工具链
+- **多会话工作流** — 最多 5 个活跃 Tab，每个 Tab 可绑定不同 Agent 与工作目录，适合并行处理多个任务
+- **可控的工具执行** — Agent 请求敏感操作时弹出审批 UI，你决定允许还是拒绝，再让 Agent 继续
+- **会话不丢失** — 对话事件持久化到本地 SQLite，关闭浏览器或重启服务后仍可回放历史、恢复上下文
+- **随处嵌入** — 同一套 UI 与核心逻辑，覆盖 Web、VS Code、JetBrains、Tauri 桌面四种形态
+
+## 适用场景
+
+| 场景 | Qenex 能做什么 |
+|------|----------------|
+| **日常编码辅助** | 在 IDE 侧边栏或浏览器中与 Agent 对话，让它读写文件、执行命令、解释代码 |
+| **多任务并行** | 一个 Tab 写功能、一个 Tab 修 Bug、一个 Tab 做 Code Review，互不干扰 |
+| **安全敏感操作** | Agent 要删文件、跑脚本、改配置时，先审批再执行 |
+| **长会话续接** | 隔天打开项目，从历史记录恢复对话，Agent 上下文通过 `resumeSessionId` 接续 |
+| **团队统一入口** | 部署一体服务端，团队成员用浏览器访问，后端统一对接所选 Agent |
+
+## 支持的平台
+
+| 平台 | 说明 | 文档 |
+|------|------|------|
+| **Web / 一体服务端** | 构建后单二进制 + 静态资源，`localhost:8000` 即用 | 见下方 [快速开始](#快速开始) |
+| **VS Code 扩展** | Activity Bar 侧边栏 Webview，扩展托管 Bridge 子进程 | [apps/vscode/README.md](apps/vscode/README.md) |
+| **JetBrains 插件** | Tool Window（JCEF），集成到 IntelliJ 系列 IDE | [apps/jetbrains/README.md](apps/jetbrains/README.md) |
+| **Tauri 桌面端** | 独立窗口应用，内置 sidecar Bridge | [apps/desktop/README.md](apps/desktop/README.md) |
+
+## 支持的 Agent
+
+创建会话时可从以下预设中选择（也可自定义命令）：
+
+| Agent | 命令 |
+|-------|------|
+| OpenCode | `opencode acp` |
+| Kiro | `kiro-cli acp` |
+| Claude | `npx -y @agentclientprotocol/claude-agent-acp` |
+| Codex | `npx -y @zed-industries/codex-acp` |
+
+后端默认 Agent 由 `bridge.config.json` 的 `agentCommand` 决定；前端可在每个 Tab 独立指定。
 
 ## 快速开始
 
 ### 环境要求
 
 - **Rust** 1.75+（后端）
-- **Node.js** 18+（前端）
+- **Node.js** 18+ 或 [Bun](https://bun.sh)（前端构建）
 - 至少一个已在 PATH 中的 ACP Agent（如 `opencode acp`、`kiro-cli acp`）
 
 ### 1. 构建并启动（推荐）
@@ -86,6 +100,13 @@ bun run dev:web    # Vite HMR   → :3000
 
 前端通过 Vite 代理将 `/ag-ui`、`/v2`、`/health` 转发到后端。
 
+### 3. 使用
+
+1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
+2. 点击 **+** 创建新会话，选择 Agent 与工作目录
+3. 在对话区与 Agent 交互；工具审批请求会自动弹出
+4. 通过 Tab 栏切换会话，历史记录可恢复已归档的 Tab
+
 ### 配置示例
 
 ```json
@@ -99,6 +120,8 @@ bun run dev:web    # Vite HMR   → :3000
 ```
 
 默认读取 `crates/bridge/bridge.config.json`，监听 `http://localhost:8000`。
+
+## 各平台构建
 
 ### VS Code 扩展
 
@@ -161,66 +184,6 @@ bun run ci:release -- --platform win32-x64
 
 PR / `main` 分支推送会运行轻量 CI（lint、Rust 测试、web + bridge 构建），见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
-### 3. 使用
-
-1. 打开浏览器访问 `http://localhost:8000`（或开发模式下 `http://localhost:3000`）
-2. 点击 **+** 创建新会话，选择 Agent 与工作目录
-3. 在对话区与 Agent 交互；工具审批请求会自动弹出
-4. 通过 Tab 栏切换会话，历史记录可恢复已归档的 Tab
-
-## 项目结构
-
-```
-Qenex/
-├── packages/
-│   ├── platform/        # @qenex/platform — 宿主抽象（QenexHost）
-│   ├── core/              # @qenex/core — API、状态、会话逻辑
-│   ├── ui/                # @qenex/ui — 共享 React 组件
-│   └── tsconfig/          # 共享 TypeScript 配置
-├── apps/
-│   ├── web/               # @qenex/web — 浏览器开发壳
-│   ├── vscode/            # VS Code 扩展（Activity Bar Webview）
-│   ├── desktop/           # Tauri 桌面端（sidecar + Webview）
-│   └── jetbrains/         # JetBrains 插件（JCEF Tool Window）
-├── crates/
-│   └── bridge/            # Rust ACP → AG-UI 桥接服务
-├── acp-to-agui/           # 上游 Python 参考实现
-└── CHANGELOG.md
-```
-
-## 支持的 Agent
-
-前端内置以下 Agent 预设（可在创建会话时切换）：
-
-| Agent | 命令 |
-|-------|------|
-| OpenCode | `opencode acp` |
-| Kiro | `kiro-cli acp` |
-| Claude | `npx -y @agentclientprotocol/claude-agent-acp` |
-| Codex | `npx -y @zed-industries/codex-acp` |
-
-后端默认 Agent 由 `bridge.config.json` 的 `agentCommand` 决定；前端可在每个 Tab 独立指定。
-
-## 架构说明
-
-### 数据流
-
-1. 前端 `POST /v2/tasks` 创建任务，后端 spawn Agent 并完成 ACP 初始化
-2. 前端 `POST /v2/tasks/{id}/run` 发送用户消息
-3. 后端将 ACP 回调转为 AG-UI 事件，经 `GET /v2/tasks/{id}/events` SSE 推送
-4. 每个事件异步写入 SQLite，可通过 `GET /v2/tasks/{id}/messages` 回放
-
-### 审批流程
-
-仅当 Agent 主动调用 `session/request_permission` 时触发：
-
-1. 后端向前端发送 `STATE_DELTA`（`approval.pending`）
-2. ACP 处理阻塞，等待用户响应
-3. 前端 `POST /v2/tasks/{id}/approval` 提交审批结果
-4. Agent 继续执行
-
-> `tool_call` 通知本身不会弹出审批 UI，与 Python 参考版行为不同。
-
 ## 文档
 
 | 文档 | 说明 |
@@ -266,7 +229,79 @@ bun run dev:rust
 cd crates/bridge && RUST_LOG=acp_to_agui=debug cargo run --features server --bin acp-to-agui
 ```
 
-## 与 Python 参考版
+---
+
+## 技术架构
+
+Qenex 是一个 monorepo：Rust 后端将 Agent 协议转为 [AG-UI](https://docs.ag-ui.com/) 事件流，React 前端基于 AG-UI 与 assistant-ui 渲染对话界面。
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  packages/ui + apps/*   React + AG-UI + assistant-ui      │
+│  多 Tab · 审批 · 历史回放 · 会话配置                          │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP / SSE
+┌──────────────────────────▼──────────────────────────────────┐
+│  crates/bridge      Rust ACP → AG-UI Bridge (axum)          │
+│  任务管理 · 事件持久化 · 进程清理 · 文件/Git API              │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ JSON-RPC over stdio
+┌──────────────────────────▼──────────────────────────────────┐
+│  ACP Agent          opencode · kiro-cli · claude · codex …  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 核心能力
+
+| 模块 | 能力 |
+|------|------|
+| **协议桥接** | ACP `session/update` → AG-UI 事件（消息、推理、工具调用） |
+| **多 Tab 前端** | 最多 5 个活跃会话，归档与恢复，localStorage 持久化 |
+| **工具审批** | Agent `request_permission` 时弹出审批 UI，阻塞至用户操作 |
+| **会话持久化** | SQLite 存储 AG-UI 事件，支持 `GET /messages` 历史回放 |
+| **断线恢复** | `resumeSessionId` 恢复 Agent 上下文，前端重放事件重建 UI |
+| **进程管理** | 跟踪 Agent PID，任务关闭时递归清理子进程树 |
+| **工作区 API** | 文件读写、Git 状态/提交等辅助接口 |
+
+### 数据流
+
+1. 前端 `POST /v2/tasks` 创建任务，后端 spawn Agent 并完成 ACP 初始化
+2. 前端 `POST /v2/tasks/{id}/run` 发送用户消息
+3. 后端将 ACP 回调转为 AG-UI 事件，经 `GET /v2/tasks/{id}/events` SSE 推送
+4. 每个事件异步写入 SQLite，可通过 `GET /v2/tasks/{id}/messages` 回放
+
+### 审批流程
+
+仅当 Agent 主动调用 `session/request_permission` 时触发：
+
+1. 后端向前端发送 `STATE_DELTA`（`approval.pending`）
+2. ACP 处理阻塞，等待用户响应
+3. 前端 `POST /v2/tasks/{id}/approval` 提交审批结果
+4. Agent 继续执行
+
+> `tool_call` 通知本身不会弹出审批 UI，与 Python 参考版行为不同。
+
+### 项目结构
+
+```
+Qenex/
+├── packages/
+│   ├── platform/        # @qenex/platform — 宿主抽象（QenexHost）
+│   ├── core/              # @qenex/core — API、状态、会话逻辑
+│   ├── ui/                # @qenex/ui — 共享 React 组件
+│   └── tsconfig/          # 共享 TypeScript 配置
+├── apps/
+│   ├── web/               # @qenex/web — 浏览器开发壳
+│   ├── vscode/            # VS Code 扩展（Activity Bar Webview）
+│   ├── desktop/           # Tauri 桌面端（sidecar + Webview）
+│   └── jetbrains/         # JetBrains 插件（JCEF Tool Window）
+├── crates/
+│   └── bridge/            # Rust ACP → AG-UI 桥接服务
+├── acp-to-agui/           # 上游 Python 参考实现
+└── CHANGELOG.md
+```
+
+### 与 Python 参考版
 
 本仓库以 Rust 后端 + 定制前端为主开发路径。`acp-to-agui/` 目录保留上游 Python/FastAPI 参考实现，用于协议契约对齐。
 
