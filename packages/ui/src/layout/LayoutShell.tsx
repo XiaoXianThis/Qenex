@@ -3,6 +3,7 @@
 import { PuckLayoutRenderer } from "@/layout/puck/PuckLayoutRenderer";
 import { LayoutEditToolbar } from "@/layout/LayoutEditToolbar";
 import {
+  layoutActions,
   selectTabBarPosition,
   useLayoutStore,
   type RuntimeSessionConfig,
@@ -29,7 +30,7 @@ export const LayoutShell: FC<LayoutShellProps> = ({
   const editMode = useLayoutStore((s) => s.editMode);
   const composerHidden = useLayoutStore((s) => !s.panels.composer.visible);
   const tabBarPosition = useLayoutStore(selectTabBarPosition);
-  const resetToDefault = useLayoutStore((s) => s.resetToDefault);
+  const resetToDefault = layoutActions.resetToDefault;
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden">

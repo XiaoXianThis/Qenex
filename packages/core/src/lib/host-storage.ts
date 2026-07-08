@@ -1,9 +1,14 @@
 import type { QenexHostStorage } from "@qenex/platform";
-import type { StateStorage } from "zustand/middleware";
+
+export type PersistStorage = {
+  getItem: (name: string) => string | null | Promise<string | null>;
+  setItem: (name: string, value: string) => void | Promise<void>;
+  removeItem: (name: string) => void | Promise<void>;
+};
 
 let hostStorage: QenexHostStorage | null = null;
 
-const localStorageFallback: StateStorage = {
+const localStorageFallback: PersistStorage = {
   getItem: (name) => {
     if (typeof localStorage === "undefined") {
       return null;
@@ -32,7 +37,7 @@ export function clearHostPersistStorage(): void {
   hostStorage = null;
 }
 
-export function getHostPersistStorage(): StateStorage {
+export function getHostPersistStorage(): PersistStorage {
   if (!hostStorage) {
     return localStorageFallback;
   }

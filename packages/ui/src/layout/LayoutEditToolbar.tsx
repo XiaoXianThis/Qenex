@@ -3,6 +3,7 @@
 import {
   cn,
   LAYOUT_PRESETS,
+  layoutActions,
   useLayoutStore,
   type LayoutPresetId,
 } from "@qenex/core";
@@ -23,13 +24,13 @@ const toolBtnClass =
 export const LayoutEditToolbar: FC = () => {
   const editMode = useLayoutStore((s) => s.editMode);
   const preset = useLayoutStore((s) => s.preset);
-  const setEditMode = useLayoutStore((s) => s.setEditMode);
-  const applyPreset = useLayoutStore((s) => s.applyPreset);
-  const resetToDefault = useLayoutStore((s) => s.resetToDefault);
+  const setEditMode = layoutActions.setEditMode;
+  const applyPreset = layoutActions.applyPreset;
+  const resetToDefault = layoutActions.resetToDefault;
   const sessionConfigVisible = useLayoutStore(
     (s) => s.panels.sessionConfigBar.visible,
   );
-  const setPanelVisible = useLayoutStore((s) => s.setPanelVisible);
+  const setPanelVisible = layoutActions.setPanelVisible;
 
   return (
     <div

@@ -8,7 +8,7 @@ import {
   SessionConfigProvider,
   createBridgeHistoryAdapter,
   getAguiUrl,
-  useTabsStore,
+  tabsActions,
   type RuntimeSessionConfig,
 } from "@qenex/core";
 
@@ -26,7 +26,7 @@ function AgentRuntimeProviderInner({
   aguiUrl,
   children,
 }: AgentRuntimeProviderInnerProps) {
-  const clearHistoryLoad = useTabsStore((s) => s.clearHistoryLoad);
+  const clearHistoryLoad = tabsActions.clearHistoryLoad;
 
   const agent = useMemo(
     () =>

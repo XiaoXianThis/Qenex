@@ -5,6 +5,7 @@ import { LayoutPanelActionBar } from "@/layout/puck/LayoutPanelActionBar";
 import type { LayoutMetadata } from "@/layout/puck/types";
 import {
   getComponentTypeInZone,
+  layoutActions,
   layoutZoneFromDestination,
   parentIdForDepth,
   useLayoutStore,
@@ -86,7 +87,7 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
   const editMode = useLayoutStore((s) => s.editMode);
   const preset = useLayoutStore((s) => s.preset);
   const storePuckData = useLayoutStore((s) => s.puckData);
-  const setPuckData = useLayoutStore((s) => s.setPuckData);
+  const setPuckData = layoutActions.setPuckData;
 
   const draftRef = useRef<Data | null>(null);
   const [draftPuckData, setDraftPuckData] = useState<Data | null>(null);

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import {
   getTaskTitle,
-  useTabsStore,
+  tabsActions,
   type BridgeHttpAgent,
 } from "@qenex/core";
 
@@ -16,7 +16,7 @@ export function TabTitleBridge({
   tabId,
   threadId,
 }: TabTitleBridgeProps) {
-  const updateTabTitle = useTabsStore((s) => s.updateTabTitle);
+  const updateTabTitle = tabsActions.updateTabTitle;
 
   useEffect(() => {
     const syncTitleFromBackend = async () => {

@@ -3,6 +3,7 @@ import {
   AGENT_PRESETS,
   cn,
   getAgentPreset,
+  tabsActions,
   useHost,
   useTabsStore,
 } from "@qenex/core";
@@ -25,10 +26,10 @@ export function TabBar({
   const allTabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const preferredAgentId = useTabsStore((s) => s.preferredAgentId);
-  const switchTab = useTabsStore((s) => s.switchTab);
-  const closeTab = useTabsStore((s) => s.closeTab);
-  const createTab = useTabsStore((s) => s.createTab);
-  const setPreferredAgentId = useTabsStore((s) => s.setPreferredAgentId);
+  const switchTab = tabsActions.switchTab;
+  const closeTab = tabsActions.closeTab;
+  const createTab = tabsActions.createTab;
+  const setPreferredAgentId = tabsActions.setPreferredAgentId;
 
   const tabs = useMemo(
     () => allTabs.filter((t) => t.status === "active"),

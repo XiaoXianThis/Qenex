@@ -1,4 +1,4 @@
-import { useTabsStore, getAgentPreset } from "@qenex/core";
+import { getAgentPreset, tabsActions, useTabsStore } from "@qenex/core";
 import { Trash2 } from "lucide-react";
 import { useMemo } from "react";
 
@@ -8,8 +8,8 @@ type HistoryPanelProps = {
 
 export function HistoryPanel({ onRestore }: HistoryPanelProps) {
   const allTabs = useTabsStore((s) => s.tabs);
-  const restoreTab = useTabsStore((s) => s.restoreTab);
-  const deleteTab = useTabsStore((s) => s.deleteTab);
+  const restoreTab = tabsActions.restoreTab;
+  const deleteTab = tabsActions.deleteTab;
 
   const archived = useMemo(
     () =>

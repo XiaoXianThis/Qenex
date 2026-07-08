@@ -1,7 +1,6 @@
 import type { Data } from "@puckeditor/core";
-import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
-import { getHostPersistStorage } from "../lib/host-storage.ts";
+import { proxy } from "valtio";
+import { useSnapshot } from "valtio/react";
 import { migrateLayoutState } from "../layout/migrate-v1.ts";
 import {
   cycleWidthScope,
@@ -22,124 +21,119 @@ import type {
   PanelId,
   WidthScope,
 } from "../layout/types.ts";
+import {
+  hydrateValtioStore,
+  subscribeValtioPersist,
+} from "../lib/valtio-persist.ts";
 
-type LayoutState = LayoutPersistedState & {
+export const LAYOUT_PERSIST_KEY = "agent-center-layout";
+
+export type LayoutState = LayoutPersistedState & {
   editMode: boolean;
-};
-
-type LayoutActions = {
-  setEditMode: (editMode: boolean) => void;
-  applyPreset: (preset: Exclude<LayoutPresetId, "custom">) => void;
-  resetToDefault: () => void;
-  setPanelVisible: (id: PanelId, visible: boolean) => void;
-  setPanelWidthScope: (id: PanelId, widthScope: WidthScope) => void;
-  cyclePanelWidthScope: (id: PanelId) => void;
-  setPuckData: (puckData: Data) => void;
-  markCustom: () => void;
 };
 
 function cloneClassic(): LayoutPersistedState {
   return structuredClone(CLASSIC_LAYOUT);
 }
 
-export const useLayoutStore = create<LayoutState & LayoutActions>()(
-  persist(
-    (set) => ({
-      ...cloneClassic(),
-      editMode: false,
+export const layoutStore = proxy<LayoutState>({
+  ...cloneClassic(),
+  editMode: false,
+});
 
-      setEditMode: (editMode) => set({ editMode }),
+export const layoutActions = {
+  setEditMode(editMode: boolean) {
+    layoutStore.editMode = editMode;
+  },
 
-      applyPreset: (preset) => {
-        const next = getPresetState(preset);
-        set({ ...next, editMode: false });
-      },
+  applyPreset(preset: Exclude<LayoutPresetId, "custom">) {
+    const next = getPresetState(preset);
+    Object.assign(layoutStore, { ...next, editMode: false });
+  },
 
-      resetToDefault: () => {
-        const next = getPresetState("classic");
-        set({ ...next, editMode: false });
-      },
+  resetToDefault() {
+    const next = getPresetState("classic");
+    Object.assign(layoutStore, { ...next, editMode: false });
+  },
 
-      setPanelVisible: (id, visible) => {
-        const def = getPanelDefinition(id);
-        if (!def.hideable && !visible) return;
-        set((state) => ({
-          preset: "custom",
-          panels: {
-            ...state.panels,
-            [id]: { ...state.panels[id], visible },
-          },
-        }));
-      },
+  setPanelVisible(id: PanelId, visible: boolean) {
+    const def = getPanelDefinition(id);
+    if (!def.hideable && !visible) return;
+    layoutStore.preset = "custom";
+    layoutStore.panels[id] = { ...layoutStore.panels[id], visible };
+  },
 
-      setPanelWidthScope: (id, widthScope) => {
-        const def = getPanelDefinition(id);
-        if (!def.resizableWidthScope.includes(widthScope)) return;
-        set((state) => ({
-          preset: "custom",
-          panels: {
-            ...state.panels,
-            [id]: { ...state.panels[id], widthScope },
-          },
-        }));
-      },
+  setPanelWidthScope(id: PanelId, widthScope: WidthScope) {
+    const def = getPanelDefinition(id);
+    if (!def.resizableWidthScope.includes(widthScope)) return;
+    layoutStore.preset = "custom";
+    layoutStore.panels[id] = { ...layoutStore.panels[id], widthScope };
+  },
 
-      cyclePanelWidthScope: (id) => {
-        set((state) => {
-          const def = getPanelDefinition(id);
-          const current = state.panels[id].widthScope;
-          const next = cycleWidthScope(current, def.resizableWidthScope);
-          return {
-            preset: "custom" as const,
-            panels: {
-              ...state.panels,
-              [id]: { ...state.panels[id], widthScope: next },
-            },
-          };
-        });
-      },
+  cyclePanelWidthScope(id: PanelId) {
+    const def = getPanelDefinition(id);
+    const current = layoutStore.panels[id].widthScope;
+    const next = cycleWidthScope(current, def.resizableWidthScope);
+    layoutStore.preset = "custom";
+    layoutStore.panels[id] = { ...layoutStore.panels[id], widthScope: next };
+  },
 
-      setPuckData: (puckData) => {
-        set({
-          preset: "custom",
-          puckData: structuredClone(puckData),
-        });
-      },
+  setPuckData(puckData: Data) {
+    layoutStore.preset = "custom";
+    layoutStore.puckData = structuredClone(puckData);
+  },
 
-      markCustom: () => set({ preset: "custom" }),
-    }),
+  markCustom() {
+    layoutStore.preset = "custom";
+  },
+};
+
+export function useLayoutStore<T>(selector: (state: LayoutState) => T): T {
+  const snap = useSnapshot(layoutStore) as LayoutState;
+  return selector(snap);
+}
+
+export async function hydrateLayoutStore(): Promise<void> {
+  await hydrateValtioStore(LAYOUT_PERSIST_KEY, layoutStore, {
+    merge: (persisted, current) => {
+      const migrated = migrateLayoutState(persisted);
+      return { ...current, ...migrated, editMode: false };
+    },
+  });
+}
+
+let unsubscribeLayoutPersist: (() => void) | null = null;
+
+export function startLayoutPersist(): () => void {
+  unsubscribeLayoutPersist?.();
+  unsubscribeLayoutPersist = subscribeValtioPersist(
+    LAYOUT_PERSIST_KEY,
+    layoutStore,
     {
-      name: "agent-center-layout",
-      storage: createJSONStorage(() => getHostPersistStorage()),
-      skipHydration: true,
       partialize: (state) => ({
         schemaVersion: state.schemaVersion,
         preset: state.preset,
         puckData: state.puckData,
         panels: state.panels,
       }),
-      merge: (persisted, current) => {
-        const migrated = migrateLayoutState(persisted);
-        return { ...current, ...migrated, editMode: false };
-      },
     },
-  ),
-);
+  );
+  return () => {
+    unsubscribeLayoutPersist?.();
+    unsubscribeLayoutPersist = null;
+  };
+}
 
-type LayoutStoreSlice = LayoutPersistedState & { editMode: boolean };
-
-export function selectTabBarPosition(
-  state: LayoutStoreSlice,
-): "top" | "bottom" {
+export function selectTabBarPosition(state: LayoutState): "top" | "bottom" {
   return isTabBarInBottom(state.puckData) ? "bottom" : "top";
 }
 
-export function selectComposerInTopBand(state: LayoutStoreSlice): boolean {
+export function selectComposerInTopBand(state: LayoutState): boolean {
   return isComposerInTop(state.puckData);
 }
 
 export function selectPanelZone(
-  state: LayoutStoreSlice,
+  state: LayoutState,
   panelId: PanelId,
 ): "top" | "bottom" | null {
   return findPanelZone(state.puckData, panelId);

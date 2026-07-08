@@ -14,8 +14,15 @@ import {
   clearHostPersistStorage,
   setHostPersistStorage,
 } from "../lib/host-storage.ts";
-import { useLayoutStore } from "../store/layout-store.ts";
-import { useTabsStore } from "../store/tabs-store.ts";
+import {
+  hydrateLayoutStore,
+  startLayoutPersist,
+} from "../store/layout-store.ts";
+import {
+  hydrateTabsStore,
+  startTabsPersist,
+  tabsActions,
+} from "../store/tabs-store.ts";
 
 const HostContext = createContext<QenexHost | null>(null);
 
@@ -31,16 +38,20 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     setBridgeHost(host);
     setHostPersistStorage(host.storage);
 
-    void Promise.all([
-      Promise.resolve(useTabsStore.persist.rehydrate()),
-      Promise.resolve(useLayoutStore.persist.rehydrate()),
-    ]).then(() => {
-      void useTabsStore.getState().ensureInitialTab().finally(() => {
+    let stopTabsPersist: (() => void) | undefined;
+    let stopLayoutPersist: (() => void) | undefined;
+
+    void Promise.all([hydrateTabsStore(), hydrateLayoutStore()]).then(() => {
+      stopTabsPersist = startTabsPersist();
+      stopLayoutPersist = startLayoutPersist();
+      void tabsActions.ensureInitialTab().finally(() => {
         setHydrated(true);
       });
     });
 
     return () => {
+      stopTabsPersist?.();
+      stopLayoutPersist?.();
       clearBridgeHost();
       clearHostPersistStorage();
       setHydrated(false);

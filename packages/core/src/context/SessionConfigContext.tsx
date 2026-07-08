@@ -19,7 +19,7 @@ import {
   EMPTY_SESSION_CONFIG,
   type SessionConfig,
 } from "../lib/session-config.ts";
-import { useTabsStore } from "../store/tabs-store.ts";
+import { tabsActions } from "../store/tabs-store.ts";
 
 type SessionConfigContextValue = {
   config: SessionConfig;
@@ -50,7 +50,7 @@ export function SessionConfigProvider({
   agentSessionId,
   children,
 }: SessionConfigProviderProps) {
-  const setAgentSessionId = useTabsStore((s) => s.setAgentSessionId);
+  const setAgentSessionId = tabsActions.setAgentSessionId;
   const resumeSessionIdRef = useRef(agentSessionId);
   const [config, setConfig] = useState<SessionConfig>({
     ...EMPTY_SESSION_CONFIG,

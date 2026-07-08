@@ -2,6 +2,7 @@
 
 import {
   getPanelDefinition,
+  layoutActions,
   panelIdFromPuckType,
   useLayoutStore,
   type PanelId,
@@ -34,8 +35,8 @@ export const LayoutPanelActionBar: FC<LayoutPanelActionBarProps> = ({
   const widthScope = useLayoutStore((s) =>
     panelId ? s.panels[panelId].widthScope : "content",
   );
-  const setPanelVisible = useLayoutStore((s) => s.setPanelVisible);
-  const cyclePanelWidthScope = useLayoutStore((s) => s.cyclePanelWidthScope);
+  const setPanelVisible = layoutActions.setPanelVisible;
+  const cyclePanelWidthScope = layoutActions.cyclePanelWidthScope;
 
   const def = panelId ? getPanelDefinition(panelId) : null;
   const canToggleVisibility = def?.hideable ?? false;
