@@ -24,6 +24,8 @@
 
 :root {
   --radius: 0.625rem;
+  --page-padding: 0.75rem;
+  --scrollbar-size: 6px;
   --background: oklch(1 0 0);
   --foreground: oklch(0.141 0.005 285.823);
   --card: oklch(1 0 0);
@@ -47,25 +49,74 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
-      transparent;
   }
   body {
     @apply bg-background text-foreground antialiased;
   }
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  .page-padding {
+    padding: var(--page-padding);
   }
-  ::-webkit-scrollbar-track {
-    background: transparent;
+  .page-padding-scroll {
+    padding-block: var(--page-padding);
+    padding-inline-start: var(--page-padding);
+    padding-inline-end: max(
+      0px,
+      calc(var(--page-padding) - var(--scrollbar-size))
+    );
   }
-  ::-webkit-scrollbar-thumb {
-    background: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
-    border-radius: 3px;
+  .page-padding-x {
+    padding-inline: var(--page-padding);
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  .page-padding-x-scroll {
+    padding-inline-start: var(--page-padding);
+    padding-inline-end: max(
+      0px,
+      calc(var(--page-padding) - var(--scrollbar-size))
+    );
+  }
+  .page-padding-t {
+    padding-top: var(--page-padding);
+  }
+  .page-padding-b {
+    padding-bottom: var(--page-padding);
+  }
+}
+
+/* 全局滚动条：横竖均为 6px
+ * 注意：Chrome 121+ 在同一元素上同时写 scrollbar-width 会屏蔽 ::-webkit-scrollbar，
+ * 因此 WebKit 样式单独写，scrollbar-width 仅用于 Firefox。 */
+::-webkit-scrollbar {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  width: var(--scrollbar-size) !important;
+  height: var(--scrollbar-size) !important;
+}
+
+::-webkit-scrollbar:vertical {
+  width: var(--scrollbar-size) !important;
+}
+
+::-webkit-scrollbar:horizontal {
+  height: var(--scrollbar-size) !important;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 35%, transparent) !important;
+  border-radius: 3px !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 55%, transparent) !important;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: var(--scrollbar-size) !important;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
+      transparent !important;
   }
 }

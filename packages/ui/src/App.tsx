@@ -91,7 +91,7 @@ export default function App() {
       {showHistory ? (
         <HistoryPanel onRestore={() => setShowHistory(false)} />
       ) : (
-        <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-hidden px-4 py-4">
+        <main className="flex w-full flex-1 flex-col overflow-hidden">
           {/* 渲染所有活跃 tab 的 runtime，但只显示当前激活的 */}
           {tabSessions.map((session) => (
               <div
@@ -110,7 +110,7 @@ export default function App() {
             ))}
 
           {!activeTab && (
-            <div className="flex flex-1 items-center justify-center text-muted-foreground">
+            <div className="page-padding flex flex-1 items-center justify-center text-muted-foreground">
               点击 + 创建新会话
             </div>
           )}

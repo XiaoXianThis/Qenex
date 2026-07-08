@@ -21,14 +21,14 @@ export function HistoryPanel({ onRestore }: HistoryPanelProps) {
 
   if (archived.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="page-padding flex flex-1 items-center justify-center">
         <p className="text-muted-foreground">暂无历史会话</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+    <div className="page-padding-scroll flex flex-1 flex-col gap-3 overflow-y-auto">
       <h2 className="text-lg font-semibold">历史会话</h2>
       <div className="flex flex-col gap-2">
         {archived.map((tab) => {
