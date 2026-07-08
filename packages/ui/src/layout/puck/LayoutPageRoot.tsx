@@ -6,21 +6,41 @@ import type { LayoutPageProps } from "@/layout/puck/config";
 import type { LayoutPuckRoot } from "@/layout/puck/config";
 import { ActiveThreadLayout } from "@/layout/puck/ActiveThreadLayout";
 import type { LayoutMetadata } from "@/layout/puck/types";
-import { cn, useLayoutStore } from "@qenex/core";
+import {
+  cn,
+  useLayoutStore,
+  useTabsStore,
+  type RuntimeSessionConfig,
+} from "@qenex/core";
 import type { PuckComponent } from "@puckeditor/core";
 import { RotateCcw } from "lucide-react";
+import { useMemo } from "react";
 
 export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
   const { top: Top, bottom: Bottom, puck } = props;
   const meta = puck.metadata as LayoutMetadata;
-  const {
-    showHistory,
-    activeTabId,
-    tabSessions,
-    hasActiveTab,
-    onResetLayout,
-    shell,
-  } = meta;
+  const { showHistory, onResetLayout, shell } = meta;
+
+  const tabs = useTabsStore((s) => s.tabs);
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+
+  const tabSessions = useMemo((): RuntimeSessionConfig[] => {
+    return tabs
+      .filter((t) => t.status === "active")
+      .map((tab) => ({
+        tabId: tab.id,
+        threadId: tab.taskId,
+        cwd: tab.cwd,
+        agentCommand: tab.agentCommand,
+        agentSessionId: tab.agentSessionId,
+        shouldLoadHistory: tab.needsHistoryLoad === true,
+      }));
+  }, [tabs]);
+
+  const hasActiveTab = useMemo(
+    () => tabs.some((t) => t.id === activeTabId),
+    [tabs, activeTabId],
+  );
 
   const editMode = useLayoutStore((s) => s.editMode);
   const puckData = useLayoutStore((s) => s.puckData);
@@ -83,7 +103,10 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
             );
           }
           return (
-            <div className="flex h-dvh flex-col overflow-hidden">
+            <div
+              key={session.tabId}
+              className="flex h-dvh flex-col overflow-hidden"
+            >
               <AgentRuntimeProvider session={session}>
                 <ActiveThreadLayout
                   top={Top}

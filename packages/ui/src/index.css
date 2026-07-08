@@ -90,39 +90,59 @@
 /* 全局滚动条：横竖均为 6px
  * 注意：Chrome 121+ 在同一元素上同时写 scrollbar-width 会屏蔽 ::-webkit-scrollbar，
  * 因此 WebKit 样式单独写，scrollbar-width 仅用于 Firefox。 */
-::-webkit-scrollbar {
+::-webkit-scrollbar,
+.scroll-x-match::-webkit-scrollbar {
   appearance: none !important;
   -webkit-appearance: none !important;
   width: var(--scrollbar-size) !important;
   height: var(--scrollbar-size) !important;
 }
 
-::-webkit-scrollbar:vertical {
+::-webkit-scrollbar:vertical,
+.scroll-x-match::-webkit-scrollbar:vertical {
   width: var(--scrollbar-size) !important;
 }
 
-::-webkit-scrollbar:horizontal {
+::-webkit-scrollbar:horizontal,
+.scroll-x-match::-webkit-scrollbar:horizontal {
   height: var(--scrollbar-size) !important;
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+.scroll-x-match::-webkit-scrollbar-track {
   background: transparent !important;
 }
 
-::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb,
+.scroll-x-match::-webkit-scrollbar-thumb {
   background: color-mix(in oklab, var(--muted-foreground) 35%, transparent) !important;
   border-radius: 3px !important;
 }
 
-::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover,
+.scroll-x-match::-webkit-scrollbar-thumb:hover {
   background: color-mix(in oklab, var(--muted-foreground) 55%, transparent) !important;
 }
 
+::-webkit-scrollbar-corner,
+.scroll-x-match::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
 @supports not selector(::-webkit-scrollbar) {
-  * {
+  *,
+  .scroll-x-match {
     scrollbar-width: var(--scrollbar-size) !important;
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
       transparent !important;
+  }
+}
+
+@layer base {
+  .scroll-x-match {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
   }
 }
 

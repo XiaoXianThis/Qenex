@@ -89,6 +89,11 @@ export function buildPuckData(slots: Partial<PuckRootProps>): Data {
   };
 }
 
+/** Plain deep clone — safe for Valtio snapshots (structuredClone cannot clone proxies). */
+export function clonePuckData(data: Data): Data {
+  return JSON.parse(JSON.stringify(data)) as Data;
+}
+
 export function getZoneNodes(data: Data, zone: LayoutZone): ComponentData[] {
   const props = data.root?.props as PuckRootProps | undefined;
   const nodes = props?.[zone];

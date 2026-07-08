@@ -14,6 +14,7 @@ import {
   findPanelZone,
   isComposerInTop,
   isTabBarInBottom,
+  clonePuckData,
 } from "../layout/puck-data.ts";
 import type {
   LayoutPersistedState,
@@ -80,7 +81,7 @@ export const layoutActions = {
 
   setPuckData(puckData: Data) {
     layoutStore.preset = "custom";
-    layoutStore.puckData = structuredClone(puckData);
+    layoutStore.puckData = clonePuckData(puckData);
   },
 
   markCustom() {

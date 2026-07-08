@@ -4,6 +4,7 @@ import { layoutConfig } from "@/layout/puck/config";
 import { LayoutPanelActionBar } from "@/layout/puck/LayoutPanelActionBar";
 import type { LayoutMetadata } from "@/layout/puck/types";
 import {
+  clonePuckData,
   getComponentTypeInZone,
   layoutActions,
   layoutZoneFromDestination,
@@ -22,6 +23,7 @@ import "@puckeditor/core/puck.css";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FC,
@@ -97,7 +99,7 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
 
   useLayoutEffect(() => {
     if (editMode) {
-      const snapshot = structuredClone(storePuckData);
+      const snapshot = clonePuckData(storePuckData);
       draftRef.current = snapshot;
       setDraftPuckData(snapshot);
       storeSnapshotOnEnterRef.current = snapshotPuckData(storePuckData);
@@ -121,7 +123,7 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
 
   const handleDepthViolation = (prevData: Data) => {
     revertingRef.current = true;
-    const cloned = structuredClone(prevData);
+    const cloned = clonePuckData(prevData);
     puckDispatchRef.current?.({
       type: "setData",
       data: cloned,
@@ -139,8 +141,13 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
     setDraftPuckData(data);
   };
 
+  const renderPuckData = useMemo(
+    () => clonePuckData(storePuckData),
+    [storePuckData],
+  );
+
   if (editMode) {
-    const puckData = draftPuckData ?? storePuckData;
+    const puckData = draftPuckData ?? clonePuckData(storePuckData);
 
     return (
       <div className="h-dvh min-h-0 overflow-hidden" data-layout-editing="">
@@ -206,7 +213,7 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
   }
 
   return (
-    <Render config={puckConfig} data={storePuckData} metadata={metadata} />
+    <Render config={puckConfig} data={renderPuckData} metadata={metadata} />
   );
 };
 

@@ -7,7 +7,7 @@ import {
   useHost,
   useTabsStore,
 } from "@qenex/core";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 type TabBarProps = {
   onToggleHistory: () => void;
@@ -36,6 +36,31 @@ export function TabBar({
     [allTabs],
   );
 
+  const tabsScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+
+      const delta =
+        Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const nextScrollLeft = el.scrollLeft + delta;
+      const maxScrollLeft = el.scrollWidth - el.clientWidth;
+
+      if (delta < 0 && el.scrollLeft <= 0) return;
+      if (delta > 0 && el.scrollLeft >= maxScrollLeft) return;
+
+      e.preventDefault();
+      el.scrollLeft = Math.max(0, Math.min(nextScrollLeft, maxScrollLeft));
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const handleCreateTab = async () => {
     const cwd = (await host.getDefaultWorkspace()) ?? ".";
     createTab({
@@ -54,7 +79,10 @@ export function TabBar({
         position === "top" ? "border-b" : "border-t",
       )}
     >
-      <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-2">
+      <div
+        ref={tabsScrollRef}
+        className="scroll-x-match flex min-w-0 flex-1 gap-1 px-2"
+      >
         {tabs.map((tab) => (
           <div
             key={tab.id}
