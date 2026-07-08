@@ -24,6 +24,7 @@ export type SessionTab = {
 type TabsState = {
   tabs: SessionTab[];
   activeTabId: string | null;
+  preferredAgentId: string;
 };
 
 type TabsActions = {
@@ -39,6 +40,7 @@ type TabsActions = {
   updateTabTitle: (tabId: string, title: string) => void;
   setAgentSessionId: (tabId: string, agentSessionId: string) => void;
   clearHistoryLoad: (tabId: string) => void;
+  setPreferredAgentId: (agentId: string) => void;
   ensureInitialTab: () => Promise<void>;
 };
 
@@ -47,6 +49,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
     (set, get) => ({
       tabs: [],
       activeTabId: null,
+      preferredAgentId: DEFAULT_AGENT_ID,
 
       createTab: (config) => {
         const now = Date.now();
@@ -79,7 +82,12 @@ export const useTabsStore = create<TabsState & TabsActions>()(
         set((state) => ({
           tabs: [...state.tabs, newTab],
           activeTabId: newTab.id,
+          preferredAgentId: config.agentId,
         }));
+      },
+
+      setPreferredAgentId: (agentId) => {
+        set({ preferredAgentId: getAgentPreset(agentId).id });
       },
 
       switchTab: (tabId) => {
@@ -198,7 +206,7 @@ export const useTabsStore = create<TabsState & TabsActions>()(
           (await getBridgeHost().getDefaultWorkspace()) ?? ".";
 
         get().createTab({
-          agentId: DEFAULT_AGENT_ID,
+          agentId: get().preferredAgentId,
           cwd: defaultCwd,
         });
       },

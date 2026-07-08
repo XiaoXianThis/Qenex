@@ -84,6 +84,8 @@ pub struct SessionConfigSnapshot {
 pub struct SessionManager {
     store: Arc<Mutex<SessionStore>>,
     sessions: Arc<Mutex<HashMap<String, InnerSession>>>,
+    /// Per-task mutex to serialize concurrent ensure_task calls (e.g. React StrictMode).
+    ensure_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     default_agent_command: Vec<String>,
     demo_mode: bool,
     demo_tasks: Arc<Mutex<HashSet<String>>>,
@@ -99,6 +101,7 @@ impl SessionManager {
         Self {
             store,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            ensure_locks: Arc::new(Mutex::new(HashMap::new())),
             default_agent_command: agent_command
                 .unwrap_or_else(|| vec!["kiro-cli".into(), "acp".into()]),
             demo_mode,
@@ -567,6 +570,23 @@ impl SessionManager {
         mcp_servers: Option<Value>,
         agent_command: Option<Vec<String>>,
     ) -> Result<ActiveSession, ManagerError> {
+        if self.has_session(task_id).await {
+            let sessions = self.sessions.lock().await;
+            let active = sessions
+                .get(task_id)
+                .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+            return Ok(active_session_from_inner(task_id, cwd, active));
+        }
+
+        let task_lock = {
+            let mut locks = self.ensure_locks.lock().await;
+            locks
+                .entry(task_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _guard = task_lock.lock().await;
+
         if self.has_session(task_id).await {
             let sessions = self.sessions.lock().await;
             let active = sessions

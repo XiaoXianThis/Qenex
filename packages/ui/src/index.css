@@ -50,6 +50,11 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
+  body,
+  #root {
+    @apply h-full overflow-hidden;
+  }
   body {
     @apply bg-background text-foreground antialiased;
   }
@@ -119,4 +124,21 @@
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
       transparent !important;
   }
+}
+
+/* Puck 布局编辑：消息区 pointer-events 不继承，需显式禁用整棵子树 */
+[data-layout-editing] [data-slot="aui_thread-messages"],
+[data-layout-editing] [data-slot="aui_thread-messages"] * {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+/* Puck 布局编辑：确保拖拽 overlay / dropzone 在消息与面板内容之上。
+ * 不要提升所有 data-puck-component，否则长消息列表会形成大面积高层级命中面，
+ * 压住左侧组件抽屉并干扰 Puck 的拖拽/dropzone 命中。 */
+[data-layout-editing] [data-puck-overlay],
+[data-layout-editing] [data-puck-overlay-portal],
+[data-layout-editing] [data-puck-dropzone] {
+  z-index: 60 !important;
+  pointer-events: auto !important;
 }

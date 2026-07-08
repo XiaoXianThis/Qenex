@@ -9,5 +9,13 @@ export * from "./lib/replay-agui-events.ts";
 export * from "./lib/session-config.ts";
 export * from "./lib/utils.ts";
 export * from "./store/tabs-store.ts";
+export * from "./store/layout-store.ts";
+export * from "./layout/types.ts";
+export * from "./layout/presets.ts";
+export * from "./layout/panel-registry.ts";
+export * from "./layout/puck-data.ts";
+export * from "./layout/migrate-v1.ts";
+export * from "./layout/layout-depth.ts";
+export * from "./layout/migrate-v3.ts";
 
 export type { RuntimeSessionConfig } from "./types.ts";

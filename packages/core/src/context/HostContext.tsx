@@ -14,6 +14,7 @@ import {
   clearHostPersistStorage,
   setHostPersistStorage,
 } from "../lib/host-storage.ts";
+import { useLayoutStore } from "../store/layout-store.ts";
 import { useTabsStore } from "../store/tabs-store.ts";
 
 const HostContext = createContext<QenexHost | null>(null);
@@ -30,7 +31,10 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     setBridgeHost(host);
     setHostPersistStorage(host.storage);
 
-    void Promise.resolve(useTabsStore.persist.rehydrate()).then(() => {
+    void Promise.all([
+      Promise.resolve(useTabsStore.persist.rehydrate()),
+      Promise.resolve(useLayoutStore.persist.rehydrate()),
+    ]).then(() => {
       void useTabsStore.getState().ensureInitialTab().finally(() => {
         setHydrated(true);
       });

@@ -5,7 +5,6 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
-import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { SessionConfigBar } from "@/components/SessionConfigBar";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
@@ -24,11 +23,11 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@qenex/core";
+import { useLayoutStore } from "@qenex/core";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
   AuiIf,
-  type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
@@ -91,77 +90,26 @@ const EMPTY_COMPONENTS: ThreadComponents = {};
 const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS);
 
-// Startup exposes a loading placeholder thread; treat it as a new chat so
-// the composer mounts centered. Loads after startup keep the docked layout.
-const isNewChatView = (s: AssistantState) =>
-  s.thread.messages.length === 0 &&
-  (!s.thread.isLoading || s.threads.isLoading);
+export { ThreadComponentsContext };
 
 export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
-  const isEmpty = useAuiState(isNewChatView);
-
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} />
+      {null}
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
-  const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
-
+export const ThreadMessages: FC = () => {
   return (
-    <ThreadPrimitive.Root
-      className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
-      style={{
-        ["--thread-max-width" as string]: "44rem",
-        ["--composer-bg" as string]:
-          "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
-        ["--composer-radius" as string]: "1.25rem",
-        ["--composer-padding" as string]: "8px",
-      }}
+    <div
+      data-slot="aui_message-group"
+      className="mb-14 flex flex-col gap-y-6 empty:hidden"
     >
-      <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
-      >
-        <div
-          className={cn(
-            "page-padding-x-scroll page-padding-t mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-1 flex-col",
-            isEmpty && "justify-center",
-          )}
-        >
-          <AuiIf condition={isNewChatView}>
-            <Welcome />
-          </AuiIf>
-
-          <div
-            data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden"
-          >
-            <ThreadPrimitive.Messages>
-              {() => <ThreadMessage />}
-            </ThreadPrimitive.Messages>
-          </div>
-
-          <ThreadPrimitive.ViewportFooter
-            className={cn(
-              "aui-thread-viewport-footer bg-background page-padding-b flex flex-col gap-4 overflow-visible",
-              !isEmpty &&
-                "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
-            )}
-          >
-            <ThreadScrollToBottom />
-            <ThreadFollowupSuggestions />
-            <Composer />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
-          </ThreadPrimitive.ViewportFooter>
-        </div>
-      </ThreadPrimitive.Viewport>
-    </ThreadPrimitive.Root>
+      <ThreadPrimitive.Messages>
+        {() => <ThreadMessage />}
+      </ThreadPrimitive.Messages>
+    </div>
   );
 };
 
@@ -176,7 +124,10 @@ const ThreadMessage: FC = () => {
   return <AssistantMessageComponent />;
 };
 
-const ThreadScrollToBottom: FC = () => {
+export const ThreadScrollToBottom: FC = () => {
+  const layoutEditing = useLayoutStore((s) => s.editMode);
+  if (layoutEditing) return null;
+
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
       <TooltipIconButton
@@ -190,11 +141,11 @@ const ThreadScrollToBottom: FC = () => {
   );
 };
 
-const ThreadWelcome: FC = () => {
+export const ThreadWelcome: FC = () => {
   return null;
 };
 
-const ThreadSuggestions: FC = () => {
+export const ThreadSuggestions: FC = () => {
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
       <ThreadPrimitive.Suggestions>
@@ -220,10 +171,15 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-const Composer: FC = () => {
+export const ThreadComposer: FC = () => {
+  const showSessionConfig = useLayoutStore(
+    (s) => s.panels.sessionConfigBar.visible,
+  );
+  const layoutEditing = useLayoutStore((s) => s.editMode);
+
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
+      <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
         <div
           data-slot="aui_composer-shell"
           className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
@@ -234,14 +190,23 @@ const Composer: FC = () => {
               placeholder="Send a message..."
               className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
               rows={1}
-              autoFocus
+              autoFocus={!layoutEditing}
               enterKeyHint="send"
               aria-label="Message input"
             />
           </div>
           <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
             <ComposerAddAttachment />
-            <SessionConfigBar className="px-0" trailing={<ComposerSendActions />} />
+            {showSessionConfig ? (
+              <SessionConfigBar
+                className="px-0"
+                trailing={<ComposerSendActions />}
+              />
+            ) : (
+              <div className="ms-auto flex items-center gap-2">
+                <ComposerSendActions />
+              </div>
+            )}
           </div>
         </div>
       </ComposerPrimitive.AttachmentDropzone>
@@ -369,7 +334,7 @@ const AssistantMessage: FC = () => {
                   <ToolGroupRoot variant="ghost">
                     <ToolGroupTrigger
                       count={part.indices.length}
-                      active={part.status.type === "running"}
+                      active={part.status?.type === "running"}
                     />
                     <ToolGroupContent>{children}</ToolGroupContent>
                   </ToolGroupRoot>
@@ -380,7 +345,7 @@ const AssistantMessage: FC = () => {
                     <ReasoningGroup group={part}>{children}</ReasoningGroup>
                   );
                 }
-                const running = part.status.type === "running";
+                const running = part.status?.type === "running";
                 return (
                   <ReasoningRoot streaming={running}>
                     <ReasoningTrigger active={running} />

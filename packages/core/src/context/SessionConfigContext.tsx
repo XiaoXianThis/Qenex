@@ -57,7 +57,7 @@ export function SessionConfigProvider({
     loading: true,
   });
 
-  const bootstrap = useCallback(async () => {
+  const bootstrap = useCallback(async (signal?: AbortSignal) => {
     setConfig((current) => ({ ...current, loading: true, error: null }));
     try {
       const result = await ensureSession({
@@ -66,9 +66,15 @@ export function SessionConfigProvider({
         agentCommand,
         resumeSessionId: resumeSessionIdRef.current,
       });
+      if (signal?.aborted) {
+        return;
+      }
       setConfig(result.config);
       setAgentSessionId(tabId, result.agentSessionId);
     } catch (error) {
+      if (signal?.aborted) {
+        return;
+      }
       setConfig({
         ...EMPTY_SESSION_CONFIG,
         error: error instanceof Error ? error.message : "会话初始化失败",
@@ -77,7 +83,9 @@ export function SessionConfigProvider({
   }, [threadId, cwd, agentCommand, tabId, setAgentSessionId]);
 
   useEffect(() => {
-    void bootstrap();
+    const controller = new AbortController();
+    void bootstrap(controller.signal);
+    return () => controller.abort();
   }, [bootstrap]);
 
   const refresh = useCallback(async () => {
