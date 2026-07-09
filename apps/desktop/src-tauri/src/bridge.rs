@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,10 +49,16 @@ pub async fn start_bridge(app: &AppHandle) -> Result<(), String> {
     let config_path = write_bridge_config(app, port)?;
     let base_url = format!("http://127.0.0.1:{port}");
 
+    // Packaged .app inherits a minimal GUI PATH and cannot find user-installed
+    // agents (e.g. ~/.bun/bin/opencode). Augment PATH before spawning the bridge.
+    let path = augmented_path();
+    tracing_log(&format!("bridge PATH={path}"));
+
     let sidecar = app
         .shell()
         .sidecar("acp-to-agui")
         .map_err(|e| format!("sidecar not found: {e}"))?
+        .env("PATH", &path)
         .args(["--config", config_path.to_string_lossy().as_ref()]);
 
     let (_rx, child) = sidecar
@@ -78,6 +86,80 @@ fn find_free_port() -> Result<u16, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     drop(listener);
     Ok(port)
+}
+
+fn tracing_log(message: &str) {
+    eprintln!("[qenex-desktop] {message}");
+}
+
+/// Build a PATH suitable for spawning ACP agents from a packaged desktop app.
+fn augmented_path() -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push = |raw: &str| {
+        for part in raw.split(':') {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen.insert(trimmed.to_string()) {
+                parts.push(trimmed.to_string());
+            }
+        }
+    };
+
+    if let Some(login_path) = login_shell_path() {
+        push(&login_path);
+    }
+
+    if let Ok(current) = std::env::var("PATH") {
+        push(&current);
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        for rel in [
+            ".bun/bin",
+            ".local/bin",
+            ".cargo/bin",
+            ".deno/bin",
+            "bin",
+            ".nvm/current/bin",
+        ] {
+            push(&home.join(rel).to_string_lossy());
+        }
+    }
+
+    for system in [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        push(system);
+    }
+
+    parts.join(":")
+}
+
+fn login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = StdCommand::new(&shell)
+        .args(["-l", "-c", "printf %s \"$PATH\""])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 fn write_bridge_config(app: &AppHandle, port: u16) -> Result<PathBuf, String> {

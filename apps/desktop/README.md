@@ -72,3 +72,4 @@ Bridge 使用动态端口与 app data 目录下的 `bridge.config.json`（含 Ta
 
 - `build:desktop` 默认仅编译 **当前 host** 的 sidecar；跨平台需 `--all-targets` 或 `--target <triple>`
 - 安装包需在对应 OS 上执行 `tauri build`
+- 打包后的 `.app` 启动时会合并 login shell PATH（以及 `~/.bun/bin`、`~/.cargo/bin` 等），以便找到用户安装的 ACP Agent；若仍失败，请确认 Agent 已安装，或在 `bridge.config.json` 的 `agentCommand` 中写绝对路径

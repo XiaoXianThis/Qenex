@@ -1,6 +1,6 @@
 //! Agent subprocess connection via the official ACP Rust SDK.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -235,6 +235,12 @@ impl AgentConnection {
 
         let bridge_bg = bridge.clone();
         let agent_args = resolve_agent_command(command);
+        if which::which(&agent_args[0]).is_err() && !Path::new(&agent_args[0]).is_file() {
+            return Err(SpawnError::Agent(format!(
+                "agent binary not found on PATH: {} (install it or set a full path in agentCommand)",
+                agent_args[0]
+            )));
+        }
 
         let join_handle = tokio::spawn(async move {
             run_agent_connection(agent_args, init, bridge_bg, cmd_rx, ready_tx, pid_tx).await

@@ -209,7 +209,7 @@ async fn ag_ui_run(
 async fn create_task(
     State(state): State<AppState>,
     Json(body): Json<CreateTaskRequest>,
-) -> Result<Json<CreateTaskResponse>, StatusCode> {
+) -> Result<Json<CreateTaskResponse>, (StatusCode, Json<Value>)> {
     let task_id = body
         .task_id
         .clone()
@@ -277,7 +277,7 @@ async fn update_task(
 async fn cancel_task(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .cancel_run(&task_id)
@@ -289,16 +289,24 @@ async fn cancel_task(
 async fn stop_task(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let task = state
         .session_store
         .lock()
         .await
         .get(&task_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "detail": "failed to load task" })),
+            )
+        })?;
     if task.is_none() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": format!("task not found: {task_id}") })),
+        ));
     }
 
     let was_stopped = state
@@ -335,16 +343,24 @@ async fn start_run(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<StartRunRequest>,
-) -> Result<Json<StartRunResponse>, StatusCode> {
+) -> Result<Json<StartRunResponse>, (StatusCode, Json<Value>)> {
     let exists = state
         .session_store
         .lock()
         .await
         .get(&task_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "detail": "failed to load task" })),
+            )
+        })?;
     if exists.is_none() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": format!("task not found: {task_id}") })),
+        ));
     }
 
     let run_id = state
@@ -378,7 +394,7 @@ async fn handle_approval(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<ApprovalRequest>,
-) -> Result<Json<ApprovalResponse>, StatusCode> {
+) -> Result<Json<ApprovalResponse>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .approve(
@@ -431,7 +447,7 @@ async fn set_mode(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<SetModeBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .set_mode(&task_id, &body.mode_id)
@@ -450,7 +466,7 @@ async fn set_model(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<SetModelBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .set_model(&task_id, &body.model_id)
@@ -462,7 +478,7 @@ async fn set_model(
 async fn get_session_config(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
-) -> Result<Json<SessionConfigResponse>, StatusCode> {
+) -> Result<Json<SessionConfigResponse>, (StatusCode, Json<Value>)> {
     let config = state
         .session_manager
         .get_session_config(&task_id)
@@ -483,7 +499,7 @@ async fn set_config_option(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<SetConfigOptionRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .set_config_option(&task_id, &body.config_id, &body.value)
@@ -504,7 +520,7 @@ async fn execute_command(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Json(body): Json<CommandBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .session_manager
         .execute_command(&task_id, &body.command, body.args.as_ref())
@@ -513,12 +529,13 @@ async fn execute_command(
     Ok(Json(json!({ "success": true, "command": body.command })))
 }
 
-fn manager_status(err: ManagerError) -> StatusCode {
-    match err {
+fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {
+    let status = match err {
         ManagerError::NoSession(_) => StatusCode::CONFLICT,
         ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
+    };
+    (status, Json(json!({ "detail": err.to_string() })))
 }
 
 fn sse_response(rx: mpsc::UnboundedReceiver<AguiEvent>) -> Response {

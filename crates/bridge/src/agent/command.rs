@@ -1,14 +1,25 @@
 //! Agent command-line resolution (Windows shim support).
 
-/// On Windows, wrap non-.exe shims with `cmd.exe /c` (aligns with Python).
+/// Resolve the agent executable to an absolute path when possible.
+///
+/// On Windows, also wrap non-.exe shims with `cmd.exe /c` (aligns with Python).
 pub fn resolve_agent_command(command: &[String]) -> Vec<String> {
+    if command.is_empty() {
+        return command.to_vec();
+    }
+
+    let mut resolved = command.to_vec();
+    if let Ok(path) = which::which(&command[0]) {
+        resolved[0] = path.to_string_lossy().into_owned();
+    }
+
     #[cfg(windows)]
     {
-        resolve_windows_command(command)
+        resolve_windows_command(&resolved)
     }
     #[cfg(not(windows))]
     {
-        command.to_vec()
+        resolved
     }
 }
 
@@ -45,8 +56,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_windows_passthrough() {
+    fn resolves_or_passthrough() {
         let cmd = vec!["opencode".into(), "acp".into()];
-        assert_eq!(resolve_agent_command(&cmd), cmd);
+        let resolved = resolve_agent_command(&cmd);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[1], "acp");
+        // Absolute path when on PATH; otherwise keep the original name.
+        assert!(!resolved[0].is_empty());
     }
 }
