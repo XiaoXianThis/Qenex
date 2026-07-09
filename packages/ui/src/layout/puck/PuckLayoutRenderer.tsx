@@ -1,16 +1,29 @@
 "use client";
 
 import { layoutConfig } from "@/layout/puck/config";
+import {
+  LAYOUT_EDIT_PANEL_WIDTH_CLASS,
+  LAYOUT_EDIT_SIDEBAR_CLASS,
+  LAYOUT_EDIT_SIDEBAR_PANEL_BODY_CLASS,
+} from "@/layout/layoutEditPanel";
+import {
+  LayoutEditFooterControls,
+  LayoutEditPanelControls,
+} from "@/layout/LayoutEditPanelControls";
+import { LayoutThemePanel } from "@/layout/LayoutThemePanel";
+import { LayoutDrawerItem } from "@/layout/puck/LayoutDrawerItem";
 import { LayoutPanelActionBar } from "@/layout/puck/LayoutPanelActionBar";
 import type { LayoutMetadata } from "@/layout/puck/types";
 import {
   clonePuckData,
+  cn,
   getComponentTypeInZone,
   layoutActions,
   layoutZoneFromDestination,
   parentIdForDepth,
   useLayoutStore,
   wouldExceedMaxDepth,
+  type LayoutPresetId,
 } from "@qenex/core";
 import {
   Puck,
@@ -19,7 +32,7 @@ import {
   type Config,
   type Data,
 } from "@puckeditor/core";
-import "@puckeditor/core/puck.css";
+import "@puckeditor/core/no-external.css";
 import {
   useEffect,
   useLayoutEffect,
@@ -56,16 +69,51 @@ function PuckDispatchBridge({
 
 const ComponentDrawer: FC = () => {
   return (
-    <div className="pointer-events-none fixed top-1/2 left-3 z-50 flex max-h-[min(80dvh,640px)] -translate-y-1/2">
-      <div className="pointer-events-auto flex w-44 flex-col overflow-hidden rounded-xl border bg-background/95 shadow-lg backdrop-blur-sm">
-        <div className="border-b px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          组件
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r-[0.5px] border-border",
+        LAYOUT_EDIT_SIDEBAR_CLASS,
+        LAYOUT_EDIT_PANEL_WIDTH_CLASS,
+      )}
+    >
+      <div className={cn(LAYOUT_EDIT_SIDEBAR_PANEL_BODY_CLASS, "shrink-0")}>
+        <LayoutEditFooterControls />
+      </div>
+
+      <div className="bg-border mx-2 my-3 h-px shrink-0" />
+
+      <div className={cn(LAYOUT_EDIT_SIDEBAR_PANEL_BODY_CLASS, "shrink-0")}>
+        <div className="px-2.5 pb-1 pt-0.5 text-start text-sm font-bold text-foreground">
+          主题修改
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+        <LayoutThemePanel />
+      </div>
+
+      <div className="bg-border mx-2 my-3 h-px shrink-0" />
+
+      <div className={cn(LAYOUT_EDIT_SIDEBAR_PANEL_BODY_CLASS, "shrink-0")}>
+        <div className="px-2.5 pb-1 pt-0.5 text-start text-sm font-bold text-foreground">
+          布局编辑
+        </div>
+        <LayoutEditPanelControls />
+      </div>
+
+      <div
+        data-layout-component-drawer=""
+        className={cn(
+          LAYOUT_EDIT_SIDEBAR_PANEL_BODY_CLASS,
+          "bg-background/95 backdrop-blur-sm",
+          "min-h-0 flex-1 overflow-hidden pb-4",
+        )}
+      >
+        <div
+          data-layout-component-list=""
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
+        >
           <Puck.Components />
         </div>
       </div>
-    </div>
+    </aside>
   );
 };
 
@@ -87,12 +135,15 @@ function snapshotPuckData(data: Data): string {
 
 export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) => {
   const editMode = useLayoutStore((s) => s.editMode);
+  const discardEditDraft = useLayoutStore((s) => s.discardEditDraft);
   const preset = useLayoutStore((s) => s.preset);
   const storePuckData = useLayoutStore((s) => s.puckData);
   const setPuckData = layoutActions.setPuckData;
+  const clearDiscardEditDraft = layoutActions.clearDiscardEditDraft;
 
   const draftRef = useRef<Data | null>(null);
   const [draftPuckData, setDraftPuckData] = useState<Data | null>(null);
+  const draftPresetRef = useRef<LayoutPresetId | null>(null);
   const storeSnapshotOnEnterRef = useRef<string | null>(null);
   const revertingRef = useRef(false);
   const puckDispatchRef = useRef<PuckDispatch | null>(null);
@@ -102,13 +153,16 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
       const snapshot = clonePuckData(storePuckData);
       draftRef.current = snapshot;
       setDraftPuckData(snapshot);
+      draftPresetRef.current = preset;
       storeSnapshotOnEnterRef.current = snapshotPuckData(storePuckData);
       return;
     }
 
+    const shouldDiscard = discardEditDraft;
     const draft = draftRef.current;
     const enterSnapshot = storeSnapshotOnEnterRef.current;
     if (
+      !shouldDiscard &&
       draft !== null &&
       enterSnapshot !== null &&
       snapshotPuckData(storePuckData) === enterSnapshot
@@ -118,8 +172,19 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
 
     draftRef.current = null;
     setDraftPuckData(null);
+    draftPresetRef.current = null;
     storeSnapshotOnEnterRef.current = null;
-  }, [editMode, storePuckData, setPuckData]);
+    if (shouldDiscard) {
+      clearDiscardEditDraft();
+    }
+  }, [
+    editMode,
+    discardEditDraft,
+    storePuckData,
+    preset,
+    setPuckData,
+    clearDiscardEditDraft,
+  ]);
 
   const handleDepthViolation = (prevData: Data) => {
     revertingRef.current = true;
@@ -147,7 +212,10 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
   );
 
   if (editMode) {
-    const puckData = draftPuckData ?? clonePuckData(storePuckData);
+    const puckData =
+      draftPuckData !== null && draftPresetRef.current === preset
+        ? draftPuckData
+        : clonePuckData(storePuckData);
 
     return (
       <div className="h-dvh min-h-0 overflow-hidden" data-layout-editing="">
@@ -162,6 +230,9 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
             header: () => <></>,
             headerActions: () => <></>,
             actionBar: (props) => <LayoutPanelActionBar {...props} />,
+            drawerItem: ({ children, name }) => (
+              <LayoutDrawerItem name={name}>{children}</LayoutDrawerItem>
+            ),
           }}
           onChange={(data) => {
             if (revertingRef.current) return;
@@ -201,11 +272,11 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
           }}
         >
           <PuckDispatchBridge dispatchRef={puckDispatchRef} />
-          <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
-            <div className="min-h-0 flex-1 overflow-hidden">
+          <div className="flex h-dvh min-h-0 min-w-0 overflow-hidden">
+            <ComponentDrawer />
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
               <Puck.Preview />
             </div>
-            <ComponentDrawer />
           </div>
         </Puck>
       </div>

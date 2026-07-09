@@ -26,7 +26,16 @@
   --radius: 0.625rem;
   --page-padding: 0.75rem;
   --scrollbar-size: 6px;
-  --background: oklch(1 0 0);
+  --thread-max-width: 800px;
+  --composer-radius: 1rem;
+  --composer-padding: 8px;
+  --composer-bg: color-mix(
+    in oklab,
+    var(--color-muted) 30%,
+    var(--color-background)
+  );
+  --composer-shadow: none;
+  --background: #f5f5f5;
   --foreground: oklch(0.141 0.005 285.823);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.141 0.005 285.823);
@@ -144,6 +153,227 @@
     overflow-y: hidden;
     scrollbar-gutter: stable;
   }
+
+  .scrollbar-none {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+}
+
+/* Agent 图标：轻量描边（避免 hover 时 filter 重绘卡顿） */
+.agent-icon-stroke {
+  filter:
+    drop-shadow(0 0 1px color-mix(in oklab, black 12%, transparent))
+    drop-shadow(0 0 1px color-mix(in oklab, white 12%, transparent));
+}
+
+@keyframes thread-welcome-icon-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 0.1;
+    transform: scale(1);
+  }
+}
+
+.aui-thread-welcome-icon {
+  animation: thread-welcome-icon-in 2s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both;
+}
+
+@keyframes thread-welcome-dot-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.aui-thread-welcome-dot {
+  display: inline-block;
+  width: 0.3em;
+  height: 0.3em;
+  margin-inline-start: 0.2em;
+  margin-bottom: 0.1em;
+  border-radius: 9999px;
+  background: currentColor;
+  vertical-align: middle;
+  animation: thread-welcome-dot-blink 1s step-end infinite;
+}
+
+/* 组件列表：可滚动但隐藏滚动条 */
+[data-layout-component-drawer] [data-layout-component-list] {
+  scrollbar-width: none;
+}
+
+[data-layout-component-drawer] [data-layout-component-list]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* 组件面板：对齐编辑面板 gap-1，抵消 Puck 默认外边距 */
+[data-layout-component-drawer] [class*="ComponentList_"] {
+  margin-top: 0;
+}
+
+[data-layout-component-drawer] [class*="ComponentList--isExpanded"] + [class*="ComponentList_"] {
+  margin-top: 0.25rem;
+}
+
+[data-layout-component-drawer] [class*="Drawer_"] {
+  gap: 0.25rem;
+}
+
+[data-layout-component-drawer] [class*="ComponentList-title"] {
+  margin-bottom: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  align-items: center;
+  text-transform: none;
+}
+
+[data-layout-component-drawer] [class*="ComponentList-titleIcon"] {
+  display: flex;
+  align-items: center;
+}
+
+[data-layout-component-drawer] [class*="DrawerItem-draggable"] {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid color-mix(in oklab, var(--primary) 10%, transparent) !important;
+  border-radius: 0.5rem !important;
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: var(--primary) !important;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  text-align: left;
+  transition: none !important;
+}
+
+[data-layout-component-drawer] [class*="DrawerItem-draggable"]:hover {
+  background: transparent !important;
+  color: var(--primary) !important;
+  border-color: color-mix(in oklab, var(--primary) 10%, transparent) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+[data-layout-component-drawer] [class*="Drawer-draggableBg"] {
+  display: none !important;
+}
+
+[data-layout-component-drawer] [class*="DrawerItem-name"] {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+[data-layout-component-drawer] [class*="DrawerItem-name"]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+[data-layout-component-drawer] [class*="DrawerItem"]:focus-visible,
+[data-layout-component-drawer] [class*="DrawerItem"]:focus-visible [class*="DrawerItem-draggable"],
+[data-layout-component-drawer] [class*="DrawerItem-draggable"]:focus,
+[data-layout-component-drawer] [class*="DrawerItem-draggable"]:focus-visible {
+  border-radius: 0.5rem !important;
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
+[data-layout-component-drawer] [data-puck-drawer-item] {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+[data-layout-component-drawer] [class*="ComponentList-title"] {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+/* Puck 布局编辑：将 Puck 默认蓝色改为主题色（仅重映射颜色变量） */
+[data-layout-editing],
+body:has([data-puck-entry]) {
+  --puck-color-azure-04: var(--primary);
+  --puck-color-azure-05: var(--primary);
+  --puck-color-azure-06: color-mix(in oklab, var(--primary) 70%, transparent);
+  --puck-color-azure-07: color-mix(in oklab, var(--primary) 55%, transparent);
+  --puck-color-azure-08: color-mix(in oklab, var(--primary) 40%, transparent);
+  --puck-color-azure-09: color-mix(in oklab, var(--primary) 25%, transparent);
+  --puck-color-azure-10: color-mix(in oklab, var(--primary) 12%, var(--background));
+  --puck-color-azure-11: var(--muted);
+  --puck-color-azure-12: color-mix(in oklab, var(--primary) 5%, var(--background));
+}
+
+/* Puck 布局编辑：hover 时 outline 改主题色实线 */
+body:has([data-puck-entry]) [data-puck-overlay] [class*="DraggableComponent-overlay"] {
+  outline-color: color-mix(in oklab, var(--primary) 35%, transparent);
+}
+
+body:has([data-puck-entry])
+  [data-puck-overlay][class*="DraggableComponent--hover"]
+  [class*="DraggableComponent-overlay"],
+body:has([data-puck-entry])
+  [data-puck-overlay][class*="DraggableComponent--isSelected"]
+  [class*="DraggableComponent-overlay"] {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* Puck 布局编辑：仅空布局区域 hover 时显示主题色实线；有子组件时不改外层样式 */
+[data-layout-editing]
+  [class*="DropZone--hoveringOverArea"]:not([class*="isRootZone"]):has(
+    [data-puck-component]
+  ),
+[data-layout-editing]
+  [class*="DropZone--isAreaSelected"]:not([class*="isRootZone"]):has(
+    [data-puck-component]
+  ) {
+  background: transparent;
+  outline: none;
+}
+
+[data-layout-editing]
+  [class*="DropZone--hoveringOverArea"]:not([class*="isRootZone"]):not(
+    :has([data-puck-component])
+  ),
+[data-layout-editing]
+  [class*="DropZone--isAreaSelected"]:not([class*="isRootZone"]):not(
+    :has([data-puck-component])
+  ),
+[data-layout-editing]
+  [class*="DropZone--isDestination"]:not([class*="isRootZone"]) {
+  outline: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+body:has([data-puck-entry]) [data-puck-overlay-portal]:hover,
+body:has([data-puck-entry]) [data-puck-overlay-portal]:focus-within {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 /* Puck 布局编辑：消息区 pointer-events 不继承，需显式禁用整棵子树 */

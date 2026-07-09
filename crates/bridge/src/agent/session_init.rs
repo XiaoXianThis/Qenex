@@ -113,6 +113,10 @@ pub fn extract_model_config(
 /// Parsed session selectors from ACP `config_options`.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedConfigOptions {
+    /// True when this snapshot came from a full `configOptions` response.
+    /// Missing thought/mode/model fields should then clear prior session state
+    /// (e.g. switching to a model that does not support thought levels).
+    pub from_full_config: bool,
     pub models: Option<Vec<Value>>,
     pub current_model_id: Option<String>,
     pub model_config_id: Option<String>,
@@ -132,6 +136,7 @@ pub fn parse_config_options(
     let thought = extract_select_config(config_options, is_thought_level_option);
 
     ParsedConfigOptions {
+        from_full_config: config_options.is_some(),
         models: model.as_ref().map(|snapshot| snapshot.options.clone()),
         current_model_id: model.as_ref().and_then(|snapshot| snapshot.current_value.clone()),
         model_config_id: model.as_ref().map(|snapshot| snapshot.config_id.clone()),
@@ -304,5 +309,37 @@ mod tests {
         assert_eq!(snapshot.config_id, "effort");
         assert_eq!(snapshot.current_value.as_deref(), Some("medium"));
         assert_eq!(snapshot.options.len(), 3);
+    }
+
+    #[test]
+    fn parse_config_options_marks_full_config_and_omits_thought() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigId, SessionConfigSelectOption, SessionConfigSelectOptions,
+            SessionConfigValueId,
+        };
+
+        let mut model = SessionConfigOption::select(
+            SessionConfigId::new("model"),
+            "Model",
+            SessionConfigValueId::new("fast"),
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("fast"), "Fast"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("smart"), "Smart"),
+            ]),
+        );
+        model.category = Some(SessionConfigOptionCategory::Model);
+
+        let parsed = parse_config_options(Some(&[model]));
+        assert!(parsed.from_full_config);
+        assert!(parsed.thought_levels.is_none());
+        assert!(parsed.thought_level_config_id.is_none());
+        assert!(parsed.current_thought_level_id.is_none());
+        assert_eq!(parsed.current_model_id.as_deref(), Some("fast"));
+    }
+
+    #[test]
+    fn parse_config_options_none_is_not_full_config() {
+        let parsed = parse_config_options(None);
+        assert!(!parsed.from_full_config);
     }
 }

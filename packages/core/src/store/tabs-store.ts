@@ -24,6 +24,10 @@ export type SessionTab = {
   lastActiveAt: number;
   status: "active" | "archived";
   needsHistoryLoad?: boolean;
+  /** 是否有过聊天内容；无内容关闭时不进入历史 */
+  hasChatContent?: boolean;
+  /** Agent 启动/加载中，标签显示 Loading */
+  agentLoading?: boolean;
 };
 
 export type TabsState = {
@@ -38,31 +42,78 @@ export const tabsStore = proxy<TabsState>({
   preferredAgentId: DEFAULT_AGENT_ID,
 });
 
+function syncPreferredAgentFromActiveTab() {
+  const activeTab = tabsStore.tabs.find((t) => t.id === tabsStore.activeTabId);
+  if (activeTab) {
+    tabsStore.preferredAgentId = getAgentPreset(activeTab.agentId).id;
+  }
+}
+
+function removeTabLocally(tabId: string) {
+  const remaining = tabsStore.tabs.filter((t) => t.id !== tabId);
+  const newActiveId =
+    tabsStore.activeTabId === tabId
+      ? (remaining.find((t) => t.status === "active")?.id ?? null)
+      : tabsStore.activeTabId;
+  tabsStore.tabs = remaining;
+  tabsStore.activeTabId = newActiveId;
+  syncPreferredAgentFromActiveTab();
+}
+
+function deleteTaskInBackground(taskId: string) {
+  void deleteTaskOnServer(taskId).catch((error) => {
+    console.warn("Failed to delete task on server:", error);
+  });
+}
+
+/** 有聊天内容则归档进历史，否则直接删除 */
+function dismissTab(tabId: string) {
+  const tab = tabsStore.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+
+  // 仅明确无聊天内容时丢弃；旧数据缺字段时仍归档
+  if (tab.hasChatContent === false) {
+    deleteTaskInBackground(tab.taskId);
+    removeTabLocally(tabId);
+    return;
+  }
+
+  const remaining = tabsStore.tabs.map((t) =>
+    t.id === tabId ? { ...t, status: "archived" as const } : t,
+  );
+  const newActiveId =
+    tabsStore.activeTabId === tabId
+      ? (remaining.find((t) => t.status === "active")?.id ?? null)
+      : tabsStore.activeTabId;
+  tabsStore.tabs = remaining;
+  tabsStore.activeTabId = newActiveId;
+  syncPreferredAgentFromActiveTab();
+}
+
 export const tabsActions = {
   createTab(config: { agentId: string; cwd: string; title?: string }) {
     const now = Date.now();
     const activeTabs = tabsStore.tabs.filter((t) => t.status === "active");
-    const nextNum = tabsStore.tabs.length + 1;
 
     const newTab: SessionTab = {
       id: crypto.randomUUID(),
       taskId: crypto.randomUUID(),
-      title: config.title || `会话 ${nextNum}`,
+      title: config.title || "新会话",
       agentId: config.agentId,
       agentCommand: getAgentPreset(config.agentId).command,
       cwd: config.cwd,
       createdAt: now,
       lastActiveAt: now,
       status: "active",
+      hasChatContent: false,
+      agentLoading: true,
     };
 
     if (activeTabs.length >= MAX_ACTIVE_TABS) {
       const oldest = activeTabs.sort(
         (a, b) => a.lastActiveAt - b.lastActiveAt,
       )[0]!;
-      tabsStore.tabs = tabsStore.tabs.map((t) =>
-        t.id === oldest.id ? { ...t, status: "archived" as const } : t,
-      );
+      dismissTab(oldest.id);
     }
 
     tabsStore.tabs = [...tabsStore.tabs, newTab];
@@ -79,18 +130,11 @@ export const tabsActions = {
     tabsStore.tabs = tabsStore.tabs.map((t) =>
       t.id === tabId ? { ...t, lastActiveAt: Date.now() } : t,
     );
+    syncPreferredAgentFromActiveTab();
   },
 
   closeTab(tabId: string) {
-    const remaining = tabsStore.tabs.map((t) =>
-      t.id === tabId ? { ...t, status: "archived" as const } : t,
-    );
-    const newActiveId =
-      tabsStore.activeTabId === tabId
-        ? (remaining.find((t) => t.status === "active")?.id ?? null)
-        : tabsStore.activeTabId;
-    tabsStore.tabs = remaining;
-    tabsStore.activeTabId = newActiveId;
+    dismissTab(tabId);
   },
 
   restoreTab(tabId: string) {
@@ -99,55 +143,41 @@ export const tabsActions = {
       const oldest = activeTabs.sort(
         (a, b) => a.lastActiveAt - b.lastActiveAt,
       )[0]!;
-      tabsStore.tabs = tabsStore.tabs.map((t) => {
-        if (t.id === oldest.id) {
-          return { ...t, status: "archived" as const };
-        }
-        if (t.id === tabId) {
-          return {
+      dismissTab(oldest.id);
+    }
+    tabsStore.tabs = tabsStore.tabs.map((t) =>
+      t.id === tabId
+        ? {
             ...t,
             status: "active" as const,
             lastActiveAt: Date.now(),
             needsHistoryLoad: true,
-          };
-        }
-        return t;
-      });
-    } else {
-      tabsStore.tabs = tabsStore.tabs.map((t) =>
-        t.id === tabId
-          ? {
-              ...t,
-              status: "active" as const,
-              lastActiveAt: Date.now(),
-              needsHistoryLoad: true,
-            }
-          : t,
-      );
-    }
+            agentLoading: true,
+          }
+        : t,
+    );
     tabsActions.switchTab(tabId);
   },
 
   deleteTab(tabId: string) {
     const tab = tabsStore.tabs.find((t) => t.id === tabId);
     if (tab) {
-      void deleteTaskOnServer(tab.taskId).catch((error) => {
-        console.warn("Failed to delete task on server:", error);
-      });
+      deleteTaskInBackground(tab.taskId);
     }
-
-    const remaining = tabsStore.tabs.filter((t) => t.id !== tabId);
-    const newActiveId =
-      tabsStore.activeTabId === tabId
-        ? (remaining.find((t) => t.status === "active")?.id ?? null)
-        : tabsStore.activeTabId;
-    tabsStore.tabs = remaining;
-    tabsStore.activeTabId = newActiveId;
+    removeTabLocally(tabId);
   },
 
   updateTabTitle(tabId: string, title: string) {
     tabsStore.tabs = tabsStore.tabs.map((t) =>
       t.id === tabId ? { ...t, title } : t,
+    );
+  },
+
+  markTabHasChatContent(tabId: string) {
+    tabsStore.tabs = tabsStore.tabs.map((t) =>
+      t.id === tabId && !t.hasChatContent
+        ? { ...t, hasChatContent: true }
+        : t,
     );
   },
 
@@ -163,6 +193,14 @@ export const tabsActions = {
     );
   },
 
+  setAgentLoading(tabId: string, loading: boolean) {
+    tabsStore.tabs = tabsStore.tabs.map((t) =>
+      t.id === tabId && t.agentLoading !== loading
+        ? { ...t, agentLoading: loading }
+        : t,
+    );
+  },
+
   async ensureInitialTab(): Promise<void> {
     const activeTabs = tabsStore.tabs.filter((t) => t.status === "active");
 
@@ -170,6 +208,7 @@ export const tabsActions = {
       if (!tabsStore.activeTabId) {
         tabsStore.activeTabId = activeTabs[0]!.id;
       }
+      syncPreferredAgentFromActiveTab();
       return;
     }
 
@@ -190,6 +229,11 @@ export function useTabsStore<T>(selector: (state: TabsState) => T): T {
 
 export async function hydrateTabsStore(): Promise<void> {
   await hydrateValtioStore(TABS_PERSIST_KEY, tabsStore);
+  tabsStore.tabs = tabsStore.tabs.map((t) => ({
+    ...t,
+    // 已有 agent session 的视为已就绪；未启动的活跃会话进入加载态
+    agentLoading: t.status === "active" && !t.agentSessionId,
+  }));
 }
 
 let unsubscribeTabsPersist: (() => void) | null = null;

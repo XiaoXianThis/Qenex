@@ -1,4 +1,5 @@
-import { getAgentPreset, tabsActions, useTabsStore } from "@qenex/core";
+import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { tabsActions, useTabsStore } from "@qenex/core";
 import { Trash2 } from "lucide-react";
 import { useMemo } from "react";
 
@@ -21,66 +22,59 @@ export function HistoryPanel({ onRestore }: HistoryPanelProps) {
 
   if (archived.length === 0) {
     return (
-      <div className="page-padding flex flex-1 items-center justify-center">
-        <p className="text-muted-foreground">暂无历史会话</p>
+      <div className="px-2 py-3 text-center text-sm text-muted-foreground">
+        暂无历史会话
       </div>
     );
   }
 
   return (
-    <div className="page-padding-scroll flex flex-1 flex-col gap-3 overflow-y-auto">
-      <h2 className="text-lg font-semibold">历史会话</h2>
-      <div className="flex flex-col gap-2">
-        {archived.map((tab) => {
-          const agent = getAgentPreset(tab.agentId);
-          const lastActive = new Date(tab.lastActiveAt);
-          return (
-            <div
-              key={tab.id}
-              className="flex items-center gap-3 rounded-lg border bg-card p-4 shadow-sm"
+    <div className="flex max-h-96 flex-col overflow-y-auto" role="listbox">
+      {archived.map((tab) => {
+        return (
+          <div
+            key={tab.id}
+            className="group relative flex items-center rounded-md focus-within:bg-accent hover:bg-accent"
+          >
+            <button
+              type="button"
+              role="option"
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 pr-2 pl-2 text-left text-sm outline-none"
+              onClick={() => {
+                restoreTab(tab.id);
+                onRestore?.();
+              }}
             >
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium">{tab.title}</div>
-                <div className="text-sm text-muted-foreground">
-                  {agent.name} · {tab.cwd}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  最后活跃：{lastActive.toLocaleString("zh-CN")}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    restoreTab(tab.id);
-                    onRestore?.();
-                  }}
-                  className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
-                >
-                  恢复
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `确定删除「${tab.title}」？此操作不可恢复。`,
-                      )
-                    ) {
-                      deleteTab(tab.id);
-                    }
-                  }}
-                  className="rounded-md border p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
-                  aria-label="删除历史会话"
-                  title="删除"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              <img
+                src={getAgentPresetIconUrl(tab.agentId)}
+                alt=""
+                className="h-4 w-4 shrink-0 object-contain"
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1 truncate">{tab.title}</span>
+            </button>
+            <button
+              type="button"
+              aria-label={`删除 ${tab.title}`}
+              title="删除"
+              className="mr-1 shrink-0 cursor-pointer rounded p-1 text-muted-foreground outline-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (
+                  window.confirm(`确定删除「${tab.title}」？此操作不可恢复。`)
+                ) {
+                  deleteTab(tab.id);
+                }
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

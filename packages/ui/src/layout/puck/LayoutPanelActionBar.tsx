@@ -4,11 +4,13 @@ import {
   getPanelDefinition,
   layoutActions,
   panelIdFromPuckType,
+  resolveStyleComponentTarget,
+  styleActions,
   useLayoutStore,
   type PanelId,
 } from "@qenex/core";
 import { ActionBar, createUsePuck } from "@puckeditor/core";
-import { Eye, EyeOff, Maximize2 } from "lucide-react";
+import { Eye, EyeOff, Maximize2, PaintbrushVertical } from "lucide-react";
 import type { FC, ReactNode, SyntheticEvent } from "react";
 
 const usePuck = createUsePuck();
@@ -28,6 +30,7 @@ export const LayoutPanelActionBar: FC<LayoutPanelActionBarProps> = ({
   const panelId = selectedType
     ? (panelIdFromPuckType(selectedType) as PanelId | null)
     : null;
+  const styleTarget = resolveStyleComponentTarget(selectedType);
 
   const visible = useLayoutStore((s) =>
     panelId ? s.panels[panelId].visible : true,
@@ -51,6 +54,17 @@ export const LayoutPanelActionBar: FC<LayoutPanelActionBarProps> = ({
         {label ? <ActionBar.Label label={label} /> : null}
       </ActionBar.Group>
       <ActionBar.Group>
+        {styleTarget ? (
+          <ActionBar.Action
+            label="编辑样式"
+            onClick={(e) => {
+              stop(e);
+              styleActions.openComponentStyleEdit(styleTarget);
+            }}
+          >
+            <PaintbrushVertical size={16} />
+          </ActionBar.Action>
+        ) : null}
         {panelId && canCycleWidth ? (
           <ActionBar.Action
             label={`宽度: ${widthScope}`}

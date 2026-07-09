@@ -1,66 +1,109 @@
 "use client";
 
 import { AgentRuntimeProvider } from "@/components/AgentRuntimeProvider";
-import { HistoryPanel } from "@/components/HistoryPanel";
 import type { LayoutPageProps } from "@/layout/puck/config";
-import type { LayoutPuckRoot } from "@/layout/puck/config";
+import {
+  LAYOUT_ROOT_TOP_LABEL,
+  layoutRootSlotClass,
+  type LayoutPuckRoot,
+} from "@/layout/puck/config";
+import { LayoutContainerSlot } from "@/layout/puck/LayoutContainerSlot";
 import { ActiveThreadLayout } from "@/layout/puck/ActiveThreadLayout";
 import type { LayoutMetadata } from "@/layout/puck/types";
 import {
   cn,
+  selectTabBarPosition,
   useLayoutStore,
   useTabsStore,
   type RuntimeSessionConfig,
 } from "@qenex/core";
+import {
+  AssistantRuntimeProvider,
+  useLocalRuntime,
+  type ChatModelAdapter,
+} from "@assistant-ui/react";
 import type { PuckComponent } from "@puckeditor/core";
 import { RotateCcw } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type FC, type ReactNode } from "react";
+
+const EDIT_PREVIEW_ADAPTER: ChatModelAdapter = {
+  async *run() {
+    // 布局编辑预览不发起真实对话
+  },
+};
+
+/** Puck iframe 内无真实会话时，提供最小 AuiProvider，避免 Composer 等面板报错 */
+const EditPreviewRuntimeProvider: FC<{ children: ReactNode }> = ({
+  children,
+}) => {
+  const runtime = useLocalRuntime(EDIT_PREVIEW_ADAPTER);
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      {children}
+    </AssistantRuntimeProvider>
+  );
+};
+
+function sessionsFromTabs(
+  tabs: Array<{
+    id: string;
+    status: string;
+    taskId: string;
+    agentId: string;
+    cwd: string;
+    agentCommand: string[];
+    agentSessionId?: string;
+    needsHistoryLoad?: boolean;
+  }>,
+): RuntimeSessionConfig[] {
+  return tabs
+    .filter((t) => t.status === "active")
+    .map((tab) => ({
+      tabId: tab.id,
+      threadId: tab.taskId,
+      agentId: tab.agentId,
+      cwd: tab.cwd,
+      agentCommand: tab.agentCommand,
+      agentSessionId: tab.agentSessionId,
+      shouldLoadHistory: tab.needsHistoryLoad === true,
+    }));
+}
 
 export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
   const { top: Top, bottom: Bottom, puck } = props;
   const meta = puck.metadata as LayoutMetadata;
-  const { showHistory, onResetLayout, shell } = meta;
+  const { onResetLayout } = meta;
 
-  const tabs = useTabsStore((s) => s.tabs);
-  const activeTabId = useTabsStore((s) => s.activeTabId);
-
-  const tabSessions = useMemo((): RuntimeSessionConfig[] => {
-    return tabs
-      .filter((t) => t.status === "active")
-      .map((tab) => ({
-        tabId: tab.id,
-        threadId: tab.taskId,
-        cwd: tab.cwd,
-        agentCommand: tab.agentCommand,
-        agentSessionId: tab.agentSessionId,
-        shouldLoadHistory: tab.needsHistoryLoad === true,
-      }));
-  }, [tabs]);
-
-  const hasActiveTab = useMemo(
-    () => tabs.some((t) => t.id === activeTabId),
-    [tabs, activeTabId],
+  // 主窗口用 live tabs store；Puck iframe 内 store 为空时回退 metadata
+  const storeTabs = useTabsStore((s) => s.tabs);
+  const storeActiveTabId = useTabsStore((s) => s.activeTabId);
+  const storeSessions = useMemo(
+    () => sessionsFromTabs(storeTabs),
+    [storeTabs],
   );
+
+  const useMetaFallback = storeSessions.length === 0 && meta.tabSessions.length > 0;
+  const activeTabId = useMetaFallback ? meta.activeTabId : storeActiveTabId;
+  const tabSessions = useMetaFallback ? meta.tabSessions : storeSessions;
+  const hasActiveTab = useMetaFallback
+    ? meta.hasActiveTab
+    : Boolean(activeTabId && storeTabs.some((t) => t.id === activeTabId));
 
   const editMode = useLayoutStore((s) => s.editMode);
   const puckData = useLayoutStore((s) => s.puckData);
   const tabBarVisible = useLayoutStore((s) => s.panels.tabBar.visible);
   const composerHidden = useLayoutStore((s) => !s.panels.composer.visible);
-  const showEmptyPanel =
-    !tabBarVisible && composerHidden && !hasActiveTab && !showHistory;
+  const tabBarPosition = useLayoutStore(selectTabBarPosition);
+  const showEmptyPanel = !tabBarVisible && composerHidden && !hasActiveTab;
 
   const rootProps = puckData.root?.props as LayoutPuckRoot | undefined;
   const bottomNodes = rootProps?.bottom;
   const isEditing = editMode || puck.isEditing;
 
-  const topZoneClass = cn(
-    "shrink-0 w-full",
-    isEditing && "relative z-30 min-h-16 rounded-md border-2 border-dashed border-primary/25 p-2",
-  );
+  const topZoneClass = cn("shrink-0 w-full", isEditing && "relative z-30");
+  const flushTopTabBar = !isEditing && tabBarPosition === "top";
 
-  const idleCenter = showHistory ? (
-    <HistoryPanel onRestore={() => shell.onToggleHistory()} />
-  ) : !hasActiveTab && !showEmptyPanel ? (
+  const idleCenter = !hasActiveTab && !showEmptyPanel ? (
     <div className="page-padding flex flex-1 items-center justify-center text-muted-foreground">
       选择 Agent 后点击 + 创建新会话
     </div>
@@ -78,58 +121,80 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
     </div>
   ) : null;
 
-  return (
+  const stableTop = (
+    <div
+      className={cn(
+        "relative shrink-0 overflow-hidden",
+        isEditing
+          ? "pointer-events-auto"
+          : !flushTopTabBar && "pt-2 page-padding-x",
+        topZoneClass,
+      )}
+    >
+      <div
+        className={cn(
+          "w-full",
+          (isEditing || !flushTopTabBar) &&
+            "mx-auto max-w-(--thread-max-width)",
+        )}
+      >
+        <LayoutContainerSlot
+          label={LAYOUT_ROOT_TOP_LABEL}
+          componentType="root.top"
+          editing={isEditing}
+          className={layoutRootSlotClass(isEditing)}
+        >
+          {Top}
+        </LayoutContainerSlot>
+      </div>
+    </div>
+  );
+
+  const session = useMemo((): RuntimeSessionConfig | undefined => {
+    if (!activeTabId) return undefined;
+    return tabSessions.find((s) => s.tabId === activeTabId);
+  }, [activeTabId, tabSessions]);
+
+  const page = (
     <div
       className="flex h-dvh flex-col overflow-hidden"
       data-layout-editing={isEditing ? "" : undefined}
     >
-      {showHistory ? (
-        <>
-          <div className={topZoneClass}>
-            <Top />
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {idleCenter}
-          </div>
-        </>
-      ) : tabSessions?.length > 0 ? (
-        (() => {
-          const session = tabSessions.find((s) => s.tabId === activeTabId);
-          if (!session) {
-            return (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                {idleCenter}
-              </div>
-            );
-          }
-          return (
-            <div
-              key={session.tabId}
-              className="flex h-dvh flex-col overflow-hidden"
-            >
-              <AgentRuntimeProvider session={session}>
-                <ActiveThreadLayout
-                  top={Top}
-                  bottom={Bottom}
-                  puckDataBottom={bottomNodes}
-                  editMode={editMode}
-                  isEditing={isEditing}
-                  topZoneClass={topZoneClass}
-                />
-              </AgentRuntimeProvider>
-            </div>
-          );
-        })()
+      {stableTop}
+      {session || isEditing ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ActiveThreadLayout
+            key={session?.tabId ?? "edit-preview"}
+            top={Top}
+            bottom={Bottom}
+            puckDataBottom={bottomNodes}
+            editMode={editMode}
+            isEditing={isEditing}
+            topZoneClass={topZoneClass}
+            renderTop={false}
+          />
+        </div>
       ) : (
-        <>
-          <div className={topZoneClass}>
-            <Top />
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {idleCenter}
-          </div>
-        </>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {idleCenter}
+        </div>
       )}
     </div>
   );
+
+  // Provider 包住整页（含稳定挂载的顶部栏），避免顶部区里的 AUI 面板脱离上下文
+  if (session) {
+    return (
+      <AgentRuntimeProvider key={session.tabId} session={session}>
+        {page}
+      </AgentRuntimeProvider>
+    );
+  }
+
+  // 编辑预览（含 iframe）无真实会话时仍需 AuiProvider
+  if (isEditing) {
+    return <EditPreviewRuntimeProvider>{page}</EditPreviewRuntimeProvider>;
+  }
+
+  return page;
 };

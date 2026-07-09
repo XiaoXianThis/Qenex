@@ -1,9 +1,11 @@
 "use client";
 
+import { LayoutContainerSlot } from "@/layout/puck/LayoutContainerSlot";
 import { LayoutPageRoot } from "@/layout/puck/LayoutPageRoot";
 import { PanelWrapper } from "@/layout/puck/PanelWrapper";
 import type { LayoutMetadata, PanelRenderContext } from "@/layout/puck/types";
 import {
+  cn,
   containerAtMaxChildDepth,
   getPanelDefinition,
   panelIdFromPuckType,
@@ -22,6 +24,41 @@ export const LAYOUT_SLOT_ALLOW = [
   "LayoutColumn",
   ...Object.values(PUCK_PANEL_TYPE),
 ] as const;
+
+/** Base layout on Puck slot / Children (no edit-only spacing). */
+const LAYOUT_ROW_SLOT_BASE =
+  "flex w-full gap-2 [&>*]:min-w-0 [&>*]:flex-1";
+
+const LAYOUT_COLUMN_SLOT_BASE = "flex w-full flex-col gap-2";
+
+const LAYOUT_ROOT_SLOT_BASE = "flex w-full flex-col gap-2";
+
+const LAYOUT_CONTAINER_EDIT_PADDING = "p-4";
+
+const LAYOUT_CONTAINER_EDIT_CLASS =
+  "relative min-h-16 border-[1px] border-dashed border-primary/25";
+
+export const LAYOUT_ROOT_TOP_LABEL = "顶部";
+export const LAYOUT_ROOT_BOTTOM_LABEL = "底部";
+
+export function layoutRootSlotClass(editing?: boolean) {
+  return cn(
+    LAYOUT_ROOT_SLOT_BASE,
+    editing && LAYOUT_CONTAINER_EDIT_PADDING,
+    editing && LAYOUT_CONTAINER_EDIT_CLASS,
+  );
+}
+
+function layoutContainerSlotClass(
+  type: "row" | "column",
+  editing?: boolean,
+) {
+  return cn(
+    type === "row" ? LAYOUT_ROW_SLOT_BASE : LAYOUT_COLUMN_SLOT_BASE,
+    editing && LAYOUT_CONTAINER_EDIT_PADDING,
+    editing && LAYOUT_CONTAINER_EDIT_CLASS,
+  );
+}
 
 function panelCtx(metadata: LayoutMetadata): PanelRenderContext {
   return { shell: metadata.shell, isEmpty: false };
@@ -76,10 +113,17 @@ export const layoutConfig_test = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children }) => (
+      render: ({ children: Children, puck }) => (
         <div className="">
           <div>Row →</div>
-          <Children className="flex w-full gap-2 [&>*]:min-w-0 [&>*]:flex-1 border-2 p-8" />
+          <LayoutContainerSlot
+            label="行"
+            componentType="LayoutRow"
+            editing={puck.isEditing}
+            className={layoutContainerSlotClass("row", puck.isEditing)}
+          >
+            {Children}
+          </LayoutContainerSlot>
         </div>
       ),
     },
@@ -93,10 +137,17 @@ export const layoutConfig_test = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children }) => (
+      render: ({ children: Children, puck }) => (
         <div className="">
           <div>Colum ↓</div>
-          <Children className="flex w-full flex-col gap-2 border-2 p-8" />
+          <LayoutContainerSlot
+            label="列"
+            componentType="LayoutColumn"
+            editing={puck.isEditing}
+            className={layoutContainerSlotClass("column", puck.isEditing)}
+          >
+            {Children}
+          </LayoutContainerSlot>
         </div>
       ),
     },
@@ -142,8 +193,15 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children }) => (
-        <Children className="flex w-full gap-2 [&>*]:min-w-0 [&>*]:flex-1" />
+      render: ({ children: Children, puck }) => (
+        <LayoutContainerSlot
+          label="行"
+          componentType="LayoutRow"
+          editing={puck.isEditing}
+          className={layoutContainerSlotClass("row", puck.isEditing)}
+        >
+          {Children}
+        </LayoutContainerSlot>
       ),
     },
     LayoutColumn: {
@@ -156,8 +214,15 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children }) => (
-        <Children className="flex w-full flex-col gap-2" />
+      render: ({ children: Children, puck }) => (
+        <LayoutContainerSlot
+          label="列"
+          componentType="LayoutColumn"
+          editing={puck.isEditing}
+          className={layoutContainerSlotClass("column", puck.isEditing)}
+        >
+          {Children}
+        </LayoutContainerSlot>
       ),
     },
     TabBar: panelConfig("TabBar", "tabBar"),

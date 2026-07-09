@@ -16,6 +16,15 @@ use crate::policy::ToolPolicyEngine;
 use super::demo::enqueue_demo_events;
 use super::store::{SessionStore, StoreError};
 
+struct PersistEventJob {
+    task_id: String,
+    run_id: String,
+    event_type: String,
+    event_json: String,
+    timestamp: f64,
+    session_title: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum ManagerError {
     #[error("store error: {0}")]
@@ -164,42 +173,54 @@ impl SessionManager {
         let (connection, init_result) =
             AgentConnection::spawn(task_id, init, &command, Some(bridge.clone())).await?;
 
-        // Register persist callback to save events to database
+        // 串行落库：每个事件各自 tokio::spawn 会乱序写入，刷新重放时文本 delta 会错位
         let store = self.store.clone();
-        {
-            let mut b = bridge.lock().await;
-            b.set_persist_callback(move |task_id, run_id, event| {
-                if let AguiEvent::Custom { name, value, .. } = &event {
-                    if name == "agent:session_title" {
-                        if let Some(title) = value.get("title").and_then(|v| v.as_str()) {
-                            let title = title.trim();
-                            if !title.is_empty() {
-                                let store = store.clone();
-                                let task_id = task_id.clone();
-                                let title = title.to_string();
-                                tokio::spawn(async move {
-                                    let _ = store
-                                        .lock()
-                                        .await
-                                        .update(&task_id, Some(&title), None)
-                                        .await;
-                                });
-                            }
-                        }
-                    }
-                }
-
-                let store = store.clone();
-                tokio::spawn(async move {
-                    let event_type = event.event_type().as_str().to_string();
-                    let event_json = serde_json::to_string(&event).unwrap_or_default();
-                    let timestamp = event.timestamp();
+        let (persist_tx, mut persist_rx) = mpsc::unbounded_channel::<PersistEventJob>();
+        tokio::spawn(async move {
+            while let Some(job) = persist_rx.recv().await {
+                if let Some(title) = job.session_title {
                     let _ = store
                         .lock()
                         .await
-                        .save_event(&task_id, &run_id, &event_type, &event_json, timestamp)
+                        .update(&job.task_id, Some(&title), None)
                         .await;
-                });
+                }
+                let _ = store
+                    .lock()
+                    .await
+                    .save_event(
+                        &job.task_id,
+                        &job.run_id,
+                        &job.event_type,
+                        &job.event_json,
+                        job.timestamp,
+                    )
+                    .await;
+            }
+        });
+        {
+            let mut b = bridge.lock().await;
+            b.set_persist_callback(move |task_id, run_id, event| {
+                let session_title = match &event {
+                    AguiEvent::Custom { name, value, .. } if name == "agent:session_title" => value
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|title| !title.is_empty())
+                        .map(str::to_string),
+                    _ => None,
+                };
+                let job = PersistEventJob {
+                    task_id,
+                    run_id,
+                    event_type: event.event_type().as_str().to_string(),
+                    event_json: serde_json::to_string(&event).unwrap_or_default(),
+                    timestamp: event.timestamp(),
+                    session_title,
+                };
+                if persist_tx.send(job).is_err() {
+                    tracing::error!("persist channel closed, dropping event");
+                }
             });
         }
 
@@ -728,14 +749,23 @@ fn apply_parsed_config(session: &mut InnerSession, parsed: &ParsedConfigOptions)
     if let Some(current_model_id) = &parsed.current_model_id {
         session.current_model_id = Some(current_model_id.clone());
     }
-    if let Some(thought_levels) = &parsed.thought_levels {
-        session.thought_levels = Some(thought_levels.clone());
-    }
-    if let Some(current_thought_level_id) = &parsed.current_thought_level_id {
-        session.current_thought_level_id = Some(current_thought_level_id.clone());
-    }
-    if let Some(thought_level_config_id) = &parsed.thought_level_config_id {
-        session.thought_level_config_id = Some(thought_level_config_id.clone());
+
+    // Full configOptions responses are authoritative: if thought_level is absent,
+    // the current model does not support it and prior values must be cleared.
+    if parsed.from_full_config {
+        session.thought_levels = parsed.thought_levels.clone();
+        session.current_thought_level_id = parsed.current_thought_level_id.clone();
+        session.thought_level_config_id = parsed.thought_level_config_id.clone();
+    } else {
+        if let Some(thought_levels) = &parsed.thought_levels {
+            session.thought_levels = Some(thought_levels.clone());
+        }
+        if let Some(current_thought_level_id) = &parsed.current_thought_level_id {
+            session.current_thought_level_id = Some(current_thought_level_id.clone());
+        }
+        if let Some(thought_level_config_id) = &parsed.thought_level_config_id {
+            session.thought_level_config_id = Some(thought_level_config_id.clone());
+        }
     }
 }
 

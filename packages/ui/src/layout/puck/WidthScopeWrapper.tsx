@@ -21,7 +21,7 @@ export const WidthScopeWrapper: FC<WidthScopeWrapperProps> = ({
       className={cn(
         scope === "viewport" && "w-full",
         scope === "content" &&
-          "mx-auto w-full max-w-(--thread-max-width, 44rem)",
+          "mx-auto w-full max-w-(--thread-max-width, 800px)",
         className,
       )}
     >

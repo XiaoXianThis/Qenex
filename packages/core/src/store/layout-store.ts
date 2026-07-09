@@ -31,6 +31,9 @@ export const LAYOUT_PERSIST_KEY = "agent-center-layout";
 
 export type LayoutState = LayoutPersistedState & {
   editMode: boolean;
+  /** 退出编辑时是否丢弃草稿（取消） */
+  discardEditDraft: boolean;
+  hoveredDrawerComponentType: string | null;
 };
 
 function cloneClassic(): LayoutPersistedState {
@@ -40,21 +43,45 @@ function cloneClassic(): LayoutPersistedState {
 export const layoutStore = proxy<LayoutState>({
   ...cloneClassic(),
   editMode: false,
+  discardEditDraft: false,
+  hoveredDrawerComponentType: null,
 });
 
 export const layoutActions = {
   setEditMode(editMode: boolean) {
     layoutStore.editMode = editMode;
+    if (!editMode) {
+      layoutStore.hoveredDrawerComponentType = null;
+    } else {
+      layoutStore.discardEditDraft = false;
+    }
+  },
+
+  /** 丢弃本次编辑草稿并退出编辑模式 */
+  cancelEditMode() {
+    layoutStore.discardEditDraft = true;
+    layoutStore.editMode = false;
+    layoutStore.hoveredDrawerComponentType = null;
+  },
+
+  clearDiscardEditDraft() {
+    layoutStore.discardEditDraft = false;
+  },
+
+  setHoveredDrawerComponentType(componentType: string | null) {
+    layoutStore.hoveredDrawerComponentType = componentType;
   },
 
   applyPreset(preset: Exclude<LayoutPresetId, "custom">) {
     const next = getPresetState(preset);
-    Object.assign(layoutStore, { ...next, editMode: false });
+    const { editMode } = layoutStore;
+    Object.assign(layoutStore, { ...next, editMode });
   },
 
   resetToDefault() {
     const next = getPresetState("classic");
-    Object.assign(layoutStore, { ...next, editMode: false });
+    const { editMode } = layoutStore;
+    Object.assign(layoutStore, { ...next, editMode });
   },
 
   setPanelVisible(id: PanelId, visible: boolean) {
@@ -98,7 +125,7 @@ export async function hydrateLayoutStore(): Promise<void> {
   await hydrateValtioStore(LAYOUT_PERSIST_KEY, layoutStore, {
     merge: (persisted, current) => {
       const migrated = migrateLayoutState(persisted);
-      return { ...current, ...migrated, editMode: false };
+      return { ...current, ...migrated, editMode: false, discardEditDraft: false };
     },
   });
 }

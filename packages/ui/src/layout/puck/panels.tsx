@@ -7,7 +7,6 @@ import {
   ThreadMessages,
   ThreadScrollToBottom,
   ThreadSuggestions,
-  ThreadWelcome,
 } from "@/components/assistant-ui/thread";
 import { WidgetPlaceholder } from "@/layout/panels/WidgetPlaceholder";
 import type { PanelId } from "@qenex/core";
@@ -51,7 +50,7 @@ export function ThreadMessagesEditPreview() {
         return (
           <div
             key={message.id}
-            className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+            className="border-[1px] border-dashed border-muted-foreground/30 bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
           >
             <span className="font-medium text-foreground/80">{roleLabel}</span>
             {preview ? (
@@ -74,14 +73,7 @@ export function renderPanel(
 ): React.ReactNode {
   switch (panelId) {
     case "tabBar":
-      return (
-        <TabBar
-          position={ctx.shell.tabBarPosition}
-          onToggleHistory={ctx.shell.onToggleHistory}
-          showHistory={ctx.shell.showHistory}
-          archivedCount={ctx.shell.archivedCount}
-        />
-      );
+      return <TabBar position={ctx.shell.tabBarPosition} />;
     case "composer":
       return <ThreadComposer />;
     case "followupSuggestions":
@@ -108,12 +100,5 @@ export function renderPanel(
 }
 
 export function ThreadMessagesArea() {
-  return (
-    <>
-      <AuiIf condition={isNewChatView}>
-        <ThreadWelcome />
-      </AuiIf>
-      <ThreadMessages />
-    </>
-  );
+  return <ThreadMessages />;
 }

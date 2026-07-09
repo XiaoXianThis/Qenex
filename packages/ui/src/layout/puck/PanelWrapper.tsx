@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  getPanelDefinition,
   panelIdFromPuckType,
   useLayoutStore,
   type PanelId,
 } from "@qenex/core";
 import { cn } from "@qenex/core";
 import type { FC, ReactNode } from "react";
+import { LayoutEditLabel } from "@/layout/puck/LayoutEditLabel";
+import { layoutComponentHighlightClass } from "@/layout/layoutEditPanel";
 import { WidthScopeWrapper } from "@/layout/puck/WidthScopeWrapper";
 import type { PanelRenderContext } from "@/layout/puck/types";
 import { renderPanel } from "@/layout/puck/panels";
@@ -28,6 +31,9 @@ export const PanelWrapper: FC<PanelWrapperProps> = ({
   if (!panelId) return null;
 
   const editMode = useLayoutStore((s) => s.editMode);
+  const hoveredDrawerComponentType = useLayoutStore(
+    (s) => s.hoveredDrawerComponentType,
+  );
   const visible = useLayoutStore((s) => s.panels[panelId].visible);
   const widthScope = useLayoutStore((s) => s.panels[panelId].widthScope);
 
@@ -36,6 +42,8 @@ export const PanelWrapper: FC<PanelWrapperProps> = ({
   if (!visible && !editMode) return null;
 
   const isEditing = editMode || puck?.isEditing;
+  const panelLabel = getPanelDefinition(panelId).label;
+  const isHighlighted = hoveredDrawerComponentType === puckType;
 
   const wrapped = (
     <WidthScopeWrapper scope={widthScope}>{content}</WidthScopeWrapper>
@@ -48,14 +56,17 @@ export const PanelWrapper: FC<PanelWrapperProps> = ({
   return (
     <div
       data-layout-panel={panelId}
+      data-layout-puck-type={puckType}
       className={cn(
-        "relative rounded-md border-2 border-dashed transition-opacity",
+        "relative min-h-8 border-[1px] border-dashed transition-opacity",
         visible
           ? "border-primary/40"
           : "border-muted-foreground/30 opacity-50",
         !visible && "min-h-14",
+        layoutComponentHighlightClass(isHighlighted),
       )}
     >
+      <LayoutEditLabel label={panelLabel} />
       {visible ? (
         <div
           className="pointer-events-none select-none [&_*]:pointer-events-none"

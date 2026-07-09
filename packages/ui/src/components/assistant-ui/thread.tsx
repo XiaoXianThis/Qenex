@@ -22,8 +22,14 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { cn } from "@qenex/core";
-import { useLayoutStore } from "@qenex/core";
+import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import {
+  cn,
+  getAgentPreset,
+  useLayoutStore,
+  useSessionConfig,
+  useTabsStore,
+} from "@qenex/core";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -55,6 +61,8 @@ import {
 import {
   createContext,
   useContext,
+  useEffect,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -142,7 +150,57 @@ export const ThreadScrollToBottom: FC = () => {
 };
 
 export const ThreadWelcome: FC = () => {
-  return null;
+  const { agentId } = useSessionConfig();
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+  const agent = getAgentPreset(agentId);
+  const fullText = `和 ${agent.name} 一起构建想象`;
+  const [typedText, setTypedText] = useState("");
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    setTypedText("");
+    setDone(false);
+    let index = 0;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const startId = window.setTimeout(() => {
+      intervalId = setInterval(() => {
+        index += 1;
+        setTypedText(fullText.slice(0, index));
+        if (index >= fullText.length) {
+          if (intervalId) clearInterval(intervalId);
+          setDone(true);
+        }
+      }, 80);
+    }, 400);
+
+    return () => {
+      window.clearTimeout(startId);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [fullText]);
+
+  return (
+    <div
+      key={activeTabId ?? agentId}
+      className="aui-thread-welcome pointer-events-none flex select-none flex-col items-center justify-center gap-4"
+    >
+      <img
+        src={getAgentPresetIconUrl(agent.id)}
+        alt=""
+        className="aui-thread-welcome-icon size-36 object-contain opacity-10 select-none"
+        draggable={false}
+      />
+      <p
+        className="aui-thread-welcome-typewriter text-base text-muted-foreground/60"
+        aria-label={fullText}
+      >
+        {typedText}
+        {!done ? (
+          <span className="aui-thread-welcome-dot" aria-hidden />
+        ) : null}
+      </p>
+    </div>
+  );
 };
 
 export const ThreadSuggestions: FC = () => {
@@ -182,7 +240,7 @@ export const ThreadComposer: FC = () => {
       <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
         <div
           data-slot="aui_composer-shell"
-          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
         >
           <div className="flex min-h-10 flex-col gap-1">
             <ComposerAttachments />
@@ -196,14 +254,19 @@ export const ThreadComposer: FC = () => {
             />
           </div>
           <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
-            <ComposerAddAttachment />
-            {showSessionConfig ? (
+            {showSessionConfig && !layoutEditing ? (
               <SessionConfigBar
                 className="px-0"
-                trailing={<ComposerSendActions />}
+                trailing={
+                  <>
+                    <ComposerAddAttachment />
+                    <ComposerSendActions />
+                  </>
+                }
               />
             ) : (
               <div className="ms-auto flex items-center gap-2">
+                <ComposerAddAttachment />
                 <ComposerSendActions />
               </div>
             )}
@@ -451,7 +514,7 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
+        <div className="aui-user-message-content peer bg-card text-card-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">

@@ -19,6 +19,14 @@ import {
   startLayoutPersist,
 } from "../store/layout-store.ts";
 import {
+  hydrateModelThoughtPrefsStore,
+  startModelThoughtPrefsPersist,
+} from "../store/model-thought-prefs-store.ts";
+import {
+  hydrateStyleStore,
+  startStylePersist,
+} from "../store/style-store.ts";
+import {
   hydrateTabsStore,
   startTabsPersist,
   tabsActions,
@@ -40,10 +48,19 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
 
     let stopTabsPersist: (() => void) | undefined;
     let stopLayoutPersist: (() => void) | undefined;
+    let stopStylePersist: (() => void) | undefined;
+    let stopModelThoughtPrefsPersist: (() => void) | undefined;
 
-    void Promise.all([hydrateTabsStore(), hydrateLayoutStore()]).then(() => {
+    void Promise.all([
+      hydrateTabsStore(),
+      hydrateLayoutStore(),
+      hydrateStyleStore(),
+      hydrateModelThoughtPrefsStore(),
+    ]).then(() => {
       stopTabsPersist = startTabsPersist();
       stopLayoutPersist = startLayoutPersist();
+      stopStylePersist = startStylePersist();
+      stopModelThoughtPrefsPersist = startModelThoughtPrefsPersist();
       void tabsActions.ensureInitialTab().finally(() => {
         setHydrated(true);
       });
@@ -52,6 +69,8 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     return () => {
       stopTabsPersist?.();
       stopLayoutPersist?.();
+      stopStylePersist?.();
+      stopModelThoughtPrefsPersist?.();
       clearBridgeHost();
       clearHostPersistStorage();
       setHydrated(false);

@@ -1,7 +1,9 @@
 "use client";
 
 import { PuckLayoutRenderer } from "@/layout/puck/PuckLayoutRenderer";
-import { LayoutEditToolbar } from "@/layout/LayoutEditToolbar";
+import { ComponentStyleDialog } from "@/style/ComponentStyleDialog";
+import { StyleEditDialog } from "@/style/StyleEditDialog";
+import { ThemeStyleInjector } from "@/style/ThemeStyleInjector";
 import {
   layoutActions,
   selectTabBarPosition,
@@ -11,18 +13,12 @@ import {
 import type { FC } from "react";
 
 type LayoutShellProps = {
-  showHistory: boolean;
-  onToggleHistory: () => void;
-  archivedCount: number;
   activeTabId: string | null;
   tabSessions: RuntimeSessionConfig[];
   hasActiveTab: boolean;
 };
 
 export const LayoutShell: FC<LayoutShellProps> = ({
-  showHistory,
-  onToggleHistory,
-  archivedCount,
   activeTabId,
   tabSessions,
   hasActiveTab,
@@ -34,22 +30,20 @@ export const LayoutShell: FC<LayoutShellProps> = ({
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden">
+      <ThemeStyleInjector />
+      <StyleEditDialog />
+      <ComponentStyleDialog />
       <PuckLayoutRenderer
         metadata={{
-          showHistory,
           activeTabId,
           tabSessions,
           hasActiveTab,
           onResetLayout: resetToDefault,
           shell: {
-            showHistory,
-            onToggleHistory,
-            archivedCount,
             tabBarPosition,
           },
         }}
       />
-      <LayoutEditToolbar />
       {composerHidden && editMode ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-4">
           <div className="pointer-events-auto border-t border-amber-500/40 bg-amber-500/10 px-4 py-2 text-center text-sm text-amber-700 dark:text-amber-300">
