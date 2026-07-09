@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router, routing::any};
 use futures::stream;
 use serde::Deserialize;
@@ -14,6 +14,10 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::agui::events::AguiEvent;
+use crate::agent::install::{self, InstalledAgent};
+use crate::agent::probe_agent_command;
+use crate::agent::progress::InstallProgressEvent;
+use crate::agent::registry::{self, InstallKind};
 use crate::sessions::{
     ApprovalRequest, ApprovalResponse, CreateTaskRequest, CreateTaskResponse, ManagerError,
     SessionConfigResponse, SetConfigOptionRequest, StartRunRequest, StartRunResponse,
@@ -44,6 +48,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/config", get(get_session_config))
         .route("/v2/tasks/{task_id}/config-option", post(set_config_option))
         .route("/v2/tasks/{task_id}/command", post(execute_command))
+        .route("/v2/agents/probe", post(probe_agent))
+        .route("/v2/agents/registry", get(list_registry))
+        .route("/v2/agents/installed", get(list_installed_agents))
+        .route("/v2/agents/install", post(install_agent))
+        .route("/v2/agents/install/stream", get(install_agent_stream))
+        .route("/v2/agents/install/{agent_id}", delete(uninstall_agent))
         .route(
             "/api/files",
             get(api::files::list_files)
@@ -527,6 +537,202 @@ async fn execute_command(
         .await
         .map_err(manager_status)?;
     Ok(Json(json!({ "success": true, "command": body.command })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeAgentBody {
+    agent_command: Vec<String>,
+}
+
+async fn probe_agent(
+    Json(body): Json<ProbeAgentBody>,
+) -> Json<Value> {
+    match probe_agent_command(&body.agent_command) {
+        Ok(resolved) => Json(json!({
+            "available": true,
+            "resolved": resolved,
+        })),
+        Err(detail) => Json(json!({
+            "available": false,
+            "detail": detail,
+        })),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallAgentBody {
+    agent_id: String,
+}
+
+fn installed_json(agent: &InstalledAgent) -> Value {
+    json!({
+        "agentId": agent.agent_id,
+        "name": agent.name,
+        "version": agent.version,
+        "kind": agent.kind,
+        "command": agent.command,
+        "env": agent.env,
+        "installPath": agent.install_path,
+        "installedAt": agent.installed_at,
+    })
+}
+
+async fn list_registry(
+    Query(query): Query<RegistryQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let doc = registry::load_registry(query.refresh)
+        .await
+        .map_err(|detail| (StatusCode::BAD_GATEWAY, Json(json!({ "detail": detail }))))?;
+    let installed = install::list_installed();
+    let installed_map: std::collections::HashMap<_, _> = installed
+        .iter()
+        .map(|a| (a.agent_id.clone(), a))
+        .collect();
+    let platform = registry::current_platform_key();
+
+    let agents: Vec<Value> = doc
+        .agents
+        .iter()
+        .map(|agent| {
+            let plan = registry::resolve_install_plan(agent).ok();
+            let installable = plan.is_some()
+                && !matches!(
+                    plan.as_ref().map(|p| p.kind),
+                    Some(InstallKind::Uvx)
+                );
+            let installed_entry = installed_map.get(&agent.id);
+            json!({
+                "id": agent.id,
+                "name": agent.name,
+                "version": agent.version,
+                "description": agent.description,
+                "repository": agent.repository,
+                "website": agent.website,
+                "authors": agent.authors,
+                "license": agent.license,
+                "icon": agent.icon,
+                "platform": platform,
+                "installable": installable,
+                "preferredKind": plan.as_ref().map(|p| p.kind),
+                "installed": installed_entry.map(|a| installed_json(a)),
+                "updateAvailable": installed_entry
+                    .map(|a| a.version != agent.version)
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "version": doc.version,
+        "platform": platform,
+        "agents": agents,
+    })))
+}
+
+async fn list_installed_agents() -> Json<Value> {
+    let agents: Vec<Value> = install::list_installed()
+        .iter()
+        .map(installed_json)
+        .collect();
+    Json(json!({ "agents": agents }))
+}
+
+async fn install_agent(
+    Json(body): Json<InstallAgentBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let agent_id = body.agent_id.trim();
+    if agent_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "agentId is required" })),
+        ));
+    }
+    let installed = install::install_agent(agent_id)
+        .await
+        .map_err(|detail| (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail }))))?;
+    Ok(Json(installed_json(&installed)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallStreamQuery {
+    agent_id: String,
+}
+
+async fn install_agent_stream(
+    Query(query): Query<InstallStreamQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)>
+{
+    let agent_id = query.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "agentId is required" })),
+        ));
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel::<Value>();
+    tokio::spawn(async move {
+        let progress_tx = tx.clone();
+        let progress = move |event: InstallProgressEvent| {
+            if let Ok(value) = serde_json::to_value(&event) {
+                let _ = progress_tx.send(value);
+            }
+        };
+        match install::install_agent_with_progress(&agent_id, Some(&progress)).await {
+            Ok(installed) => {
+                let _ = tx.send(json!({
+                    "type": "done",
+                    "agent": installed_json(&installed),
+                }));
+            }
+            Err(detail) => {
+                let _ = tx.send(json!({
+                    "type": "error",
+                    "detail": detail,
+                }));
+            }
+        }
+    });
+
+    let stream = stream::unfold(Some(rx), |state| async move {
+        let mut rx = state?;
+        match rx.recv().await {
+            Some(value) => {
+                let terminal = value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "done" || t == "error");
+                let json = value.to_string();
+                let item = Ok::<Event, Infallible>(Event::default().event("progress").data(json));
+                if terminal {
+                    Some((item, None))
+                } else {
+                    Some((item, Some(rx)))
+                }
+            }
+            None => None,
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+async fn uninstall_agent(
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let removed = install::uninstall_agent(&agent_id)
+        .map_err(|detail| (StatusCode::NOT_FOUND, Json(json!({ "detail": detail }))))?;
+    Ok(Json(installed_json(&removed)))
 }
 
 fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {

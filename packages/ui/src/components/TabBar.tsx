@@ -4,9 +4,11 @@ import {
   Clock,
   Loader2,
   PaintbrushVertical,
+  Settings2,
   X,
 } from "lucide-react";
 import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import {
   Popover,
@@ -14,11 +16,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  AGENT_PRESETS,
   cn,
   getAgentPreset,
   layoutActions,
   tabsActions,
+  useAgentsStore,
   useHost,
   useLayoutStore,
   useTabsStore,
@@ -43,8 +45,10 @@ export function TabBar({ position = "top" }: TabBarProps) {
   const setPreferredAgentId = tabsActions.setPreferredAgentId;
   const editMode = useLayoutStore((s) => s.editMode);
   const setEditMode = layoutActions.setEditMode;
+  const agentPresets = useAgentsStore((s) => s.agents);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const tabs = useMemo(
     () => allTabs.filter((t) => t.status === "active"),
@@ -232,8 +236,12 @@ export function TabBar({ position = "top" }: TabBarProps) {
               onOpenAutoFocus={(event) => event.preventDefault()}
             >
               <div className="flex max-h-64 flex-col overflow-y-auto" role="listbox">
-                {AGENT_PRESETS.map((agent) => {
+                {agentPresets.map((agent) => {
                   const selected = agent.id === preferredAgentId;
+                  const looksUninstalled =
+                    agent.command[0] === "npx" ||
+                    (agent.source === "builtin" &&
+                      (agent.id === "claude" || agent.id === "codex"));
                   return (
                     <button
                       key={agent.id}
@@ -255,14 +263,44 @@ export function TabBar({ position = "top" }: TabBarProps) {
                         className="h-4 w-4 shrink-0 object-contain"
                         aria-hidden
                       />
-                      <span className="min-w-0 truncate">{agent.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                      {looksUninstalled ? (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          需安装
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
+                <div className="my-1 border-t border-border" />
+                <button
+                  type="button"
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                  onClick={() => {
+                    setAgentPickerOpen(false);
+                    setSettingsOpen(true);
+                  }}
+                >
+                  <span className="flex size-3.5 shrink-0 items-center justify-center">
+                    <Settings2 className="size-3.5 text-muted-foreground" />
+                  </span>
+                  <span className="min-w-0 truncate">从 Registry 安装…</span>
+                </button>
               </div>
             </PopoverContent>
           </Popover>
         </div>
+
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className={cn("rounded-md p-2", rightControlClass)}
+          aria-label="Agent 设置"
+          title="Agent 设置"
+        >
+          <span className={rightControlHoverClass} aria-hidden />
+          <Settings2 className="relative h-4 w-4" />
+        </button>
 
         <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
           <PopoverTrigger asChild>
@@ -292,6 +330,8 @@ export function TabBar({ position = "top" }: TabBarProps) {
           </PopoverContent>
         </Popover>
       </div>
+
+      <AgentSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

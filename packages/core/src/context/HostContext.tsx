@@ -15,6 +15,11 @@ import {
   setHostPersistStorage,
 } from "../lib/host-storage.ts";
 import {
+  agentsStore,
+  hydrateAgentsStore,
+  startAgentsPersist,
+} from "../store/agents-store.ts";
+import {
   hydrateLayoutStore,
   startLayoutPersist,
 } from "../store/layout-store.ts";
@@ -30,6 +35,7 @@ import {
   hydrateTabsStore,
   startTabsPersist,
   tabsActions,
+  tabsStore,
 } from "../store/tabs-store.ts";
 
 const HostContext = createContext<QenexHost | null>(null);
@@ -39,6 +45,12 @@ type QenexHostProviderProps = {
   children: ReactNode;
 };
 
+function syncPreferredAgentAfterHydrate() {
+  if (!agentsStore.agents.some((a) => a.id === tabsStore.preferredAgentId)) {
+    tabsActions.setPreferredAgentId(agentsStore.defaultAgentId);
+  }
+}
+
 export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
   const [hydrated, setHydrated] = useState(false);
 
@@ -46,17 +58,24 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     setBridgeHost(host);
     setHostPersistStorage(host.storage);
 
+    let stopAgentsPersist: (() => void) | undefined;
     let stopTabsPersist: (() => void) | undefined;
     let stopLayoutPersist: (() => void) | undefined;
     let stopStylePersist: (() => void) | undefined;
     let stopModelThoughtPrefsPersist: (() => void) | undefined;
 
-    void Promise.all([
-      hydrateTabsStore(),
-      hydrateLayoutStore(),
-      hydrateStyleStore(),
-      hydrateModelThoughtPrefsStore(),
-    ]).then(() => {
+    void (async () => {
+      // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
+      await hydrateAgentsStore();
+      await Promise.all([
+        hydrateTabsStore(),
+        hydrateLayoutStore(),
+        hydrateStyleStore(),
+        hydrateModelThoughtPrefsStore(),
+      ]);
+      syncPreferredAgentAfterHydrate();
+
+      stopAgentsPersist = startAgentsPersist();
       stopTabsPersist = startTabsPersist();
       stopLayoutPersist = startLayoutPersist();
       stopStylePersist = startStylePersist();
@@ -64,9 +83,10 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
       void tabsActions.ensureInitialTab().finally(() => {
         setHydrated(true);
       });
-    });
+    })();
 
     return () => {
+      stopAgentsPersist?.();
       stopTabsPersist?.();
       stopLayoutPersist?.();
       stopStylePersist?.();

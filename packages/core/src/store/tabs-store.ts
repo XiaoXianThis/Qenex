@@ -6,7 +6,8 @@ import {
   hydrateValtioStore,
   subscribeValtioPersist,
 } from "../lib/valtio-persist.ts";
-import { DEFAULT_AGENT_ID, getAgentPreset } from "../config/agents.ts";
+import { DEFAULT_AGENT_ID } from "../config/agents.ts";
+import { getAgentPreset } from "./agents-store.ts";
 
 export const TABS_PERSIST_KEY = "agent-center-tabs";
 

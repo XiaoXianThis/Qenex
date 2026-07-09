@@ -8,6 +8,7 @@ export * from "./lib/bridge-history-adapter.ts";
 export * from "./lib/replay-agui-events.ts";
 export * from "./lib/session-config.ts";
 export * from "./lib/utils.ts";
+export * from "./store/agents-store.ts";
 export * from "./store/tabs-store.ts";
 export * from "./store/model-thought-prefs-store.ts";
 export * from "./store/layout-store.ts";

@@ -25,20 +25,36 @@
 | JetBrains | JCEF Tool Window | [apps/jetbrains](apps/jetbrains/README.md) |
 | Desktop | Tauri + sidecar Bridge | [apps/desktop](apps/desktop/README.md) |
 
-## Agent 预设
+## Agent 与 Registry
 
-| Agent | 命令 |
-|-------|------|
+打开界面右上角 **Agent 设置**，可从官方 [ACP Agent Registry](https://agentclientprotocol.com/rfds/acp-agent-registry) 一键安装适配包（binary / npm）。
+
+安装产物托管在本机：
+
+```text
+~/.qenex/
+  runtime/node/     # 若系统无 Node ≥18，自动下载托管运行时
+  agents/<id>/<ver>/
+  installed.json
+  registry-cache.json
+```
+
+安装成功后，Agent 命令会写成托管目录下的绝对路径，不再依赖全局 `npx`。也可在「高级 JSON」中自定义 `agentCommand`。
+
+内置快捷预设（未安装时仍可编辑；Claude / Codex 建议从 Registry 安装）：
+
+| Agent | 默认命令（未安装） |
+|-------|-------------------|
 | OpenCode | `opencode acp` |
 | Kiro | `kiro-cli acp` |
 | Claude | `npx -y @agentclientprotocol/claude-agent-acp` |
-| Codex | `npx -y @zed-industries/codex-acp` |
+| Codex | `npx -y @agentclientprotocol/codex-acp` |
 
-也可自定义命令。默认由 `bridge.config.json` 的 `agentCommand` 决定。
+相关 API：`GET /v2/agents/registry`、`POST /v2/agents/install`、`DELETE /v2/agents/install/{id}`、`POST /v2/agents/probe`。Bridge 进程默认启动命令仍由 `bridge.config.json` 的 `agentCommand` 决定。
 
 ## 快速开始
 
-**环境**：Rust 1.75+、[Bun](https://bun.sh)（或 Node 18+）、至少一个 PATH 中的 ACP Agent。
+**环境**：Rust 1.75+、[Bun](https://bun.sh)（或 Node 18+）。npm 类 Agent 可从设置内安装；系统无 Node 时 Bridge 会下载托管运行时。
 
 ```bash
 bun install

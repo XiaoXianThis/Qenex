@@ -55,9 +55,40 @@ const AGENT_PRESET_ICON: Record<string, string> = {
   opencode: AGENT_ICONS.opencode,
   kiro: AGENT_ICONS.kiro,
   claude: AGENT_ICONS.claude,
+  "claude-acp": AGENT_ICONS.claude,
   codex: AGENT_ICONS.codex,
+  "codex-acp": AGENT_ICONS.codex,
+  gemini: AGENT_ICONS.gemini,
+  "cursor-agent": AGENT_ICONS["cursor-agent"],
+  copilot: AGENT_ICONS.copilot,
+  kilo: AGENT_ICONS.kilo,
+  kimi: AGENT_ICONS.kimi,
+  qwen: AGENT_ICONS.qwen,
+  qoder: AGENT_ICONS.qoder,
+  pi: AGENT_ICONS.pi,
+  aider: AGENT_ICONS.aider,
+  hermes: AGENT_ICONS.hermes,
+  vibe: AGENT_ICONS.vibe,
+  deepseek: AGENT_ICONS.deepseek,
 };
 
-export function getAgentPresetIconUrl(agentId: string): string {
-  return AGENT_PRESET_ICON[agentId] ?? AGENT_ICONS.opencode;
+export function getAgentPresetIconUrl(
+  agentId: string,
+  remoteIcon?: string | null,
+): string {
+  if (remoteIcon && /^https?:\/\//i.test(remoteIcon)) {
+    return remoteIcon;
+  }
+  if (AGENT_PRESET_ICON[agentId]) {
+    return AGENT_PRESET_ICON[agentId];
+  }
+  // Strip common registry suffixes: foo-acp → foo
+  const base = agentId.replace(/-acp$/, "");
+  if (AGENT_PRESET_ICON[base]) {
+    return AGENT_PRESET_ICON[base];
+  }
+  if (base in AGENT_ICONS) {
+    return AGENT_ICONS[base as AgentIconId];
+  }
+  return AGENT_ICONS.opencode;
 }

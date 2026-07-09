@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./config/agents": "./src/config/agents.ts",
+    "./store/agents-store": "./src/store/agents-store.ts",
     "./store/tabs-store": "./src/store/tabs-store.ts",
     "./lib/*": "./src/lib/*",
     "./context/*": "./src/context/*"
