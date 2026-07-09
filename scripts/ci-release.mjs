@@ -39,7 +39,7 @@ function resolveVersion() {
   if (ref.startsWith("v")) {
     return ref.slice(1);
   }
-  return "0.1.0";
+  return "0.1.1";
 }
 
 function run(command, options = {}) {
