@@ -171,6 +171,7 @@
         "remark-gfm": "^4.0.1",
         "tailwind-merge": "^3.6.0",
         "tw-shimmer": "^0.4.11",
+        "zustand": "^5.0.14",
       },
       "devDependencies": {
         "@qenex/tsconfig": "workspace:*",
