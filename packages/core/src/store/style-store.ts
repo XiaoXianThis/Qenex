@@ -23,7 +23,7 @@ import {
   hydrateValtioStore,
   subscribeValtioPersist,
 } from "../lib/valtio-persist.ts";
-import { layoutActions, layoutStore } from "./layout-store.ts";
+import { layoutActions } from "./layout-store.ts";
 
 export const STYLE_PERSIST_KEY = "agent-center-style";
 
@@ -72,9 +72,15 @@ function migratePersistedStyle(persisted: unknown): StylePersistedState {
     return createDefaultStyleState();
   }
 
-  const record = persisted as Partial<
-    StylePersistedState & StylePersistedStateV2 & StylePersistedStateV1
-  >;
+  // Intersection of v1/v2/v3 collapses to `never` (schemaVersion literals conflict).
+  const record = persisted as Partial<StylePersistedState> &
+    Partial<StylePersistedStateV2> &
+    Partial<StylePersistedStateV1> & {
+      themeCss?: string;
+      customCss?: string;
+      css?: string;
+      theme?: ThemeTokens;
+    };
 
   if (
     record.schemaVersion === 3 &&

@@ -7,7 +7,7 @@
     },
     "apps/desktop": {
       "name": "@qenex/desktop",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@qenex/core": "workspace:*",
         "@qenex/platform": "workspace:*",
@@ -56,7 +56,7 @@
     },
     "apps/vscode": {
       "name": "qenex",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "devDependencies": {
         "@types/node": "^26.1.0",
         "@types/vscode": "^1.85.0",
@@ -157,6 +157,7 @@
         "@assistant-ui/react-markdown": "^0.14.5",
         "@assistant-ui/store": "^0.2.19",
         "@codemirror/lang-css": "^6.3.1",
+        "@codemirror/state": "^6.7.1",
         "@puckeditor/core": "^0.21.2",
         "@qenex/core": "workspace:*",
         "@uiw/codemirror-extensions-color": "^4.25.11",

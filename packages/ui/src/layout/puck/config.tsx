@@ -17,7 +17,12 @@ import type {
   Config,
   DefaultComponentProps,
   PuckComponent,
+  SlotComponent,
 } from "@puckeditor/core";
+
+type LayoutContainerProps = {
+  children: SlotComponent;
+};
 
 export const LAYOUT_SLOT_ALLOW = [
   "LayoutRow",
@@ -101,57 +106,42 @@ export type LayoutPageProps = {
   bottom: import("@puckeditor/core").SlotComponent;
 };
 
-export const layoutConfig_test = {
-  components: {
-    LayoutRow: {
-      label: "行 (Row)",
-      permissions: { drag: true, delete: true, duplicate: false },
-      resolvePermissions: containerResolvePermissions,
-      fields: {
-        children: {
-          type: "slot",
-          allow: [...LAYOUT_SLOT_ALLOW],
-        },
-      },
-      render: ({ children: Children, puck }) => (
-        <div className="">
-          <div>Row →</div>
-          <LayoutContainerSlot
-            label="行"
-            componentType="LayoutRow"
-            editing={puck.isEditing}
-            className={layoutContainerSlotClass("row", puck.isEditing)}
-          >
-            {Children}
-          </LayoutContainerSlot>
-        </div>
-      ),
-    },
-    LayoutColumn: {
-      label: "列 (Column)",
-      permissions: { drag: true, delete: true, duplicate: false },
-      resolvePermissions: containerResolvePermissions,
-      fields: {
-        children: {
-          type: "slot",
-          allow: [...LAYOUT_SLOT_ALLOW],
-        },
-      },
-      render: ({ children: Children, puck }) => (
-        <div className="">
-          <div>Colum ↓</div>
-          <LayoutContainerSlot
-            label="列"
-            componentType="LayoutColumn"
-            editing={puck.isEditing}
-            className={layoutContainerSlotClass("column", puck.isEditing)}
-          >
-            {Children}
-          </LayoutContainerSlot>
-        </div>
-      ),
-    },
-  }
+function renderLayoutRow({
+  children: Children,
+  puck,
+}: {
+  children: SlotComponent;
+  puck: { isEditing: boolean };
+}) {
+  return (
+    <LayoutContainerSlot
+      label="行"
+      componentType="LayoutRow"
+      editing={puck.isEditing}
+      className={layoutContainerSlotClass("row", puck.isEditing)}
+    >
+      {Children}
+    </LayoutContainerSlot>
+  );
+}
+
+function renderLayoutColumn({
+  children: Children,
+  puck,
+}: {
+  children: SlotComponent;
+  puck: { isEditing: boolean };
+}) {
+  return (
+    <LayoutContainerSlot
+      label="列"
+      componentType="LayoutColumn"
+      editing={puck.isEditing}
+      className={layoutContainerSlotClass("column", puck.isEditing)}
+    >
+      {Children}
+    </LayoutContainerSlot>
+  );
 }
 
 export const layoutConfig = {
@@ -193,16 +183,7 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children, puck }) => (
-        <LayoutContainerSlot
-          label="行"
-          componentType="LayoutRow"
-          editing={puck.isEditing}
-          className={layoutContainerSlotClass("row", puck.isEditing)}
-        >
-          {Children}
-        </LayoutContainerSlot>
-      ),
+      render: renderLayoutRow as PuckComponent<LayoutContainerProps>,
     },
     LayoutColumn: {
       label: "列 (Column)",
@@ -214,16 +195,7 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: ({ children: Children, puck }) => (
-        <LayoutContainerSlot
-          label="列"
-          componentType="LayoutColumn"
-          editing={puck.isEditing}
-          className={layoutContainerSlotClass("column", puck.isEditing)}
-        >
-          {Children}
-        </LayoutContainerSlot>
-      ),
+      render: renderLayoutColumn as PuckComponent<LayoutContainerProps>,
     },
     TabBar: panelConfig("TabBar", "tabBar"),
     TokenStats: panelConfig("TokenStats", "tokenStats"),

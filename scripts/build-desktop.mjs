@@ -38,8 +38,8 @@ function sidecarName(triple) {
 
 function buildTarget(triple) {
   const binName = triple.includes("windows") ? "acp-to-agui.exe" : "acp-to-agui";
-  const targetDir = triple === getHostTarget() ? "release" : join(triple, "release");
-  const releaseBin = join(root, "target", targetDir, binName);
+  // `cargo --target` always writes under target/<triple>/, even for the host triple.
+  const releaseBin = join(root, "target", triple, "release", binName);
 
   console.log(`Building bridge for ${triple}...`);
   try {
