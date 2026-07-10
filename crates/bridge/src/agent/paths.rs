@@ -9,8 +9,8 @@ pub fn qenex_home() -> PathBuf {
         .join(".qenex")
 }
 
-pub fn runtime_node_dir() -> PathBuf {
-    qenex_home().join("runtime").join("node")
+pub fn runtime_bun_dir() -> PathBuf {
+    qenex_home().join("runtime").join("bun")
 }
 
 pub fn agents_dir() -> PathBuf {
@@ -30,7 +30,7 @@ pub fn registry_cache_path() -> PathBuf {
 }
 
 pub fn ensure_qenex_dirs() -> Result<(), String> {
-    for dir in [qenex_home(), runtime_node_dir(), agents_dir()] {
+    for dir in [qenex_home(), runtime_bun_dir(), agents_dir()] {
         fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
     Ok(())

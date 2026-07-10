@@ -32,14 +32,15 @@ export const DEFAULT_AGENT_PRESETS: AgentPreset[] = [
   {
     id: "claude",
     name: "Claude",
-    command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
+    // Empty = resolve at runtime via registryId (detect / ~/.qenex / install).
+    command: [],
     source: "builtin",
     registryId: "claude-acp",
   },
   {
     id: "codex",
     name: "Codex",
-    command: ["npx", "-y", "@agentclientprotocol/codex-acp"],
+    command: [],
     source: "builtin",
     registryId: "codex-acp",
   },
@@ -52,6 +53,25 @@ export const BUILTIN_TO_REGISTRY_ID: Record<string, string> = {
   opencode: "opencode",
   kiro: "kiro",
 };
+
+/** Resolve id used by Bridge detect/spawn (registry id preferred). */
+export function resolveAgentBridgeId(agent: {
+  id: string;
+  registryId?: string;
+}): string {
+  if (agent.registryId?.trim()) {
+    return agent.registryId.trim();
+  }
+  return BUILTIN_TO_REGISTRY_ID[agent.id] ?? agent.id;
+}
+
+/** Non-empty command means user/advanced override; empty lets Bridge detect. */
+export function agentCommandOverride(command: string[] | undefined): string[] | undefined {
+  if (!command || command.length === 0) {
+    return undefined;
+  }
+  return command;
+}
 
 export const DEFAULT_AGENT_ID = "opencode";
 
@@ -86,11 +106,31 @@ function parseAgentPreset(value: unknown, index: number): AgentPreset | string {
   if (!isNonEmptyString(record.name)) {
     return `agents[${index}].name 必须是非空字符串`;
   }
-  if (!Array.isArray(record.command) || record.command.length === 0) {
-    return `agents[${index}].command 必须是非空字符串数组`;
+  if (!Array.isArray(record.command)) {
+    return `agents[${index}].command 必须是字符串数组（可为空，表示由 Bridge 按 registryId 解析）`;
   }
   if (!record.command.every((part) => isNonEmptyString(part))) {
     return `agents[${index}].command 各项必须是非空字符串`;
+  }
+  const registryIdHint =
+    record.registryId !== undefined && record.registryId !== null
+      ? String(record.registryId)
+      : undefined;
+  if (
+    record.command.length === 0 &&
+    !registryIdHint &&
+    record.id !== "claude" &&
+    record.id !== "codex"
+  ) {
+    // Allow empty command only when Bridge can resolve via registryId / known id.
+    const knownResolvable =
+      typeof record.id === "string" &&
+      ["opencode", "kiro", "claude-acp", "codex-acp"].includes(
+        String(record.id).trim(),
+      );
+    if (!knownResolvable) {
+      return `agents[${index}].command 为空时需要提供 registryId，或使用已知 Agent id`;
+    }
   }
 
   let source: AgentPresetSource | undefined;

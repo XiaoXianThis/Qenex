@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use super::command::resolve_agent_command;
+use super::command::{prefer_node_entry, resolve_agent_command};
 use super::session_init::{
     canonicalize_cwd, current_mode_id, modes_to_json, parse_config_options, parse_mcp_servers,
     ParsedConfigOptions,
@@ -234,7 +234,9 @@ impl AgentConnection {
         let (pid_tx, pid_rx) = oneshot::channel::<u32>();
 
         let bridge_bg = bridge.clone();
-        let agent_args = resolve_agent_command(command);
+        // Prefer `bun/node dist/index.js` over fragile Windows `.cmd` shims for
+        // managed package installs; then wrap remaining non-exe scripts with cmd.exe.
+        let agent_args = resolve_agent_command(&prefer_node_entry(command));
         if which::which(&agent_args[0]).is_err() && !Path::new(&agent_args[0]).is_file() {
             return Err(SpawnError::Agent(format!(
                 "agent binary not found on PATH: {} (install it or set a full path in agentCommand)",
@@ -242,13 +244,24 @@ impl AgentConnection {
             )));
         }
 
+        tracing::info!(
+            command = ?agent_args,
+            "spawning ACP agent"
+        );
+
         let join_handle = tokio::spawn(async move {
             run_agent_connection(agent_args, init, bridge_bg, cmd_rx, ready_tx, pid_tx).await
         });
 
         let init_result = ready_rx
             .await
-            .map_err(|_| SpawnError::TaskEnded)?
+            .map_err(|_| {
+                // Task exited before initialize completed — usually a spawn/crash.
+                SpawnError::Agent(
+                    "agent task ended unexpectedly (process exited before ACP initialize; check agent logs / auth)"
+                        .into(),
+                )
+            })?
             .map_err(SpawnError::Init)?;
 
         let child_pid = pid_rx.await.ok();

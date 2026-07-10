@@ -13,7 +13,10 @@ export type ApprovalResponse = {
 export type EnsureSessionRequest = {
   taskId: string;
   cwd: string;
-  agentCommand: string[];
+  /** Bridge detect/spawn id (registry id preferred). */
+  agentId?: string;
+  /** Optional override; omit/empty to let Bridge resolve from agentId. */
+  agentCommand?: string[];
   title?: string;
   mode?: string;
   model?: string;
@@ -104,7 +107,11 @@ export async function ensureSession(
       taskId: request.taskId,
       cwd: request.cwd,
       title: request.title ?? "AG-UI Session",
-      agentCommand: request.agentCommand,
+      agentId: request.agentId,
+      agentCommand:
+        request.agentCommand && request.agentCommand.length > 0
+          ? request.agentCommand
+          : undefined,
       mode: request.mode,
       model: request.model,
       resumeSessionId: request.resumeSessionId,
@@ -204,19 +211,34 @@ export async function deleteTask(taskId: string): Promise<void> {
 export type ProbeAgentResponse = {
   available: boolean;
   resolved?: string;
+  command?: string[];
   detail?: string;
 };
 
-export async function probeAgent(
-  agentCommand: string[],
-): Promise<ProbeAgentResponse> {
+export async function probeAgent(input: {
+  agentId?: string;
+  agentCommand?: string[];
+}): Promise<ProbeAgentResponse> {
   return fetchJson<ProbeAgentResponse>("/v2/agents/probe", {
     method: "POST",
-    body: JSON.stringify({ agentCommand }),
+    body: JSON.stringify({
+      agentId: input.agentId,
+      agentCommand:
+        input.agentCommand && input.agentCommand.length > 0
+          ? input.agentCommand
+          : undefined,
+    }),
   });
 }
 
 export type AgentInstallKind = "binary" | "npx" | "uvx";
+export type AgentReadiness =
+  | "ready"
+  | "needAdapter"
+  | "install"
+  | "unavailable";
+export type AgentDistributionClass = "native" | "adapter";
+export type AgentDetectedSource = "path" | "vendor" | "managed" | "none";
 
 export type InstalledAgentInfo = {
   agentId: string;
@@ -242,6 +264,11 @@ export type RegistryAgentEntry = {
   platform: string;
   installable: boolean;
   preferredKind?: AgentInstallKind | null;
+  distributionClass?: AgentDistributionClass;
+  readiness?: AgentReadiness;
+  detected?: AgentDetectedSource;
+  resolvedCommand?: string[] | null;
+  detail?: string | null;
   installed?: InstalledAgentInfo | null;
   updateAvailable: boolean;
 };

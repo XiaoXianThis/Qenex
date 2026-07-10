@@ -19,6 +19,8 @@ pub struct CreateTaskRequest {
     pub mcp_servers: Option<Value>,
     #[serde(default)]
     pub agent_command: Option<Vec<String>>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +140,8 @@ pub struct TaskSummary {
     pub updated_at: String,
     #[serde(default = "default_idle")]
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 fn default_idle() -> String {

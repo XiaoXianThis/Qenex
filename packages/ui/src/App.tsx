@@ -23,7 +23,10 @@ export default function App() {
         threadId: tab.taskId,
         agentId: tab.agentId,
         cwd: tab.cwd,
-        agentCommand: tab.agentCommand,
+        agentCommand:
+          tab.agentCommand && tab.agentCommand.length > 0
+            ? tab.agentCommand
+            : undefined,
         agentSessionId: tab.agentSessionId,
         shouldLoadHistory: tab.needsHistoryLoad === true,
       }),

@@ -4,7 +4,9 @@ import { bridgeFetch } from "./bridge-client.ts";
 
 export type SessionProps = {
   cwd: string;
-  agentCommand: string[];
+  agentId: string;
+  /** Optional override; empty/undefined lets Bridge resolve from agentId. */
+  agentCommand?: string[];
 };
 
 export type AguiEvent = {
@@ -55,7 +57,11 @@ export class BridgeHttpAgent extends HttpAgent {
       forwardedProps: {
         ...input.forwardedProps,
         cwd: this.sessionProps.cwd,
-        agentCommand: this.sessionProps.agentCommand,
+        agentId: this.sessionProps.agentId,
+        ...(this.sessionProps.agentCommand &&
+        this.sessionProps.agentCommand.length > 0
+          ? { agentCommand: this.sessionProps.agentCommand }
+          : {}),
       },
     };
   }

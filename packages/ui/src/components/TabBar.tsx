@@ -16,7 +16,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  BUILTIN_TO_REGISTRY_ID,
   cn,
+  fetchAgentRegistry,
   getAgentPreset,
   layoutActions,
   tabsActions,
@@ -24,6 +26,7 @@ import {
   useHost,
   useLayoutStore,
   useTabsStore,
+  type AgentReadiness,
 } from "@qenex/core";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -49,6 +52,30 @@ export function TabBar({ position = "top" }: TabBarProps) {
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [readinessById, setReadinessById] = useState<
+    Record<string, AgentReadiness>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAgentRegistry(false)
+      .then((res) => {
+        if (cancelled) return;
+        const next: Record<string, AgentReadiness> = {};
+        for (const entry of res.agents) {
+          if (entry.readiness) {
+            next[entry.id] = entry.readiness;
+          }
+        }
+        setReadinessById(next);
+      })
+      .catch(() => {
+        // TabBar hint is best-effort; ignore registry failures.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen, agentPresets]);
 
   const tabs = useMemo(
     () => allTabs.filter((t) => t.status === "active"),
@@ -238,10 +265,21 @@ export function TabBar({ position = "top" }: TabBarProps) {
               <div className="flex max-h-64 flex-col overflow-y-auto" role="listbox">
                 {agentPresets.map((agent) => {
                   const selected = agent.id === preferredAgentId;
-                  const looksUninstalled =
-                    agent.command[0] === "npx" ||
-                    (agent.source === "builtin" &&
-                      (agent.id === "claude" || agent.id === "codex"));
+                  const registryId =
+                    agent.registryId ??
+                    BUILTIN_TO_REGISTRY_ID[agent.id] ??
+                    agent.id;
+                  const readiness = readinessById[registryId];
+                  const needsAction =
+                    readiness !== undefined && readiness !== "ready";
+                  const hint =
+                    readiness === "needAdapter"
+                      ? "需适配层"
+                      : readiness === "install"
+                        ? "需安装"
+                        : readiness === "unavailable"
+                          ? "不可用"
+                          : null;
                   return (
                     <button
                       key={agent.id}
@@ -264,9 +302,9 @@ export function TabBar({ position = "top" }: TabBarProps) {
                         aria-hidden
                       />
                       <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                      {looksUninstalled ? (
+                      {needsAction && hint ? (
                         <span className="shrink-0 text-[10px] text-muted-foreground">
-                          需安装
+                          {hint}
                         </span>
                       ) : null}
                     </button>

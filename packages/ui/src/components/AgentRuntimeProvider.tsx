@@ -49,10 +49,17 @@ function AgentRuntimeProviderInner({
     () =>
       new BridgeHttpAgent(
         aguiUrl,
-        { cwd: session.cwd, agentCommand: session.agentCommand },
+        {
+          cwd: session.cwd,
+          agentId: session.agentId,
+          agentCommand:
+            session.agentCommand && session.agentCommand.length > 0
+              ? session.agentCommand
+              : undefined,
+        },
         session.threadId,
       ),
-    [aguiUrl, session.threadId, session.cwd, session.agentCommand],
+    [aguiUrl, session.threadId, session.cwd, session.agentId, session.agentCommand],
   );
 
   const shouldLoadHistory =

@@ -14,10 +14,10 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::agui::events::AguiEvent;
+use crate::agent::detect::{self, evaluate_agent_status};
 use crate::agent::install::{self, InstalledAgent};
-use crate::agent::probe_agent_command;
 use crate::agent::progress::InstallProgressEvent;
-use crate::agent::registry::{self, InstallKind};
+use crate::agent::registry;
 use crate::sessions::{
     ApprovalRequest, ApprovalResponse, CreateTaskRequest, CreateTaskResponse, ManagerError,
     SessionConfigResponse, SetConfigOptionRequest, StartRunRequest, StartRunResponse,
@@ -151,6 +151,12 @@ async fn ag_ui_run(
                     .collect::<Vec<_>>()
             })
             .filter(|cmd| !cmd.is_empty());
+        let agent_id = body
+            .forwarded_props
+            .get("agentId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let stored = match state.session_store.lock().await.get(&thread_id).await {
             Ok(task) => task,
@@ -173,6 +179,7 @@ async fn ag_ui_run(
                 None,
                 None,
                 agent_command,
+                agent_id,
             )
             .await
         {
@@ -235,6 +242,7 @@ async fn create_task(
             body.model.as_deref(),
             body.mcp_servers.clone(),
             body.agent_command.clone(),
+            body.agent_id.clone(),
         )
         .await
         .map_err(manager_status)?;
@@ -542,17 +550,35 @@ async fn execute_command(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProbeAgentBody {
-    agent_command: Vec<String>,
+    #[serde(default)]
+    agent_command: Option<Vec<String>>,
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
-async fn probe_agent(
-    Json(body): Json<ProbeAgentBody>,
-) -> Json<Value> {
-    match probe_agent_command(&body.agent_command) {
-        Ok(resolved) => Json(json!({
-            "available": true,
-            "resolved": resolved,
-        })),
+async fn probe_agent(Json(body): Json<ProbeAgentBody>) -> Json<Value> {
+    let resolved = if let Some(id) = body
+        .agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        detect::resolve_launch_command(Some(id), body.agent_command.as_deref())
+    } else if let Some(cmd) = body.agent_command.as_ref().filter(|c| !c.is_empty()) {
+        detect::resolve_launch_command(None, Some(cmd.as_slice()))
+    } else {
+        Err("agentId or agentCommand is required".into())
+    };
+
+    match resolved {
+        Ok(command) => {
+            let preview = command.first().cloned().unwrap_or_default();
+            Json(json!({
+                "available": true,
+                "resolved": preview,
+                "command": command,
+            }))
+        }
         Err(detail) => Json(json!({
             "available": false,
             "detail": detail,
@@ -592,24 +618,13 @@ async fn list_registry(
     let doc = registry::load_registry(query.refresh)
         .await
         .map_err(|detail| (StatusCode::BAD_GATEWAY, Json(json!({ "detail": detail }))))?;
-    let installed = install::list_installed();
-    let installed_map: std::collections::HashMap<_, _> = installed
-        .iter()
-        .map(|a| (a.agent_id.clone(), a))
-        .collect();
     let platform = registry::current_platform_key();
 
     let agents: Vec<Value> = doc
         .agents
         .iter()
         .map(|agent| {
-            let plan = registry::resolve_install_plan(agent).ok();
-            let installable = plan.is_some()
-                && !matches!(
-                    plan.as_ref().map(|p| p.kind),
-                    Some(InstallKind::Uvx)
-                );
-            let installed_entry = installed_map.get(&agent.id);
+            let status = evaluate_agent_status(agent);
             json!({
                 "id": agent.id,
                 "name": agent.name,
@@ -621,12 +636,15 @@ async fn list_registry(
                 "license": agent.license,
                 "icon": agent.icon,
                 "platform": platform,
-                "installable": installable,
-                "preferredKind": plan.as_ref().map(|p| p.kind),
-                "installed": installed_entry.map(|a| installed_json(a)),
-                "updateAvailable": installed_entry
-                    .map(|a| a.version != agent.version)
-                    .unwrap_or(false),
+                "installable": status.installable,
+                "preferredKind": status.preferred_kind,
+                "distributionClass": status.distribution_class,
+                "readiness": status.readiness,
+                "detected": status.detected,
+                "resolvedCommand": status.resolved_command,
+                "detail": status.detail,
+                "installed": status.managed.as_ref().map(installed_json),
+                "updateAvailable": status.update_available,
             })
         })
         .collect();

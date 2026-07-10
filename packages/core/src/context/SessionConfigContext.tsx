@@ -40,7 +40,7 @@ type SessionConfigProviderProps = {
   threadId: string;
   agentId: string;
   cwd: string;
-  agentCommand: string[];
+  agentCommand?: string[];
   agentSessionId?: string;
   children: ReactNode;
 };
@@ -68,7 +68,9 @@ export function SessionConfigProvider({
       const result = await ensureSession({
         taskId: threadId,
         cwd,
-        agentCommand,
+        agentId,
+        agentCommand:
+          agentCommand && agentCommand.length > 0 ? agentCommand : undefined,
         resumeSessionId: resumeSessionIdRef.current,
       });
       if (signal?.aborted) {

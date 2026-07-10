@@ -17,7 +17,7 @@ use crate::agent::registry::{
     find_registry_agent, resolve_install_plan, InstallKind, InstallPlan, PackageDistribution,
     RegistryAgent,
 };
-use crate::agent::runtime::ensure_node_runtime;
+use crate::agent::runtime::{ensure_bun_runtime, BunRuntime};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +69,42 @@ pub fn list_installed() -> Vec<InstalledAgent> {
 
 pub fn get_installed(agent_id: &str) -> Option<InstalledAgent> {
     read_db().agents.get(agent_id).cloned()
+}
+
+/// Rebuild a launch command from a managed install directory (JS entry preferred).
+pub fn rebuild_managed_package_command(
+    install_path: &Path,
+    package: &str,
+    args: &[String],
+) -> Option<Vec<String>> {
+    if !install_path.is_dir() {
+        return None;
+    }
+    if package.is_empty() {
+        return None;
+    }
+    let bin_name = package_bin_name(package);
+    let bin = find_package_bin(install_path, package, &bin_name).ok()?;
+    let command = if bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("js") || e.eq_ignore_ascii_case("mjs"))
+    {
+        let mut cmd = vec![
+            crate::agent::runtime::resolve_js_runtime(),
+            bin.to_string_lossy().into_owned(),
+        ];
+        cmd.extend(args.iter().cloned());
+        crate::agent::command::augment_codex_env(&cmd)
+    } else {
+        crate::agent::command::prefer_node_entry(
+            &std::iter::once(bin.to_string_lossy().into_owned())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>(),
+        )
+    };
+    // Caller validates launchability to avoid module cycles with detect.
+    Some(command)
 }
 
 async fn download_file(
@@ -250,7 +286,7 @@ async fn install_binary(
     })
 }
 
-fn package_bin_name(package: &str) -> String {
+pub fn package_bin_name(package: &str) -> String {
     // `@scope/name@version` | `@scope/name` | `name@version` | `name`
     if let Some(rest) = package.strip_prefix('@') {
         let spec = rest.split('@').next().unwrap_or(rest);
@@ -267,23 +303,79 @@ fn package_bin_name(package: &str) -> String {
         .to_string()
 }
 
-fn find_npm_bin(prefix: &Path, bin_name: &str) -> Result<PathBuf, String> {
-    let candidates = if cfg!(windows) {
-        vec![
-            prefix.join("node_modules").join(".bin").join(format!("{bin_name}.cmd")),
-            prefix.join("node_modules").join(".bin").join(format!("{bin_name}.ps1")),
-            prefix.join("node_modules").join(".bin").join(bin_name),
-        ]
+/// Normalize `@scope/name@version` / `name@version` → install folder under node_modules.
+fn package_folder_name(package: &str) -> String {
+    if let Some(rest) = package.strip_prefix('@') {
+        let spec = rest.split('@').next().unwrap_or(rest);
+        return format!("@{spec}");
+    }
+    package
+        .split('@')
+        .next()
+        .unwrap_or(package)
+        .to_string()
+}
+
+fn package_dir(prefix: &Path, package: &str) -> PathBuf {
+    let folder = package_folder_name(package);
+    let mut path = prefix.join("node_modules");
+    for part in folder.split('/') {
+        path = path.join(part);
+    }
+    path
+}
+
+fn read_bin_from_package_json(pkg_dir: &Path, bin_name: &str) -> Option<PathBuf> {
+    let text = fs::read_to_string(pkg_dir.join("package.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let bin = value.get("bin")?;
+    let rel = if let Some(s) = bin.as_str() {
+        s.to_string()
+    } else if let Some(obj) = bin.as_object() {
+        obj.get(bin_name)
+            .or_else(|| obj.values().next())
+            .and_then(|v| v.as_str())?
+            .to_string()
     } else {
-        vec![prefix.join("node_modules").join(".bin").join(bin_name)]
+        return None;
     };
+    let entry = pkg_dir.join(rel);
+    entry.is_file().then_some(entry)
+}
+
+pub fn find_package_bin(prefix: &Path, package: &str, bin_name: &str) -> Result<PathBuf, String> {
+    // Prefer the real JS entry from package.json — Bun on Windows creates
+    // `.exe`/`.bunx` shims instead of npm's `.cmd`, so scanning `.bin` alone fails.
+    let pkg_dir = package_dir(prefix, package);
+    if let Some(entry) = read_bin_from_package_json(&pkg_dir, bin_name) {
+        return Ok(entry);
+    }
+    let index = pkg_dir.join("dist").join("index.js");
+    if index.is_file() {
+        return Ok(index);
+    }
+
+    let bin_dir = prefix.join("node_modules").join(".bin");
+    let mut candidates = vec![
+        bin_dir.join(bin_name),
+        bin_dir.join(format!("{bin_name}.cmd")),
+        bin_dir.join(format!("{bin_name}.ps1")),
+        bin_dir.join(format!("{bin_name}.exe")),
+        bin_dir.join(format!("{bin_name}.bunx")),
+    ];
+    if !cfg!(windows) {
+        candidates.retain(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !name.ends_with(".cmd") && !name.ends_with(".ps1") && !name.ends_with(".exe")
+        });
+    }
     candidates
         .into_iter()
         .find(|p| p.is_file())
         .ok_or_else(|| {
             format!(
-                "npm bin '{bin_name}' not found under {}",
-                prefix.join("node_modules").join(".bin").display()
+                "package bin '{bin_name}' not found for {package} under {} (checked package.json bin and node_modules/.bin)",
+                pkg_dir.display()
             )
         })
 }
@@ -293,42 +385,70 @@ async fn install_npx(
     pkg: &PackageDistribution,
     progress: Option<&ProgressFn>,
 ) -> Result<InstalledAgent, String> {
-    progress::stage(progress, "runtime", "Ensuring Node.js runtime…");
-    let runtime = ensure_node_runtime(progress).await?;
+    progress::stage(progress, "runtime", "Ensuring Bun runtime…");
+    let runtime = ensure_bun_runtime(progress).await?;
     let install_dir = agent_version_dir(&agent.id, &agent.version);
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+    // Bun needs a package.json before `bun add` in an empty directory.
+    let pkg_json = install_dir.join("package.json");
+    if !pkg_json.is_file() {
+        fs::write(
+            &pkg_json,
+            format!(
+                "{{\n  \"name\": \"qenex-agent-{}\",\n  \"private\": true\n}}\n",
+                agent.id
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     progress::stage(
         progress,
-        "npm",
-        format!("npm install {}…", pkg.package),
+        "bun",
+        format!("bun add {}…", pkg.package),
     );
-    let status = Command::new(&runtime.npm)
-        .args([
-            "install",
-            &pkg.package,
-            "--prefix",
-            &install_dir.to_string_lossy(),
-            "--no-fund",
-            "--no-audit",
-        ])
+    // Bun installs optionalDependencies by default and is much faster than npm.
+    let status = Command::new(&runtime.bun)
+        .current_dir(&install_dir)
+        .args(["add", &pkg.package])
         .status()
-        .map_err(|e| format!("npm install failed to start: {e}"))?;
+        .map_err(|e| format!("bun add failed to start: {e}"))?;
     if !status.success() {
         return Err(format!(
-            "npm install {} failed with status {status}",
+            "bun add {} failed with status {status}",
             pkg.package
         ));
     }
 
+    // @openai/codex ships a ~300MB platform binary as an optionalDependency
+    // alias. Bun usually installs it; ensure it exists and fall back if needed.
+    ensure_openai_codex_platform_binary(&runtime, &install_dir, progress).await?;
+
     progress::stage(progress, "finalize", "Resolving package binary…");
     let bin_name = package_bin_name(&pkg.package);
-    let bin = find_npm_bin(&install_dir, &bin_name)?;
-    let mut command = vec![bin.to_string_lossy().into_owned()];
-    command.extend(pkg.args.iter().cloned());
+    let bin = find_package_bin(&install_dir, &pkg.package, &bin_name)?;
+    // Always launch via JS runtime + entry when possible (avoids Bun/npm shims).
+    let command = if bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("js") || e.eq_ignore_ascii_case("mjs"))
+    {
+        let mut cmd = vec![
+            crate::agent::runtime::resolve_js_runtime(),
+            bin.to_string_lossy().into_owned(),
+        ];
+        cmd.extend(pkg.args.iter().cloned());
+        crate::agent::command::augment_codex_env(&cmd)
+    } else {
+        crate::agent::command::prefer_node_entry(
+            &std::iter::once(bin.to_string_lossy().into_owned())
+                .chain(pkg.args.iter().cloned())
+                .collect::<Vec<_>>(),
+        )
+    };
 
     Ok(InstalledAgent {
         agent_id: agent.id.clone(),
@@ -340,6 +460,104 @@ async fn install_npx(
         install_path: install_dir.to_string_lossy().into_owned(),
         installed_at: now_secs(),
     })
+}
+
+fn openai_codex_platform_spec() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some("@openai/codex-win32-x64"),
+        ("windows", "aarch64") => Some("@openai/codex-win32-arm64"),
+        ("macos", "x86_64") => Some("@openai/codex-darwin-x64"),
+        ("macos", "aarch64") => Some("@openai/codex-darwin-arm64"),
+        ("linux", "x86_64") => Some("@openai/codex-linux-x64"),
+        ("linux", "aarch64") => Some("@openai/codex-linux-arm64"),
+        _ => None,
+    }
+}
+
+fn openai_codex_version(prefix: &Path) -> Option<String> {
+    let pkg_json = prefix
+        .join("node_modules")
+        .join("@openai")
+        .join("codex")
+        .join("package.json");
+    let text = fs::read_to_string(pkg_json).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value.get("version")?.as_str().map(|s| s.to_string())
+}
+
+fn openai_codex_platform_present(prefix: &Path, platform_pkg: &str) -> bool {
+    let name = platform_pkg.trim_start_matches("@openai/");
+    let candidates = [
+        prefix
+            .join("node_modules")
+            .join("@openai")
+            .join(name)
+            .join("package.json"),
+        prefix
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join(name)
+            .join("package.json"),
+    ];
+    candidates.iter().any(|p| p.is_file())
+}
+
+async fn ensure_openai_codex_platform_binary(
+    runtime: &BunRuntime,
+    install_dir: &Path,
+    progress: Option<&ProgressFn>,
+) -> Result<(), String> {
+    let codex_pkg = install_dir
+        .join("node_modules")
+        .join("@openai")
+        .join("codex")
+        .join("package.json");
+    if !codex_pkg.is_file() {
+        return Ok(());
+    }
+    let Some(platform_pkg) = openai_codex_platform_spec() else {
+        return Ok(());
+    };
+    if openai_codex_platform_present(install_dir, platform_pkg) {
+        return Ok(());
+    }
+
+    let version = openai_codex_version(install_dir)
+        .ok_or_else(|| "installed @openai/codex is missing version".to_string())?;
+    // optionalDependencies use aliases like:
+    // "@openai/codex-win32-x64": "npm:@openai/codex@0.142.5-win32-x64"
+    let suffix = platform_pkg
+        .trim_start_matches("@openai/codex-")
+        .to_string();
+    let alias_spec = format!("{platform_pkg}@npm:@openai/codex@{version}-{suffix}");
+
+    progress::stage(
+        progress,
+        "bun-optional",
+        format!("Installing Codex platform binary ({platform_pkg})…"),
+    );
+    let status = Command::new(&runtime.bun)
+        .current_dir(install_dir)
+        .args(["add", &alias_spec])
+        .status()
+        .map_err(|e| format!("bun add platform binary failed to start: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "Codex platform binary missing ({platform_pkg}). \
+             bun add {alias_spec} failed with status {status}. \
+             Retry install, or set CODEX_PATH to a local codex.exe."
+        ));
+    }
+    if !openai_codex_platform_present(install_dir, platform_pkg) {
+        return Err(format!(
+            "Codex platform binary still missing after installing {alias_spec}. \
+             Set CODEX_PATH to a local codex.exe, or reinstall from Registry."
+        ));
+    }
+    Ok(())
 }
 
 async fn install_uvx(

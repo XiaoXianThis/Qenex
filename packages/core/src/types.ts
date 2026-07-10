@@ -3,7 +3,8 @@ export type RuntimeSessionConfig = {
   threadId: string;
   agentId: string;
   cwd: string;
-  agentCommand: string[];
+  /** Optional override; empty lets Bridge resolve from agentId. */
+  agentCommand?: string[];
   agentSessionId?: string;
   shouldLoadHistory?: boolean;
 };

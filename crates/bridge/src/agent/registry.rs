@@ -41,7 +41,7 @@ pub struct RegistryAgent {
     pub distribution: Distribution,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Distribution {
     #[serde(default)]
@@ -52,7 +52,7 @@ pub struct Distribution {
     pub uvx: Option<PackageDistribution>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryTarget {
     pub archive: String,
@@ -63,7 +63,7 @@ pub struct BinaryTarget {
     pub env: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageDistribution {
     pub package: String,

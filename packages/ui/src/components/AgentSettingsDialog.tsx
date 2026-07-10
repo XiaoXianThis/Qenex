@@ -227,9 +227,13 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     if (agents.length === 0) return;
 
     const timer = window.setTimeout(() => {
+      const probeKey = (agent: {
+        id: string;
+        registryId?: string;
+        command: string[];
+      }) => commandKey([agent.registryId ?? agent.id, ...agent.command]);
       const toProbe = agents.filter((agent) => {
-        const key = commandKey(agent.command);
-        return probedCommandsRef.current[agent.id] !== key;
+        return probedCommandsRef.current[agent.id] !== probeKey(agent);
       });
       if (toProbe.length === 0) return;
 
@@ -246,18 +250,26 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
         const results = await Promise.all(
           toProbe.map(async (agent) => {
             try {
-              const result = await probeAgent(agent.command);
+              const result = await probeAgent({
+                agentId: agent.registryId ?? agent.id,
+                agentCommand:
+                  agent.command.length > 0 ? agent.command : undefined,
+              });
               const availability: AgentAvailability = result.available
                 ? { status: "available", resolved: result.resolved }
                 : {
                     status: "unavailable",
                     detail: result.detail ?? "不可用",
                   };
-              return { id: agent.id, availability, command: agent.command };
+              return {
+                id: agent.id,
+                availability,
+                key: probeKey(agent),
+              };
             } catch (error) {
               return {
                 id: agent.id,
-                command: agent.command,
+                key: probeKey(agent),
                 availability: {
                   status: "unavailable" as const,
                   detail:
@@ -274,13 +286,10 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
           const next = { ...prev };
           for (const item of results) {
             const current = agents.find((a) => a.id === item.id);
-            if (
-              !current ||
-              commandKey(current.command) !== commandKey(item.command)
-            ) {
+            if (!current || probeKey(current) !== item.key) {
               continue;
             }
-            probedCommandsRef.current[item.id] = commandKey(item.command);
+            probedCommandsRef.current[item.id] = item.key;
             next[item.id] = item.availability;
           }
           return next;
@@ -341,7 +350,8 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
         {
           id: installed.agentId,
           name: installed.name || entry.name,
-          command: installed.command,
+          // Prefer Bridge detect via registry id; keep empty override.
+          command: [],
           source: "registry",
           registryId: installed.agentId,
         },
@@ -412,8 +422,8 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
             Agent 配置
           </DialogTitle>
           <DialogDescription>
-            从官方 ACP Registry 安装适配包，或编辑本地 Agent 列表。安装产物托管在
-            ~/.qenex。
+            从官方 ACP Registry 发现 / 安装 Agent（原生或适配层）。Bridge 会自动探测本机
+            PATH 与 ~/.qenex；高级 JSON 仅作命令兜底。
           </DialogDescription>
         </DialogHeader>
 
@@ -485,6 +495,22 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                   {registryAgents.map((entry) => {
                     const busy = busyIds[entry.id];
                     const installed = Boolean(entry.installed);
+                    const readiness = entry.readiness ?? "install";
+                    const ready = readiness === "ready";
+                    const needAdapter = readiness === "needAdapter";
+                    const canInstall =
+                      entry.installable &&
+                      (needAdapter ||
+                        readiness === "install" ||
+                        entry.updateAvailable ||
+                        installed);
+                    const installLabel = entry.updateAvailable
+                      ? "更新"
+                      : needAdapter
+                        ? "安装适配层"
+                        : installed
+                          ? "重装"
+                          : "安装";
                     return (
                       <li
                         key={entry.id}
@@ -508,12 +534,27 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                               <span className="text-[10px] text-muted-foreground">
                                 v{entry.version}
                               </span>
-                              {installed ? (
+                              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {entry.distributionClass === "adapter"
+                                  ? "适配层"
+                                  : "原生"}
+                              </span>
+                              {ready ? (
                                 <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
-                                  已安装
+                                  可用
                                   {entry.installed
                                     ? ` ${entry.installed.version}`
                                     : ""}
+                                </span>
+                              ) : null}
+                              {needAdapter ? (
+                                <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-700 dark:text-sky-400">
+                                  需适配层
+                                </span>
+                              ) : null}
+                              {readiness === "install" ? (
+                                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  未安装
                                 </span>
                               ) : null}
                               {entry.updateAvailable ? (
@@ -521,18 +562,24 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                   可更新
                                 </span>
                               ) : null}
-                              {!entry.installable ? (
+                              {readiness === "unavailable" ? (
                                 <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                  当前平台不可装
+                                  不可用
                                 </span>
                               ) : null}
                             </div>
                             <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                               {entry.description}
                             </p>
-                            {entry.preferredKind ? (
+                            {entry.distributionClass === "adapter" ? (
                               <p className="mt-1 text-[10px] text-muted-foreground">
-                                分发：{entry.preferredKind}
+                                ACP 适配器；通常需要本机已登录 / 已有底层
+                                Claude 或 Codex
+                              </p>
+                            ) : null}
+                            {entry.detail ? (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                {entry.detail}
                               </p>
                             ) : null}
                             {busy === "install" && progressById[entry.id] ? (
@@ -542,11 +589,13 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                             ) : null}
                           </div>
                           <div className="flex shrink-0 flex-col gap-1">
-                            {entry.installable ? (
+                            {canInstall ? (
                               <Button
                                 type="button"
                                 size="sm"
-                                variant={installed ? "outline" : "default"}
+                                variant={
+                                  ready || installed ? "outline" : "default"
+                                }
                                 className="h-7 gap-1 px-2 text-xs"
                                 disabled={Boolean(busy)}
                                 onClick={() => void handleInstall(entry)}
@@ -556,11 +605,7 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                 ) : (
                                   <Download className="size-3.5" />
                                 )}
-                                {installed
-                                  ? entry.updateAvailable
-                                    ? "更新"
-                                    : "重装"
-                                  : "安装"}
+                                {installLabel}
                               </Button>
                             ) : null}
                             {installed ? (

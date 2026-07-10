@@ -216,8 +216,8 @@ Tab 栏组件：
 前端已编译成功，运行：
 
 ```bash
-npm run build
-npm run preview  # 或 npm run dev
+bun run build
+bun run preview  # 或 bun run dev
 ```
 
 后端：

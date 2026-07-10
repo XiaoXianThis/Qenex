@@ -51,7 +51,7 @@ function sessionsFromTabs(
     taskId: string;
     agentId: string;
     cwd: string;
-    agentCommand: string[];
+    agentCommand?: string[];
     agentSessionId?: string;
     needsHistoryLoad?: boolean;
   }>,
@@ -63,7 +63,10 @@ function sessionsFromTabs(
       threadId: tab.taskId,
       agentId: tab.agentId,
       cwd: tab.cwd,
-      agentCommand: tab.agentCommand,
+      agentCommand:
+        tab.agentCommand && tab.agentCommand.length > 0
+          ? tab.agentCommand
+          : undefined,
       agentSessionId: tab.agentSessionId,
       shouldLoadHistory: tab.needsHistoryLoad === true,
     }));

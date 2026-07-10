@@ -27,34 +27,44 @@
 
 ## Agent 与 Registry
 
-打开界面右上角 **Agent 设置**，可从官方 [ACP Agent Registry](https://agentclientprotocol.com/rfds/acp-agent-registry) 一键安装适配包（binary / npm）。
+打开界面右上角 **Agent 设置**，可从官方 [ACP Agent Registry](https://agentclientprotocol.com/rfds/acp-agent-registry) **发现本机已有 Agent**，或一键安装缺口（原生 binary / ACP 适配层）。
+
+### 发现优先
+
+Bridge 在启动会话与 Registry 列表中会：
+
+1. 用 PATH / 厂商目录探测（如 `opencode`、`kiro-cli`、`codex`）
+2. 校验 `~/.qenex` 托管安装是否仍可启动（自动跳过失效的旧 `.cmd` 路径）
+3. 算出状态：`ready` / `needAdapter` / `install` / `unavailable`
+
+「下载即可用」——安装只补缺口；JSON 配置里的 `command` 仅作高级覆盖。会话创建时传 `agentId`，由 Bridge **运行时解析**启动命令，避免 Tab 快照写下死路径。
 
 安装产物托管在本机：
 
 ```text
 ~/.qenex/
-  runtime/node/     # 若系统无 Node ≥18，自动下载托管运行时
+  runtime/bun/      # 若系统无 Bun，自动下载托管运行时
   agents/<id>/<ver>/
   installed.json
   registry-cache.json
 ```
 
-安装成功后，Agent 命令会写成托管目录下的绝对路径，不再依赖全局 `npx`。也可在「高级 JSON」中自定义 `agentCommand`。
+Registry UI 会标注 **原生**（binary）与 **适配层**（如 Claude/Codex ACP），以及「可用 / 需适配层 / 未安装 / 可更新」。
 
-内置快捷预设（未安装时仍可编辑；Claude / Codex 建议从 Registry 安装）：
+内置快捷预设：
 
-| Agent | 默认命令（未安装） |
-|-------|-------------------|
-| OpenCode | `opencode acp` |
-| Kiro | `kiro-cli acp` |
-| Claude | `npx -y @agentclientprotocol/claude-agent-acp` |
-| Codex | `npx -y @agentclientprotocol/codex-acp` |
+| Agent | 行为 |
+|-------|------|
+| OpenCode | 探测 `opencode acp`；也可从 Registry 安装 |
+| Kiro | 探测 `kiro-cli acp` |
+| Claude | 适配层 `claude-acp`；需从 Registry 安装（或本机已有） |
+| Codex | 适配层 `codex-acp`；本机有 Codex CLI 时仅需装适配层 |
 
-相关 API：`GET /v2/agents/registry`、`POST /v2/agents/install`、`DELETE /v2/agents/install/{id}`、`POST /v2/agents/probe`。Bridge 进程默认启动命令仍由 `bridge.config.json` 的 `agentCommand` 决定。
+相关 API：`GET /v2/agents/registry`（含 `readiness`）、`POST /v2/agents/install`、`DELETE /v2/agents/install/{id}`、`POST /v2/agents/probe`（可带 `agentId`）。`bridge.config.json` 的 `agentCommand` 仅在未传 `agentId`/`agentCommand` 时作为最后兜底。
 
 ## 快速开始
 
-**环境**：Rust 1.75+、[Bun](https://bun.sh)（或 Node 18+）。npm 类 Agent 可从设置内安装；系统无 Node 时 Bridge 会下载托管运行时。
+**环境**：Rust 1.75+、[Bun](https://bun.sh)。Registry 中的 npm 类 Agent 用 Bun 安装；系统无 Bun 时 Bridge 会下载托管运行时。
 
 ```bash
 bun install

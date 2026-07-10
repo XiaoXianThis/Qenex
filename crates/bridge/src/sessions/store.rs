@@ -52,12 +52,18 @@ impl SessionStore {
                 title TEXT NOT NULL DEFAULT 'New Task',
                 status TEXT NOT NULL DEFAULT 'idle',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                agent_id TEXT
             )
             "#,
         )
         .execute(&pool)
         .await?;
+
+        // Best-effort migration for DBs created before agent_id existed.
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN agent_id TEXT")
+            .execute(&pool)
+            .await;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)")
             .execute(&pool)
@@ -112,18 +118,20 @@ impl SessionStore {
         agent_session_id: &str,
         cwd: &str,
         title: &str,
+        agent_id: Option<&str>,
     ) -> Result<TaskSummary, StoreError> {
         let pool = self.pool()?;
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             r#"
-            INSERT INTO tasks (task_id, agent_session_id, cwd, title, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'idle', ?, ?)
+            INSERT INTO tasks (task_id, agent_session_id, cwd, title, status, created_at, updated_at, agent_id)
+            VALUES (?, ?, ?, ?, 'idle', ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 agent_session_id = excluded.agent_session_id,
                 cwd = excluded.cwd,
                 title = excluded.title,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                agent_id = COALESCE(excluded.agent_id, tasks.agent_id)
             "#,
         )
         .bind(task_id)
@@ -132,6 +140,7 @@ impl SessionStore {
         .bind(title)
         .bind(&now)
         .bind(&now)
+        .bind(agent_id)
         .execute(pool)
         .await?;
 
@@ -143,13 +152,14 @@ impl SessionStore {
             status: "idle".to_string(),
             created_at: now.clone(),
             updated_at: now,
+            agent_id: agent_id.map(|s| s.to_string()),
         })
     }
 
     pub async fn get(&self, task_id: &str) -> Result<Option<TaskSummary>, StoreError> {
         let pool = self.pool()?;
         let row = sqlx::query(
-            "SELECT task_id, agent_session_id, cwd, title, status, created_at, updated_at FROM tasks WHERE task_id = ?",
+            "SELECT task_id, agent_session_id, cwd, title, status, created_at, updated_at, agent_id FROM tasks WHERE task_id = ?",
         )
         .bind(task_id)
         .fetch_optional(pool)
@@ -161,7 +171,7 @@ impl SessionStore {
     pub async fn list_all(&self) -> Result<Vec<TaskSummary>, StoreError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT task_id, agent_session_id, cwd, title, status, created_at, updated_at FROM tasks ORDER BY updated_at DESC",
+            "SELECT task_id, agent_session_id, cwd, title, status, created_at, updated_at, agent_id FROM tasks ORDER BY updated_at DESC",
         )
         .fetch_all(pool)
         .await?;
@@ -327,5 +337,6 @@ fn row_to_summary(row: &sqlx::sqlite::SqliteRow) -> TaskSummary {
         status: row.get("status"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        agent_id: row.try_get("agent_id").ok().flatten(),
     }
 }

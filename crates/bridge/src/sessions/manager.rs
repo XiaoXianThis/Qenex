@@ -133,6 +133,7 @@ impl SessionManager {
         model: Option<&str>,
         mcp_servers: Option<Value>,
         agent_command: Option<Vec<String>>,
+        agent_id: Option<String>,
     ) -> Result<ActiveSession, ManagerError> {
         if self.demo_mode {
             let agent_session_id = format!("stub-{}", &Uuid::new_v4().to_string()[..8]);
@@ -140,7 +141,13 @@ impl SessionManager {
             self.store
                 .lock()
                 .await
-                .create(task_id, &agent_session_id, cwd, title)
+                .create(
+                    task_id,
+                    &agent_session_id,
+                    cwd,
+                    title,
+                    agent_id.as_deref(),
+                )
                 .await?;
             return Ok(ActiveSession {
                 task_id: task_id.to_string(),
@@ -157,7 +164,19 @@ impl SessionManager {
             });
         }
 
-        let command = agent_command.unwrap_or_else(|| self.default_agent_command.clone());
+        let command = crate::agent::detect::resolve_launch_command(
+            agent_id.as_deref(),
+            agent_command.as_deref(),
+        )
+        .or_else(|err| {
+            // Last-resort fallback for callers that still omit agentId (legacy).
+            if agent_id.is_none() && agent_command.is_none() {
+                Ok(self.default_agent_command.clone())
+            } else {
+                Err(err)
+            }
+        })
+        .map_err(ManagerError::Agent)?;
         let permissions = PermissionRegistry::new();
         let bridge = shared_bridge(
             task_id,
@@ -271,7 +290,13 @@ impl SessionManager {
         self.store
             .lock()
             .await
-            .create(task_id, &snapshot.agent_session_id, cwd, title)
+            .create(
+                task_id,
+                &snapshot.agent_session_id,
+                cwd,
+                title,
+                agent_id.as_deref(),
+            )
             .await?;
 
         Ok(snapshot)
@@ -590,6 +615,7 @@ impl SessionManager {
         model: Option<&str>,
         mcp_servers: Option<Value>,
         agent_command: Option<Vec<String>>,
+        agent_id: Option<String>,
     ) -> Result<ActiveSession, ManagerError> {
         if self.has_session(task_id).await {
             let sessions = self.sessions.lock().await;
@@ -625,11 +651,17 @@ impl SessionManager {
             .map(|t| t.title.as_str())
             .unwrap_or(title);
         let effective_cwd = stored_task.as_ref().map(|t| t.cwd.as_str()).unwrap_or(cwd);
+        let effective_agent_id = agent_id.or_else(|| {
+            stored_task
+                .as_ref()
+                .and_then(|t| t.agent_id.clone())
+        });
 
         if stored_task.is_some() {
             tracing::info!(
                 task_id,
                 resume_session_id = effective_resume.as_deref(),
+                agent_id = effective_agent_id.as_deref(),
                 "rehydrating task from persistent store"
             );
         }
@@ -643,6 +675,7 @@ impl SessionManager {
             model,
             mcp_servers,
             agent_command,
+            effective_agent_id,
         )
         .await
     }
@@ -721,6 +754,7 @@ impl SessionManager {
             None,
             None,
             None,
+            stored.agent_id.clone(),
         )
         .await?;
 

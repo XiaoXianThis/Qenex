@@ -16,6 +16,26 @@ import {
 
 export const AGENTS_PERSIST_KEY = "agent-center-agents";
 
+function scrubLegacyBunxCommands(config: AgentsConfigDocument): AgentsConfigDocument {
+  // Migrate old builtin bunx/npx presets to detect-first empty commands.
+  const agents = config.agents.map((agent) => {
+    const first = agent.command[0];
+    const isLegacyLauncher = first === "bunx" || first === "npx";
+    const isAdapterPreset =
+      agent.registryId === "claude-acp" ||
+      agent.registryId === "codex-acp" ||
+      agent.id === "claude" ||
+      agent.id === "codex" ||
+      agent.id === "claude-acp" ||
+      agent.id === "codex-acp";
+    if (isLegacyLauncher && isAdapterPreset) {
+      return { ...agent, command: [] as string[] };
+    }
+    return agent;
+  });
+  return { ...config, agents };
+}
+
 export type AgentsState = {
   version: 1;
   defaultAgentId: string;
@@ -154,7 +174,7 @@ export async function hydrateAgentsStore(): Promise<void> {
         );
         return cloneAgentsConfig();
       }
-      return validated.config;
+      return scrubLegacyBunxCommands(validated.config);
     },
   });
 
@@ -166,7 +186,7 @@ export async function hydrateAgentsStore(): Promise<void> {
     if (!validated.ok) {
       applyConfig(cloneAgentsConfig());
     } else {
-      applyConfig(validated.config);
+      applyConfig(scrubLegacyBunxCommands(validated.config));
     }
   }
 }

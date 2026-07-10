@@ -1,100 +1,57 @@
-//! Managed Node.js runtime for npm-based ACP agents.
+//! Managed Bun runtime for npm-registry ACP agents.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::agent::download::download_file_with_progress;
-use crate::agent::paths::{ensure_qenex_dirs, runtime_node_dir};
+use crate::agent::paths::{ensure_qenex_dirs, runtime_bun_dir};
 use crate::agent::progress::{self, ProgressFn};
 
-const MANAGED_NODE_VERSION: &str = "22.17.0";
+const MANAGED_BUN_VERSION: &str = "1.3.14";
 
-pub struct NodeRuntime {
-    pub node: PathBuf,
-    pub npm: PathBuf,
+pub struct BunRuntime {
+    pub bun: PathBuf,
     pub managed: bool,
 }
 
-fn node_bin_name() -> &'static str {
+fn bun_bin_name() -> &'static str {
     if cfg!(windows) {
-        "node.exe"
+        "bun.exe"
     } else {
-        "node"
+        "bun"
     }
 }
 
-fn npm_bin_name() -> &'static str {
-    if cfg!(windows) {
-        "npm.cmd"
-    } else {
-        "npm"
-    }
+fn probe_bun(bun: &Path) -> bool {
+    let output = Command::new(bun).arg("--version").output();
+    matches!(output, Ok(o) if o.status.success())
 }
 
-fn parse_major(version: &str) -> Option<u32> {
-    let cleaned = version.trim().trim_start_matches('v');
-    cleaned.split('.').next()?.parse().ok()
-}
-
-fn probe_node(node: &Path) -> Option<u32> {
-    let output = Command::new(node).arg("-v").output().ok()?;
-    if !output.status.success() {
+fn system_bun() -> Option<BunRuntime> {
+    let bun = which::which("bun").ok()?;
+    if !probe_bun(&bun) {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    parse_major(&text)
-}
-
-fn system_node() -> Option<NodeRuntime> {
-    let node = which::which("node").ok()?;
-    let major = probe_node(&node)?;
-    if major < 18 {
-        return None;
-    }
-    let npm = which::which("npm")
-        .ok()
-        .or_else(|| {
-            node.parent().map(|p| {
-                if cfg!(windows) {
-                    p.join("npm.cmd")
-                } else {
-                    p.join("npm")
-                }
-            })
-        })
-        .filter(|p| p.is_file())?;
-    Some(NodeRuntime {
-        node,
-        npm,
+    Some(BunRuntime {
+        bun,
         managed: false,
     })
 }
 
-fn managed_node_paths() -> Option<NodeRuntime> {
-    let root = runtime_node_dir();
-    // Official Windows zip extracts flat; unix tarballs use `bin/`.
+fn managed_bun_paths() -> Option<BunRuntime> {
+    let root = runtime_bun_dir();
     let candidates = [
-        root.join(node_bin_name()),
-        root.join("bin").join(node_bin_name()),
+        root.join(bun_bin_name()),
+        root.join("bun").join(bun_bin_name()),
+        root.join("bin").join(bun_bin_name()),
     ];
-    let node = candidates.into_iter().find(|p| p.is_file())?;
-    let npm = {
-        let dir = node.parent()?;
-        let npm = dir.join(npm_bin_name());
-        if npm.is_file() {
-            npm
-        } else {
-            return None;
-        }
-    };
-    let major = probe_node(&node)?;
-    if major < 18 {
+    let bun = candidates.into_iter().find(|p| p.is_file())?;
+    if !probe_bun(&bun) {
         return None;
     }
-    Some(NodeRuntime {
-        node,
-        npm,
+    Some(BunRuntime {
+        bun,
         managed: true,
     })
 }
@@ -103,27 +60,22 @@ fn platform_archive_name() -> Result<&'static str, String> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     match (os, arch) {
-        ("windows", "x86_64") => Ok("win-x64"),
-        ("windows", "aarch64") => Ok("win-arm64"),
+        ("windows", "x86_64") => Ok("windows-x64"),
+        ("windows", "aarch64") => Ok("windows-x64"), // Bun ships x64 build for Windows ARM via emulation
         ("macos", "x86_64") => Ok("darwin-x64"),
-        ("macos", "aarch64") => Ok("darwin-arm64"),
+        ("macos", "aarch64") => Ok("darwin-aarch64"),
         ("linux", "x86_64") => Ok("linux-x64"),
-        ("linux", "aarch64") => Ok("linux-arm64"),
-        _ => Err(format!("unsupported platform for managed Node: {os}-{arch}")),
+        ("linux", "aarch64") => Ok("linux-aarch64"),
+        _ => Err(format!("unsupported platform for managed Bun: {os}-{arch}")),
     }
 }
 
 fn download_urls(platform: &str) -> Vec<String> {
-    let ver = MANAGED_NODE_VERSION;
-    let ext = if platform.starts_with("win-") {
-        "zip"
-    } else {
-        "tar.gz"
-    };
-    let file = format!("node-v{ver}-{platform}.{ext}");
+    let ver = MANAGED_BUN_VERSION;
+    let file = format!("bun-{platform}.zip");
     vec![
-        format!("https://npmmirror.com/mirrors/node/v{ver}/{file}"),
-        format!("https://nodejs.org/dist/v{ver}/{file}"),
+        format!("https://npmmirror.com/mirrors/bun/bun-v{ver}/{file}"),
+        format!("https://github.com/oven-sh/bun/releases/download/bun-v{ver}/{file}"),
     ]
 }
 
@@ -132,7 +84,7 @@ async fn download_to_file(
     dest: &Path,
     progress: Option<&ProgressFn>,
 ) -> Result<(), String> {
-    download_file_with_progress(url, dest, progress, "Downloading Node.js runtime").await
+    download_file_with_progress(url, dest, progress, "Downloading Bun runtime").await
 }
 
 fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
@@ -153,21 +105,20 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
             }
             let mut outfile = fs::File::create(&out).map_err(|e| e.to_string())?;
             std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if entry.unix_mode().unwrap_or(0) & 0o111 != 0 {
+                    let _ = fs::set_permissions(&out, fs::Permissions::from_mode(0o755));
+                }
+            }
         }
     }
     Ok(())
 }
 
-fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<(), String> {
-    let file = fs::File::open(archive).map_err(|e| e.to_string())?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-    archive.unpack(dest).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn flatten_extracted_node(extract_root: &Path, dest: &Path) -> Result<(), String> {
-    // Archives contain a single top-level `node-vX-platform/` directory.
+fn flatten_extracted_bun(extract_root: &Path, dest: &Path) -> Result<(), String> {
+    // Archives contain a top-level `bun-<platform>/bun(.exe)` directory.
     let entries: Vec<_> = fs::read_dir(extract_root)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
@@ -181,11 +132,24 @@ fn flatten_extracted_node(extract_root: &Path, dest: &Path) -> Result<(), String
     if dest.exists() {
         fs::remove_dir_all(dest).map_err(|e| e.to_string())?;
     }
-    fs::create_dir_all(dest.parent().unwrap_or(dest)).map_err(|e| e.to_string())?;
-    // Prefer rename; fall back to copy on cross-device.
-    if fs::rename(&source, dest).is_err() {
-        copy_dir_recursive(&source, dest)?;
-        let _ = fs::remove_dir_all(&source);
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+
+    // Copy bun binary (and any sibling files) into dest root.
+    for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let target = dest.join(entry.file_name());
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if entry.file_name() == *"bun" {
+                    let _ = fs::set_permissions(&target, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -205,26 +169,22 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn install_managed_node(progress: Option<&ProgressFn>) -> Result<NodeRuntime, String> {
+async fn install_managed_bun(progress: Option<&ProgressFn>) -> Result<BunRuntime, String> {
     ensure_qenex_dirs()?;
     let platform = platform_archive_name()?;
     let urls = download_urls(platform);
-    let tmp_dir = runtime_node_dir()
+    let tmp_dir = runtime_bun_dir()
         .parent()
-        .unwrap_or(&runtime_node_dir())
+        .unwrap_or(&runtime_bun_dir())
         .join("tmp");
     fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
-    let archive_name = urls[0]
-        .rsplit('/')
-        .next()
-        .unwrap_or("node-archive")
-        .to_string();
+    let archive_name = format!("bun-{platform}.zip");
     let archive_path = tmp_dir.join(&archive_name);
 
     progress::stage(
         progress,
         "runtime-download",
-        format!("Downloading managed Node.js v{MANAGED_NODE_VERSION}…"),
+        format!("Downloading managed Bun v{MANAGED_BUN_VERSION}…"),
     );
 
     let mut last_err = String::from("no download URL tried");
@@ -241,40 +201,54 @@ async fn install_managed_node(progress: Option<&ProgressFn>) -> Result<NodeRunti
         return Err(last_err);
     }
 
-    progress::stage(progress, "runtime-extract", "Extracting Node.js runtime…");
+    progress::stage(progress, "runtime-extract", "Extracting Bun runtime…");
     let extract_root = tmp_dir.join("extract");
     if extract_root.exists() {
         fs::remove_dir_all(&extract_root).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(&extract_root).map_err(|e| e.to_string())?;
+    extract_zip(&archive_path, &extract_root)?;
 
-    if archive_name.ends_with(".zip") {
-        extract_zip(&archive_path, &extract_root)?;
-    } else {
-        extract_tar_gz(&archive_path, &extract_root)?;
-    }
-
-    let dest = runtime_node_dir();
-    flatten_extracted_node(&extract_root, &dest)?;
+    let dest = runtime_bun_dir();
+    flatten_extracted_bun(&extract_root, &dest)?;
     let _ = fs::remove_dir_all(&tmp_dir);
 
-    managed_node_paths().ok_or_else(|| {
+    managed_bun_paths().ok_or_else(|| {
         format!(
-            "managed Node installed at {} but node/npm binaries were not found",
+            "managed Bun installed at {} but bun binary was not found",
             dest.display()
         )
     })
 }
 
-/// Resolve a usable Node ≥18: prefer system, else managed install.
-pub async fn ensure_node_runtime(progress: Option<&ProgressFn>) -> Result<NodeRuntime, String> {
-    if let Some(rt) = system_node() {
-        progress::stage(progress, "runtime", "Using system Node.js");
+/// Resolve a usable Bun: prefer system, else managed install.
+pub async fn ensure_bun_runtime(progress: Option<&ProgressFn>) -> Result<BunRuntime, String> {
+    if let Some(rt) = system_bun() {
+        progress::stage(progress, "runtime", "Using system Bun");
         return Ok(rt);
     }
-    if let Some(rt) = managed_node_paths() {
-        progress::stage(progress, "runtime", "Using managed Node.js");
+    if let Some(rt) = managed_bun_paths() {
+        progress::stage(progress, "runtime", "Using managed Bun");
         return Ok(rt);
     }
-    install_managed_node(progress).await
+    install_managed_bun(progress).await
+}
+
+/// Resolve a JS runtime binary for launching package entrypoints.
+/// Prefer Bun, fall back to Node.
+pub fn resolve_js_runtime() -> String {
+    which::which("bun")
+        .or_else(|_| {
+            let managed = runtime_bun_dir().join(bun_bin_name());
+            if managed.is_file() {
+                Ok(managed)
+            } else {
+                Err(which::Error::CannotFindBinaryPath)
+            }
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|_| {
+            which::which("node").map(|p| p.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|_| "bun".into())
 }

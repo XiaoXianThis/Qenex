@@ -6,7 +6,10 @@ import {
   hydrateValtioStore,
   subscribeValtioPersist,
 } from "../lib/valtio-persist.ts";
-import { DEFAULT_AGENT_ID } from "../config/agents.ts";
+import {
+  DEFAULT_AGENT_ID,
+  agentCommandOverride,
+} from "../config/agents.ts";
 import { getAgentPreset } from "./agents-store.ts";
 
 export const TABS_PERSIST_KEY = "agent-center-tabs";
@@ -19,6 +22,7 @@ export type SessionTab = {
   agentSessionId?: string;
   title: string;
   agentId: string;
+  /** Optional override snapshot; empty means Bridge resolves via agentId. */
   agentCommand: string[];
   cwd: string;
   createdAt: number;
@@ -95,13 +99,15 @@ export const tabsActions = {
   createTab(config: { agentId: string; cwd: string; title?: string }) {
     const now = Date.now();
     const activeTabs = tabsStore.tabs.filter((t) => t.status === "active");
+    const preset = getAgentPreset(config.agentId);
 
     const newTab: SessionTab = {
       id: crypto.randomUUID(),
       taskId: crypto.randomUUID(),
       title: config.title || "新会话",
-      agentId: config.agentId,
-      agentCommand: getAgentPreset(config.agentId).command,
+      agentId: preset.registryId ?? preset.id,
+      // Only persist explicit overrides; detect-first presets keep this empty.
+      agentCommand: agentCommandOverride(preset.command) ?? [],
       cwd: config.cwd,
       createdAt: now,
       lastActiveAt: now,
