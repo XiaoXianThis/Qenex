@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientRequest, ContentBlock, CreateTerminalResponse, ExtRequest,
-    Implementation, InitializeRequest, KillTerminalResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionId, SessionNotification, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    TerminalExitStatus, TerminalOutputResponse, WaitForTerminalExitResponse,
-    WriteTextFileRequest, WriteTextFileResponse,
+    AuthenticateRequest, CancelNotification, ClientRequest, ContentBlock,
+    CreateTerminalResponse, ExtRequest, Implementation, InitializeRequest,
+    KillTerminalResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
+    ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionId, SessionNotification, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, TerminalExitStatus, TerminalOutputResponse,
+    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo, Responder};
 use serde_json::value::RawValue;
@@ -22,6 +22,9 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::auth::{
+    auth_methods_info, looks_like_auth_error, pick_auth_method_id, AuthRequiredPayload,
+};
 use super::command::{prefer_node_entry, resolve_agent_command};
 use super::session_init::{
     canonicalize_cwd, current_mode_id, modes_to_json, parse_config_options, parse_mcp_servers,
@@ -135,6 +138,8 @@ pub enum SpawnError {
     Agent(String),
     #[error("initialization failed: {0}")]
     Init(String),
+    #[error("authentication required")]
+    AuthRequired(AuthRequiredPayload),
     #[error("agent task ended unexpectedly")]
     TaskEnded,
 }
@@ -230,7 +235,7 @@ impl AgentConnection {
         }
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<AgentCommand>(32);
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<AgentInitResult, String>>();
+        let (ready_tx, ready_rx) = oneshot::channel::<Result<AgentInitResult, SpawnError>>();
         let (pid_tx, pid_rx) = oneshot::channel::<u32>();
 
         let bridge_bg = bridge.clone();
@@ -261,8 +266,7 @@ impl AgentConnection {
                     "agent task ended unexpectedly (process exited before ACP initialize; check agent logs / auth)"
                         .into(),
                 )
-            })?
-            .map_err(SpawnError::Init)?;
+            })??;
 
         let child_pid = pid_rx.await.ok();
 
@@ -598,7 +602,7 @@ async fn run_agent_connection(
     init: SessionInitParams,
     bridge: SharedBridge,
     mut cmd_rx: mpsc::Receiver<AgentCommand>,
-    ready_tx: oneshot::Sender<Result<AgentInitResult, String>>,
+    ready_tx: oneshot::Sender<Result<AgentInitResult, SpawnError>>,
     pid_tx: oneshot::Sender<u32>,
 ) -> Result<(), agent_client_protocol::Error> {
     let agent = AcpAgent::from_args(command.iter().map(|s| s.as_str()))
@@ -753,16 +757,62 @@ async fn run_agent_connection(
                 .block_task()
                 .await?;
 
-            tracing::info!(
-                "ACP connected → {:?}",
-                init_response.agent_info.as_ref().map(|a| &a.name)
-            );
+            let agent_name = init_response
+                .agent_info
+                .as_ref()
+                .map(|a| a.name.clone());
+            tracing::info!("ACP connected → {:?}", agent_name);
+
+            // ACP auth handshake: when the agent advertises authMethods, call
+            // authenticate() before session/new (required by Cursor, etc.).
+            if !init_response.auth_methods.is_empty() {
+                let methods = auth_methods_info(&init_response.auth_methods);
+                let Some(method_id) = pick_auth_method_id(&init_response.auth_methods) else {
+                    let _ = ready_tx.send(Err(SpawnError::AuthRequired(AuthRequiredPayload::new(
+                        "Agent requires authentication but advertised no usable method",
+                        methods,
+                        agent_name.clone(),
+                    ))));
+                    return Ok(());
+                };
+                tracing::info!(method_id = %method_id, "ACP authenticate");
+                match connection
+                    .send_request(AuthenticateRequest::new(method_id.clone()))
+                    .block_task()
+                    .await
+                {
+                    Ok(_) => {
+                        tracing::info!(method_id = %method_id, "ACP authenticate succeeded");
+                    }
+                    Err(e) => {
+                        let detail = e.to_string();
+                        tracing::warn!(error = %detail, "ACP authenticate failed");
+                        let _ = ready_tx.send(Err(SpawnError::AuthRequired(
+                            AuthRequiredPayload::new(detail, methods, agent_name.clone()),
+                        )));
+                        return Ok(());
+                    }
+                }
+            }
 
             let session_init = init_session(&connection, &init).await;
             let session_init = match session_init {
                 Ok(s) => s,
                 Err(e) => {
-                    let _ = ready_tx.send(Err(e));
+                    // session/new may still fail with auth_required if authenticate
+                    // was skipped (empty authMethods) or credentials are stale.
+                    if looks_like_auth_error(&e) {
+                        let methods = if init_response.auth_methods.is_empty() {
+                            Vec::new()
+                        } else {
+                            auth_methods_info(&init_response.auth_methods)
+                        };
+                        let _ = ready_tx.send(Err(SpawnError::AuthRequired(
+                            AuthRequiredPayload::new(e, methods, agent_name.clone()),
+                        )));
+                    } else {
+                        let _ = ready_tx.send(Err(SpawnError::Init(e)));
+                    }
                     return Ok(());
                 }
             };

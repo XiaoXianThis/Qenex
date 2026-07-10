@@ -1,10 +1,16 @@
 export * from "./config/agents.ts";
 export * from "./context/HostContext.tsx";
 export * from "./context/SessionConfigContext.tsx";
-export { getAguiUrl, resolveAguiUrl } from "./lib/bridge-client.ts";
+export { getAguiUrl, resolveAguiUrl, BridgeApiError, isAuthRequiredError } from "./lib/bridge-client.ts";
+export type {
+  AuthMethodInfo as BridgeAuthMethodInfo,
+  AuthRequiredPayload,
+  BridgeErrorBody,
+} from "./lib/bridge-client.ts";
 export * from "./lib/bridge-agent.ts";
 export * from "./lib/bridge-api.ts";
 export * from "./lib/bridge-history-adapter.ts";
+export * from "./lib/composer-attachments.ts";
 export * from "./lib/replay-agui-events.ts";
 export * from "./lib/session-config.ts";
 export * from "./lib/utils.ts";

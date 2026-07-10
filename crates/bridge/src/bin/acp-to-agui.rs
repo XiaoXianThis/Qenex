@@ -27,6 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(&cli.config);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.backend_port));
 
+    // GUI / IDE hosts often have a thin PATH; merge login-shell + common bins.
+    acp_to_agui::agent::path_env::apply_augmented_path();
+
     let state = build_state(config.clone()).await?;
     let manager = state.session_manager.clone();
     let store = state.session_store.clone();

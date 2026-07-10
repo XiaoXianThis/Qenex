@@ -561,13 +561,82 @@ async fn ensure_openai_codex_platform_binary(
 }
 
 async fn install_uvx(
-    _agent: &RegistryAgent,
-    _pkg: &PackageDistribution,
+    agent: &RegistryAgent,
+    pkg: &PackageDistribution,
+    progress: Option<&ProgressFn>,
 ) -> Result<InstalledAgent, String> {
-    Err(
-        "uvx-based agents are not supported yet; install the agent manually or pick a binary/npx distribution"
-            .into(),
-    )
+    let runtime = crate::agent::uv_runtime::ensure_uv_runtime(progress).await?;
+    let install_dir = agent_version_dir(&agent.id, &agent.version);
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+
+    // Isolate tool binaries under the version directory.
+    let tools_bin = install_dir.join("bin");
+    fs::create_dir_all(&tools_bin).map_err(|e| e.to_string())?;
+
+    progress::stage(
+        progress,
+        "uv",
+        format!("uv tool install {}…", pkg.package),
+    );
+
+    let status = Command::new(&runtime.uv)
+        .env("UV_TOOL_BIN_DIR", &tools_bin)
+        .args([
+            "tool",
+            "install",
+            "--force",
+            &pkg.package,
+        ])
+        .status()
+        .map_err(|e| format!("uv tool install failed to start: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "uv tool install {} failed with status {status}",
+            pkg.package
+        ));
+    }
+
+    progress::stage(progress, "finalize", "Resolving uv tool binary…");
+    let bin_name = package_bin_name(&pkg.package);
+    let bin = find_uv_tool_bin(&tools_bin, &bin_name)
+        .or_else(|| find_uv_tool_bin(&tools_bin, &agent.id))
+        .ok_or_else(|| {
+            format!(
+                "uv tool install succeeded but binary '{}' was not found under {}",
+                bin_name,
+                tools_bin.display()
+            )
+        })?;
+
+    let mut command = vec![bin.to_string_lossy().into_owned()];
+    command.extend(pkg.args.iter().cloned());
+
+    Ok(InstalledAgent {
+        agent_id: agent.id.clone(),
+        name: agent.name.clone(),
+        version: agent.version.clone(),
+        kind: InstallKind::Uvx,
+        command,
+        env: pkg.env.clone(),
+        install_path: install_dir.to_string_lossy().into_owned(),
+        installed_at: now_secs(),
+    })
+}
+
+fn find_uv_tool_bin(bin_dir: &Path, name: &str) -> Option<PathBuf> {
+    let candidates = if cfg!(windows) {
+        vec![
+            bin_dir.join(format!("{name}.exe")),
+            bin_dir.join(name),
+            bin_dir.join(format!("{name}.cmd")),
+        ]
+    } else {
+        vec![bin_dir.join(name)]
+    };
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 pub async fn install_agent(agent_id: &str) -> Result<InstalledAgent, String> {
@@ -608,7 +677,7 @@ pub async fn install_agent_with_progress(
                 .package
                 .as_ref()
                 .ok_or_else(|| "missing uvx package".to_string())?;
-            install_uvx(&agent, pkg).await?
+            install_uvx(&agent, pkg, progress).await?
         }
     };
 

@@ -39,12 +39,15 @@ export type TabsState = {
   tabs: SessionTab[];
   activeTabId: string | null;
   preferredAgentId: string;
+  /** 新建按钮下拉「选项仅切换」：只改偏好、不自动创建；默认 false（选中即创建） */
+  skipCreateOnAgentPick: boolean;
 };
 
 export const tabsStore = proxy<TabsState>({
   tabs: [],
   activeTabId: null,
   preferredAgentId: DEFAULT_AGENT_ID,
+  skipCreateOnAgentPick: false,
 });
 
 function syncPreferredAgentFromActiveTab() {
@@ -130,6 +133,10 @@ export const tabsActions = {
 
   setPreferredAgentId(agentId: string) {
     tabsStore.preferredAgentId = getAgentPreset(agentId).id;
+  },
+
+  setSkipCreateOnAgentPick(skip: boolean) {
+    tabsStore.skipCreateOnAgentPick = skip;
   },
 
   switchTab(tabId: string) {

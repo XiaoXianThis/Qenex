@@ -153,7 +153,7 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
     </div>
   );
 
-  const session = useMemo((): RuntimeSessionConfig | undefined => {
+  const activeSession = useMemo((): RuntimeSessionConfig | undefined => {
     if (!activeTabId) return undefined;
     return tabSessions.find((s) => s.tabId === activeTabId);
   }, [activeTabId, tabSessions]);
@@ -164,10 +164,10 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
       data-layout-editing={isEditing ? "" : undefined}
     >
       {stableTop}
-      {session || isEditing ? (
+      {activeSession || isEditing ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ActiveThreadLayout
-            key={session?.tabId ?? "edit-preview"}
+            key={activeSession?.tabId ?? "edit-preview"}
             top={Top}
             bottom={Bottom}
             puckDataBottom={bottomNodes}
@@ -185,10 +185,27 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
     </div>
   );
 
-  // Provider 包住整页（含稳定挂载的顶部栏），避免顶部区里的 AUI 面板脱离上下文
-  if (session) {
+  // 为所有 active tab 保活 Runtime：切 Tab 只切换可见 children，不 unmount Provider，
+  // 避免进行中的 SSE / 内存消息丢失。
+  if (tabSessions.length > 0 && !useMetaFallback) {
     return (
-      <AgentRuntimeProvider key={session.tabId} session={session}>
+      <>
+        {tabSessions.map((session) => {
+          const isActive = session.tabId === activeTabId;
+          return (
+            <AgentRuntimeProvider key={session.tabId} session={session}>
+              {isActive ? page : null}
+            </AgentRuntimeProvider>
+          );
+        })}
+      </>
+    );
+  }
+
+  // Provider 包住整页（含稳定挂载的顶部栏），避免顶部区里的 AUI 面板脱离上下文
+  if (activeSession) {
+    return (
+      <AgentRuntimeProvider key={activeSession.tabId} session={activeSession}>
         {page}
       </AgentRuntimeProvider>
     );

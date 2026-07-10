@@ -11,7 +11,10 @@ import {
   BridgeHttpAgent,
   SessionConfigProvider,
   createBridgeHistoryAdapter,
+  createComposerAttachmentAdapter,
   getAguiUrl,
+  getTaskStatus,
+  pollTaskEvents,
   tabsActions,
   type RuntimeSessionConfig,
 } from "@qenex/core";
@@ -72,12 +75,24 @@ function AgentRuntimeProviderInner({
     return createBridgeHistoryAdapter(
       (taskId) => agent.loadHistory(taskId),
       session.threadId,
+      {
+        getStatus: getTaskStatus,
+        pollEvents: pollTaskEvents,
+      },
     );
   }, [shouldLoadHistory, session.threadId, agent]);
 
+  const attachmentAdapter = useMemo(
+    () => createComposerAttachmentAdapter(),
+    [],
+  );
+
   const runtime = useAgUiRuntime({
     agent,
-    adapters: historyAdapter ? { history: historyAdapter } : undefined,
+    adapters: {
+      attachments: attachmentAdapter,
+      ...(historyAdapter ? { history: historyAdapter } : {}),
+    },
   });
 
   useEffect(() => {

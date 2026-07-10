@@ -28,6 +28,7 @@ pub enum DistributionClass {
 pub enum AgentReadiness {
     Ready,
     NeedAdapter,
+    NeedAuth,
     Install,
     Unavailable,
 }
@@ -53,6 +54,23 @@ pub struct AgentStatus {
     pub preferred_kind: Option<InstallKind>,
     pub managed: Option<InstalledAgent>,
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredAgent {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub readiness: AgentReadiness,
+    pub detected: DetectedSource,
+    pub resolved_command: Option<Vec<String>>,
+    pub update_available: bool,
+    pub detail: Option<String>,
+    pub auth_hint: Option<String>,
+    pub icon: Option<String>,
 }
 
 struct AdapterProfile {
@@ -90,7 +108,9 @@ struct NativeProfile {
     id: &'static str,
     /// First argv token to look up.
     bin: &'static str,
-    /// Full default argv when found on PATH.
+    /// Extra PATH names that resolve to the same agent.
+    path_bins: &'static [&'static str],
+    /// Full default argv when found on PATH (first token replaced with resolved path when needed).
     argv: &'static [&'static str],
 }
 
@@ -98,12 +118,26 @@ const NATIVES: &[NativeProfile] = &[
     NativeProfile {
         id: "opencode",
         bin: "opencode",
+        path_bins: &["opencode"],
         argv: &["opencode", "acp"],
     },
     NativeProfile {
         id: "kiro",
         bin: "kiro-cli",
+        path_bins: &["kiro-cli"],
         argv: &["kiro-cli", "acp"],
+    },
+    NativeProfile {
+        id: "cursor-agent",
+        bin: "cursor-agent",
+        path_bins: &["cursor-agent", "agent"],
+        argv: &["cursor-agent", "acp"],
+    },
+    NativeProfile {
+        id: "gemini",
+        bin: "gemini",
+        path_bins: &["gemini"],
+        argv: &["gemini", "--experimental-acp"],
     },
 ];
 
@@ -112,8 +146,85 @@ pub fn canonical_agent_id(id: &str) -> String {
     match id {
         "claude" => "claude-acp".into(),
         "codex" => "codex-acp".into(),
+        "cursor" => "cursor-agent".into(),
         other => other.to_string(),
     }
+}
+
+/// Heuristic auth hint when binary is launchable but credentials may be missing.
+pub fn auth_hint_for(agent_id: &str) -> Option<String> {
+    let id = canonical_agent_id(agent_id);
+    match id.as_str() {
+        "claude-acp" => {
+            if env_nonempty("ANTHROPIC_API_KEY") || claude_login_present() {
+                None
+            } else {
+                Some(
+                    "Claude 可能需要登录或设置 ANTHROPIC_API_KEY 后才能对话".into(),
+                )
+            }
+        }
+        "codex-acp" => {
+            if env_nonempty("OPENAI_API_KEY")
+                || env_nonempty("CODEX_API_KEY")
+                || codex_login_present()
+            {
+                None
+            } else {
+                Some(
+                    "Codex 可能需要登录或设置 OPENAI_API_KEY / CODEX_API_KEY 后才能对话"
+                        .into(),
+                )
+            }
+        }
+        "cursor" | "cursor-agent" => {
+            if env_nonempty("CURSOR_API_KEY")
+                || env_nonempty("CURSOR_AUTH_TOKEN")
+                || cursor_login_present()
+            {
+                None
+            } else {
+                Some(
+                    "Cursor 需要先执行 `agent login`（或设置 CURSOR_API_KEY）后再创建会话"
+                        .into(),
+                )
+            }
+        }
+        _ => None,
+    }
+}
+
+fn env_nonempty(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn claude_login_present() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    home.join(".claude").join("credentials.json").is_file()
+        || home.join(".claude.json").is_file()
+        || home.join(".config").join("claude").is_dir()
+}
+
+fn codex_login_present() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    home.join(".codex").join("auth.json").is_file()
+        || home.join(".codex").join("config.toml").is_file()
+}
+
+fn cursor_login_present() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    // Best-effort: Cursor CLI stores auth under ~/.cursor
+    home.join(".cursor").join("cli-config.json").is_file()
+        || home.join(".cursor").join("auth.json").is_file()
+        || home.join(".config").join("cursor").is_dir()
 }
 
 pub fn distribution_class_for_kind(kind: Option<InstallKind>) -> DistributionClass {
@@ -150,6 +261,18 @@ fn path_adapter_command(profile: &AdapterProfile) -> Option<Vec<String>> {
 }
 
 fn native_path_command(profile: &NativeProfile) -> Option<Vec<String>> {
+    for name in profile.path_bins {
+        if which_bin(name).is_some() {
+            let mut cmd: Vec<String> = profile.argv.iter().map(|s| (*s).to_string()).collect();
+            if let Some(first) = cmd.first_mut() {
+                *first = (*name).to_string();
+            }
+            if command_is_launchable(&cmd) {
+                return Some(cmd);
+            }
+        }
+    }
+    // Fall back to primary bin name from argv.
     which_bin(profile.bin)?;
     let cmd: Vec<String> = profile.argv.iter().map(|s| (*s).to_string()).collect();
     command_is_launchable(&cmd).then_some(cmd)
@@ -303,7 +426,8 @@ pub fn resolve_launch_command(
     )
 }
 
-fn resolve_known_agent(agent_id: &str) -> Result<Vec<String>, String> {
+/// Resolve a known agent id to a launchable command (PATH / managed / vendor).
+pub fn resolve_known_agent(agent_id: &str) -> Result<Vec<String>, String> {
     let id = canonical_agent_id(agent_id);
 
     if let Some(native) = native_for(&id) {
@@ -365,8 +489,7 @@ fn resolve_known_agent(agent_id: &str) -> Result<Vec<String>, String> {
 pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
     let plan = resolve_install_plan(agent).ok();
     let preferred_kind = plan.as_ref().map(|p| p.kind);
-    let installable = plan.is_some()
-        && !matches!(preferred_kind, Some(InstallKind::Uvx));
+    let installable = plan.is_some();
     let distribution_class = distribution_class_for_kind(preferred_kind);
     let managed = install::get_installed(&agent.id).filter(|rec| {
         command_is_launchable(&rec.command)
@@ -408,8 +531,24 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
             DetectedSource::Path
         };
 
+        let auth_hint = auth_hint_for(&agent.id);
+        let readiness = if auth_hint.is_some() {
+            AgentReadiness::NeedAuth
+        } else {
+            AgentReadiness::Ready
+        };
+        let detail = match detected {
+            DetectedSource::Path | DetectedSource::Vendor => {
+                Some("本机已有，可跳过下载".into())
+            }
+            DetectedSource::Managed if update_available => {
+                Some("托管安装可更新到 Registry 最新版本".into())
+            }
+            _ => auth_hint.clone(),
+        };
+
         return AgentStatus {
-            readiness: AgentReadiness::Ready,
+            readiness,
             distribution_class,
             detected,
             resolved_command: Some(cmd),
@@ -417,7 +556,8 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
             installable,
             preferred_kind,
             managed,
-            detail: None,
+            detail,
+            auth_hint,
         };
     }
 
@@ -441,6 +581,7 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
                     "本机已有底层 CLI，安装 ACP 适配层「{}」后即可使用",
                     adapter.bin
                 )),
+                auth_hint: None,
             };
         }
     }
@@ -456,12 +597,11 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
             preferred_kind,
             managed: None,
             detail: None,
+            auth_hint: None,
         };
     }
 
-    let detail = if matches!(preferred_kind, Some(InstallKind::Uvx)) {
-        Some("当前仅提供 uvx 分发，Qenex 暂不支持自动安装".into())
-    } else if agent.distribution == Distribution::default() {
+    let detail = if agent.distribution == Distribution::default() {
         Some("Registry 未提供当前平台的安装源".into())
     } else {
         Some(format!(
@@ -481,7 +621,38 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
         preferred_kind,
         managed: None,
         detail,
+        auth_hint: None,
     }
+}
+
+/// Scan registry (cached) for agents that are already usable or nearly ready on this machine.
+pub async fn discover_local_agents(refresh: bool) -> Result<Vec<DiscoveredAgent>, String> {
+    let doc = crate::agent::registry::load_registry(refresh).await?;
+    let mut out = Vec::new();
+    for agent in &doc.agents {
+        let status = evaluate_agent_status(agent);
+        match status.readiness {
+            AgentReadiness::Ready
+            | AgentReadiness::NeedAuth
+            | AgentReadiness::NeedAdapter => {
+                out.push(DiscoveredAgent {
+                    id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    version: agent.version.clone(),
+                    readiness: status.readiness,
+                    detected: status.detected,
+                    resolved_command: status.resolved_command,
+                    update_available: status.update_available,
+                    detail: status.detail,
+                    auth_hint: status.auth_hint,
+                    icon: agent.icon.clone(),
+                });
+            }
+            AgentReadiness::Install | AgentReadiness::Unavailable => {}
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(out)
 }
 
 /// Probe using the same pipeline as spawn (prefer_node_entry + resolve).
@@ -517,6 +688,7 @@ mod tests {
         assert_eq!(canonical_agent_id("claude"), "claude-acp");
         assert_eq!(canonical_agent_id("codex"), "codex-acp");
         assert_eq!(canonical_agent_id("opencode"), "opencode");
+        assert_eq!(canonical_agent_id("cursor"), "cursor-agent");
     }
 
     #[test]

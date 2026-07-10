@@ -59,6 +59,236 @@ function toAssistantMessage(
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getString(obj: Record<string, unknown>, key: string): string | undefined {
+  const value = obj[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** AG-UI `{ source: { type, value, mimeType } }` → data URL / URL string. */
+function inputSourceToDataUrl(
+  source: unknown,
+): { value: string; mimeType?: string } | null {
+  if (!isRecord(source)) return null;
+  const sourceValue = getString(source, "value");
+  if (sourceValue === undefined) return null;
+  const mimeType = getString(source, "mimeType");
+  const type = getString(source, "type");
+  if (type === "url") {
+    return { value: sourceValue, ...(mimeType !== undefined && { mimeType }) };
+  }
+  if (type === "data" || type === undefined) {
+    if (sourceValue.startsWith("data:") || /^(https?:\/\/|blob:)/.test(sourceValue)) {
+      return {
+        value: sourceValue,
+        mimeType: mimeType ?? mimeFromDataUrl(sourceValue),
+      };
+    }
+    const resolvedMime = mimeType ?? "application/octet-stream";
+    return {
+      value: `data:${resolvedMime};base64,${sourceValue}`,
+      mimeType: resolvedMime,
+    };
+  }
+  return null;
+}
+
+function mimeFromDataUrl(value: string): string | undefined {
+  const match = /^data:([^;]+);base64,/.exec(value);
+  return match?.[1];
+}
+
+type SnapshotAttachment = {
+  id: string;
+  type: "image" | "document" | "file" | "audio" | "data";
+  name: string;
+  contentType?: string;
+  status: { type: "complete" };
+  content: Array<
+    | { type: "image"; image: string; filename?: string }
+    | { type: "file"; data: string; mimeType: string; filename?: string }
+    | { type: "text"; text: string }
+  >;
+};
+
+/**
+ * Convert persisted AG-UI multimodal user content into assistant-ui
+ * text content + attachments (UI renders images from attachments).
+ */
+export function agUiUserContentToThreadParts(content: unknown): {
+  text: string;
+  attachments: SnapshotAttachment[];
+} {
+  if (typeof content === "string") {
+    return { text: content, attachments: [] };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", attachments: [] };
+  }
+
+  const textParts: string[] = [];
+  const attachments: SnapshotAttachment[] = [];
+
+  for (const rawPart of content) {
+    if (!isRecord(rawPart)) continue;
+    const type = getString(rawPart, "type");
+
+    if (type === "text") {
+      const text = getString(rawPart, "text");
+      if (text) textParts.push(text);
+      continue;
+    }
+
+    // Already assistant-ui shaped: { type: "image", image: "data:..." }
+    if (type === "image" && typeof rawPart.image === "string") {
+      const image = rawPart.image;
+      const filename =
+        getString(rawPart, "filename") ??
+        (isRecord(rawPart.metadata) ? getString(rawPart.metadata, "filename") : undefined);
+      const id = String(attachments.length);
+      attachments.push({
+        id,
+        type: "image",
+        name: filename ?? "image",
+        contentType: mimeFromDataUrl(image) ?? "image/png",
+        status: { type: "complete" },
+        content: [
+          {
+            type: "image",
+            image,
+            ...(filename !== undefined && { filename }),
+          },
+        ],
+      });
+      continue;
+    }
+
+    // AG-UI multimodal: { type: "image"|"document"|..., source: {...} }
+    if (
+      type === "image" ||
+      type === "document" ||
+      type === "file" ||
+      type === "audio" ||
+      type === "video" ||
+      type === "binary"
+    ) {
+      let part = rawPart;
+      if (type === "binary") {
+        const mimeType = getString(rawPart, "mimeType");
+        const data = getString(rawPart, "data");
+        const url = getString(rawPart, "url");
+        if (!mimeType || (!data && !url)) continue;
+        part = {
+          type: mimeType.startsWith("image/") ? "image" : "document",
+          source: data
+            ? { type: "data", value: data, mimeType }
+            : { type: "url", value: url, mimeType },
+          ...(getString(rawPart, "filename")
+            ? { metadata: { filename: getString(rawPart, "filename") } }
+            : {}),
+        };
+      }
+
+      const partType = getString(part, "type");
+      const source = inputSourceToDataUrl(part.source);
+      if (!source || !partType) continue;
+
+      const filename = isRecord(part.metadata)
+        ? getString(part.metadata, "filename")
+        : getString(part, "filename");
+      const id = String(attachments.length);
+
+      if (partType === "image" || source.mimeType?.startsWith("image/")) {
+        attachments.push({
+          id,
+          type: "image",
+          name: filename ?? "image",
+          ...(source.mimeType !== undefined && { contentType: source.mimeType }),
+          status: { type: "complete" },
+          content: [
+            {
+              type: "image",
+              image: source.value,
+              ...(filename !== undefined && { filename }),
+            },
+          ],
+        });
+      } else {
+        const mimeType = source.mimeType ?? "application/octet-stream";
+        attachments.push({
+          id,
+          type: partType === "document" ? "document" : "file",
+          name: filename ?? "file",
+          contentType: mimeType,
+          status: { type: "complete" },
+          content: [
+            {
+              type: "file",
+              data: source.value,
+              mimeType,
+              ...(filename !== undefined && { filename }),
+            },
+          ],
+        });
+      }
+    }
+  }
+
+  return {
+    text: textParts.join("\n"),
+    attachments,
+  };
+}
+
+function normalizePersistedAttachments(
+  attachments: unknown,
+): SnapshotAttachment[] {
+  if (!Array.isArray(attachments)) return [];
+  const result: SnapshotAttachment[] = [];
+  for (const raw of attachments) {
+    if (!isRecord(raw)) continue;
+    const type = getString(raw, "type") ?? "file";
+    const name = getString(raw, "name") ?? "file";
+    const contentType = getString(raw, "contentType");
+    const id = getString(raw, "id") ?? String(result.length);
+
+    // CompleteAttachment with nested content parts
+    if (Array.isArray(raw.content)) {
+      const { text: _t, attachments: nested } = agUiUserContentToThreadParts(
+        raw.content,
+      );
+      if (nested.length > 0) {
+        for (const att of nested) {
+          result.push({ ...att, id: `${id}-${att.id}`, name: att.name || name });
+        }
+        continue;
+      }
+    }
+
+    // Legacy flat { type, data, mimeType }
+    if (type === "image") {
+      const data = getString(raw, "data") ?? getString(raw, "image");
+      if (!data) continue;
+      const mime = contentType ?? getString(raw, "mimeType") ?? "image/png";
+      const image = data.startsWith("data:")
+        ? data
+        : `data:${mime};base64,${data}`;
+      result.push({
+        id,
+        type: "image",
+        name,
+        contentType: mime,
+        status: { type: "complete" },
+        content: [{ type: "image", image }],
+      });
+    }
+  }
+  return result;
+}
+
 function extractUserMessage(event: AguiEvent): ThreadMessage | null {
   if (event.type !== "CUSTOM" || event.name !== "user_message") {
     return null;
@@ -76,24 +306,27 @@ function extractUserMessage(event: AguiEvent): ThreadMessage | null {
   };
 
   if (record.message?.role === "user") {
-    const content = record.message.content;
-    if (typeof content === "string" && content.length > 0) {
-      return toUserMessage(content);
+    const { text, attachments: fromContent } = agUiUserContentToThreadParts(
+      record.message.content,
+    );
+    const fromField = normalizePersistedAttachments(record.message.attachments);
+    const attachments = [...fromContent, ...fromField];
+
+    if (!text && attachments.length === 0) {
+      return null;
     }
-    if (Array.isArray(content) && content.length > 0) {
-      return fromThreadMessageLike(
-        {
-          id: generateId(),
-          role: "user",
-          content,
-          ...(Array.isArray(record.message.attachments)
-            ? { attachments: record.message.attachments }
-            : {}),
-        },
-        generateId(),
-        USER_STATUS,
-      );
-    }
+
+    return fromThreadMessageLike(
+      {
+        id: generateId(),
+        role: "user",
+        // Image-only turns: empty content array (avoid blank text bubble)
+        content: text.length > 0 ? text : [],
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
+      generateId(),
+      USER_STATUS,
+    );
   }
 
   if (typeof record.content === "string" && record.content.length > 0) {
@@ -416,7 +649,10 @@ class RunReplayAggregator {
   }
 }
 
-function replayRunEvents(runEvents: AguiEvent[]): ThreadMessage | null {
+function replayRunEvents(
+  runEvents: AguiEvent[],
+  options?: { preserveRunning?: boolean },
+): ThreadMessage | null {
   const aggregator = new RunReplayAggregator();
 
   for (const event of runEvents) {
@@ -432,7 +668,9 @@ function replayRunEvents(runEvents: AguiEvent[]): ThreadMessage | null {
   const status: MessageStatus =
     snapshot.status?.type === "incomplete"
       ? snapshot.status
-      : ASSISTANT_COMPLETE;
+      : snapshot.status?.type === "running" && options?.preserveRunning
+        ? { type: "running" }
+        : ASSISTANT_COMPLETE;
 
   return toAssistantMessage(snapshot.content, status);
 }
@@ -441,7 +679,24 @@ function isUserMessageEvent(event: AguiEvent): boolean {
   return extractUserMessage(event) !== null;
 }
 
-function splitIntoRuns(events: AguiEvent[]): AguiEvent[][] {
+function isTerminalEvent(event: AguiEvent): boolean {
+  return event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";
+}
+
+/** True when the latest run has started but not finished/errored. */
+export function hasIncompleteRun(events: AguiEvent[]): boolean {
+  let incomplete = false;
+  for (const event of events) {
+    if (event.type === "RUN_STARTED") {
+      incomplete = true;
+    } else if (isTerminalEvent(event)) {
+      incomplete = false;
+    }
+  }
+  return incomplete;
+}
+
+export function splitIntoRuns(events: AguiEvent[]): AguiEvent[][] {
   const runs: AguiEvent[][] = [];
   let pendingPrefix: AguiEvent[] = [];
   let current: AguiEvent[] = [];
@@ -469,7 +724,7 @@ function splitIntoRuns(events: AguiEvent[]): AguiEvent[][] {
 
     current.push(event);
 
-    if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+    if (isTerminalEvent(event)) {
       runs.push(current);
       current = [];
     }
@@ -486,6 +741,7 @@ function splitIntoRuns(events: AguiEvent[]): AguiEvent[][] {
 
 export function replayAgUiEvents(
   events: AguiEvent[],
+  options?: { preserveRunning?: boolean },
 ): ExportedMessageRepository {
   const messages: ExportedMessageRepository["messages"] = [];
   let parentId: string | null = null;
@@ -499,7 +755,7 @@ export function replayAgUiEvents(
       parentId = userMessage.id;
     }
 
-    const assistantMessage = replayRunEvents(runEvents);
+    const assistantMessage = replayRunEvents(runEvents, options);
     if (assistantMessage) {
       messages.push({ message: assistantMessage, parentId });
       parentId = assistantMessage.id;
@@ -511,3 +767,5 @@ export function replayAgUiEvents(
     headId: parentId,
   };
 }
+
+export { RunReplayAggregator };

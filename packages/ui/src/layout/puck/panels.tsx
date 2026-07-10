@@ -9,6 +9,7 @@ import {
   ThreadSuggestions,
 } from "@/components/assistant-ui/thread";
 import { WidgetPlaceholder } from "@/layout/panels/WidgetPlaceholder";
+import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import type { PanelId } from "@qenex/core";
 import { AuiIf, useAuiState, type AssistantState } from "@assistant-ui/react";
 import type { PanelRenderContext } from "@/layout/puck/types";
@@ -89,7 +90,7 @@ export function renderPanel(
     case "tokenStats":
       return <WidgetPlaceholder panelId="tokenStats" />;
     case "undoRedo":
-      return <WidgetPlaceholder panelId="undoRedo" />;
+      return <ChangesPanel />;
     case "checklist":
       return <WidgetPlaceholder panelId="checklist" />;
     case "approval":

@@ -22,7 +22,7 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { AgentIcon } from "@/components/AgentIcon";
 import {
   cn,
   getAgentPreset,
@@ -184,10 +184,9 @@ export const ThreadWelcome: FC = () => {
       key={activeTabId ?? agentId}
       className="aui-thread-welcome pointer-events-none flex select-none flex-col items-center justify-center gap-4"
     >
-      <img
-        src={getAgentPresetIconUrl(agent.id)}
-        alt=""
-        className="aui-thread-welcome-icon size-36 object-contain opacity-10 select-none"
+      <AgentIcon
+        agentId={agent.id}
+        className="aui-thread-welcome-icon size-36 opacity-10 select-none"
         draggable={false}
       />
       <p

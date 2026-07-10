@@ -17,7 +17,7 @@ server = [
 ]
 
 [dependencies]
-agent-client-protocol = "1.1"
+agent-client-protocol = { version = "1.1", features = ["unstable_auth_methods"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "fs", "process", "time", "rt-multi-thread", "macros", "signal"] }
@@ -53,3 +53,4 @@ required-features = ["server"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+tempfile = "3"

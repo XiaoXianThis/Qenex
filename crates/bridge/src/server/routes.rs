@@ -15,13 +15,14 @@ use uuid::Uuid;
 
 use crate::agui::events::AguiEvent;
 use crate::agent::detect::{self, evaluate_agent_status};
+use crate::agent::ensure::{self, EnsureReadyResult};
 use crate::agent::install::{self, InstalledAgent};
 use crate::agent::progress::InstallProgressEvent;
 use crate::agent::registry;
 use crate::sessions::{
     ApprovalRequest, ApprovalResponse, CreateTaskRequest, CreateTaskResponse, ManagerError,
-    SessionConfigResponse, SetConfigOptionRequest, StartRunRequest, StartRunResponse,
-    TaskListResponse, UpdateTaskRequest,
+    PollEventsResponse, SessionConfigResponse, SetConfigOptionRequest, StartRunRequest,
+    StartRunResponse, TaskListResponse, TaskSummary, UpdateTaskRequest,
 };
 use crate::types::HealthResponse;
 use crate::VERSION;
@@ -41,6 +42,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/stop", post(stop_task))
         .route("/v2/tasks/{task_id}/run", post(start_run))
         .route("/v2/tasks/{task_id}/events", get(stream_events))
+        .route("/v2/tasks/{task_id}/events/poll", get(poll_events))
+        .route("/v2/tasks/{task_id}/status", get(get_task_status))
         .route("/v2/tasks/{task_id}/approval", post(handle_approval))
         .route("/v2/tasks/{task_id}/messages", get(get_messages))
         .route("/v2/tasks/{task_id}/mode", post(set_mode))
@@ -48,12 +51,32 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/config", get(get_session_config))
         .route("/v2/tasks/{task_id}/config-option", post(set_config_option))
         .route("/v2/tasks/{task_id}/command", post(execute_command))
+        .route("/v2/tasks/{task_id}/git", get(api::task_git::get_task_git))
+        .route(
+            "/v2/tasks/{task_id}/git/diff",
+            get(api::task_git::get_task_git_diff),
+        )
+        .route(
+            "/v2/tasks/{task_id}/git/rewind",
+            post(api::task_git::post_task_git_rewind),
+        )
+        .route(
+            "/v2/tasks/{task_id}/git/unrewind",
+            post(api::task_git::post_task_git_unrewind),
+        )
+        .route(
+            "/v2/tasks/{task_id}/git/merge",
+            post(api::task_git::post_task_git_merge),
+        )
         .route("/v2/agents/probe", post(probe_agent))
         .route("/v2/agents/registry", get(list_registry))
+        .route("/v2/agents/discover", get(discover_agents))
         .route("/v2/agents/installed", get(list_installed_agents))
         .route("/v2/agents/install", post(install_agent))
         .route("/v2/agents/install/stream", get(install_agent_stream))
         .route("/v2/agents/install/{agent_id}", delete(uninstall_agent))
+        .route("/v2/agents/ensure-ready", post(ensure_agent_ready))
+        .route("/v2/agents/ensure-ready/stream", get(ensure_agent_ready_stream))
         .route(
             "/api/files",
             get(api::files::list_files)
@@ -97,34 +120,66 @@ struct RunAgentInput {
     forwarded_props: Value,
 }
 
-fn extract_user_message(messages: &[Value]) -> String {
-    for msg in messages.iter().rev() {
-        if msg.get("role").and_then(|v| v.as_str()) != Some("user") {
-            continue;
+fn extract_user_message(messages: &[Value]) -> Option<&Value> {
+    messages.iter().rev().find(|msg| {
+        msg.get("role").and_then(|v| v.as_str()) == Some("user")
+            && user_message_has_content(msg)
+    })
+}
+
+fn user_message_has_content(msg: &Value) -> bool {
+    if let Some(text) = msg.get("content").and_then(|v| v.as_str()) {
+        return !text.is_empty();
+    }
+    if let Some(parts) = msg.get("content").and_then(|v| v.as_array()) {
+        return parts.iter().any(|part| match part.get("type").and_then(|t| t.as_str()) {
+            Some("text") => part
+                .get("text")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| !t.is_empty()),
+            Some("image" | "file" | "document" | "audio" | "video" | "binary") => true,
+            _ => false,
+        });
+    }
+    if msg
+        .get("attachments")
+        .and_then(|a| a.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        return true;
+    }
+    false
+}
+
+fn user_message_preview(msg: &Value) -> String {
+    if let Some(text) = msg.get("content").and_then(|v| v.as_str()) {
+        return text.chars().take(80).collect();
+    }
+    if let Some(parts) = msg.get("content").and_then(|v| v.as_array()) {
+        let text: String = parts
+            .iter()
+            .filter_map(|part| {
+                if part.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    part.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            return text.chars().take(80).collect();
         }
-        if let Some(text) = msg.get("content").and_then(|v| v.as_str()) {
-            if !text.is_empty() {
-                return text.to_string();
-            }
-        }
-        if let Some(parts) = msg.get("content").and_then(|v| v.as_array()) {
-            let text = parts
-                .iter()
-                .filter_map(|part| {
-                    if part.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        part.get("text").and_then(|t| t.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !text.is_empty() {
-                return text;
-            }
+        let kinds: Vec<&str> = parts
+            .iter()
+            .filter_map(|part| part.get("type").and_then(|t| t.as_str()))
+            .filter(|t| *t != "text")
+            .collect();
+        if !kinds.is_empty() {
+            return format!("[{}]", kinds.join(", "));
         }
     }
-    String::new()
+    "[attachment]".to_string()
 }
 
 async fn ag_ui_run(
@@ -187,24 +242,22 @@ async fn ag_ui_run(
         }
     }
 
-    let user_message = extract_user_message(&body.messages);
-
-    if user_message.is_empty() {
+    let Some(user_message) = extract_user_message(&body.messages) else {
         tracing::warn!("ag-ui: no user message in {} message(s)", body.messages.len());
         return error_sse("No user message provided", Some(&thread_id));
-    }
+    };
 
     tracing::info!(
         "ag-ui: thread={} prompt={:?}",
         thread_id,
-        user_message.chars().take(80).collect::<String>()
+        user_message_preview(user_message)
     );
 
     let run_id = match state
         .session_manager
         .start_run(
             &thread_id,
-            &json!({ "messages": [{ "role": "user", "content": user_message }] }),
+            &json!({ "messages": [user_message] }),
             None,
         )
         .await
@@ -406,6 +459,145 @@ async fn stream_events(
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     Ok(sse_response(rx))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PollEventsQuery {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    after_id: Option<i64>,
+}
+
+async fn resolve_run_id(
+    state: &AppState,
+    task_id: &str,
+    requested: Option<&str>,
+) -> Result<Option<String>, StatusCode> {
+    if let Some(run_id) = requested.filter(|s| !s.is_empty()) {
+        return Ok(Some(run_id.to_string()));
+    }
+    if let Some(run_id) = state.session_manager.current_run_id(task_id).await {
+        return Ok(Some(run_id));
+    }
+    state
+        .session_store
+        .lock()
+        .await
+        .latest_run_id(task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn poll_events(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Query(q): Query<PollEventsQuery>,
+) -> Result<Json<PollEventsResponse>, StatusCode> {
+    let task = state
+        .session_store
+        .lock()
+        .await
+        .get(&task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if task.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let run_id = resolve_run_id(&state, &task_id, q.run_id.as_deref()).await?;
+    let Some(run_id) = run_id else {
+        return Ok(Json(PollEventsResponse {
+            events: vec![],
+            after_id: q.after_id.unwrap_or(0),
+            done: true,
+            run_id: None,
+        }));
+    };
+
+    let after_id = q.after_id.unwrap_or(0);
+    let rows = state
+        .session_store
+        .lock()
+        .await
+        .get_events_for_run_after(&task_id, &run_id, after_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut next_after = after_id;
+    let mut events = Vec::with_capacity(rows.len());
+    let mut saw_terminal = false;
+    for (id, event) in rows {
+        next_after = id;
+        if event.event_type().is_terminal() {
+            saw_terminal = true;
+        }
+        match serde_json::to_value(&event) {
+            Ok(value) => events.push(value),
+            Err(_) => continue,
+        }
+    }
+
+    let done = if saw_terminal {
+        true
+    } else {
+        state
+            .session_store
+            .lock()
+            .await
+            .run_is_complete(&task_id, &run_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    Ok(Json(PollEventsResponse {
+        events,
+        after_id: next_after,
+        done,
+        run_id: Some(run_id),
+    }))
+}
+
+async fn get_task_status(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<TaskSummary>, StatusCode> {
+    let mut task = state
+        .session_store
+        .lock()
+        .await
+        .get(&task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Trust DB status. Never promote idle → running from a stale in-memory
+    // current_run_id (that field used to linger after RUN_FINISHED).
+    if task.status == "running" {
+        let run_id = resolve_run_id(&state, &task_id, None).await?;
+        if let Some(ref rid) = run_id {
+            let complete = state
+                .session_store
+                .lock()
+                .await
+                .run_is_complete(&task_id, rid)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if complete {
+                task.status = "idle".to_string();
+                task.current_run_id = None;
+            } else {
+                task.current_run_id = run_id;
+            }
+        } else {
+            // Marked running but no run to attach — treat as idle.
+            task.status = "idle".to_string();
+            task.current_run_id = None;
+        }
+    }
+
+    Ok(Json(task))
 }
 
 async fn handle_approval(
@@ -643,6 +835,7 @@ async fn list_registry(
                 "detected": status.detected,
                 "resolvedCommand": status.resolved_command,
                 "detail": status.detail,
+                "authHint": status.auth_hint,
                 "installed": status.managed.as_ref().map(installed_json),
                 "updateAvailable": status.update_available,
             })
@@ -753,13 +946,169 @@ async fn uninstall_agent(
     Ok(Json(installed_json(&removed)))
 }
 
+fn ensure_ready_json(result: &EnsureReadyResult) -> Value {
+    json!({
+        "agentId": result.agent_id,
+        "readiness": result.readiness,
+        "skippedDownload": result.skipped_download,
+        "source": result.source,
+        "updateAvailable": result.update_available,
+        "resolvedCommand": result.resolved_command,
+        "installed": result.installed.as_ref().map(installed_json),
+        "authHint": result.auth_hint,
+        "detail": result.detail,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnsureReadyBody {
+    agent_id: String,
+    #[serde(default)]
+    prefer_update: bool,
+    #[serde(default)]
+    force_install: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnsureReadyStreamQuery {
+    agent_id: String,
+    #[serde(default)]
+    prefer_update: bool,
+    #[serde(default)]
+    force_install: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoverQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+async fn discover_agents(
+    Query(query): Query<DiscoverQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let agents = ensure::discover_local_agents(query.refresh)
+        .await
+        .map_err(|detail| (StatusCode::BAD_GATEWAY, Json(json!({ "detail": detail }))))?;
+    Ok(Json(json!({ "agents": agents })))
+}
+
+async fn ensure_agent_ready(
+    Json(body): Json<EnsureReadyBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let agent_id = body.agent_id.trim();
+    if agent_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "agentId is required" })),
+        ));
+    }
+    let result = ensure::ensure_agent_ready_opts(
+        agent_id,
+        body.prefer_update,
+        body.force_install,
+        None,
+    )
+        .await
+        .map_err(|detail| (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail }))))?;
+    Ok(Json(ensure_ready_json(&result)))
+}
+
+async fn ensure_agent_ready_stream(
+    Query(query): Query<EnsureReadyStreamQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)>
+{
+    let agent_id = query.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "agentId is required" })),
+        ));
+    }
+    let prefer_update = query.prefer_update;
+    let force_install = query.force_install;
+
+    let (tx, rx) = mpsc::unbounded_channel::<Value>();
+    tokio::spawn(async move {
+        let progress_tx = tx.clone();
+        let progress = move |event: InstallProgressEvent| {
+            if let Ok(value) = serde_json::to_value(&event) {
+                let _ = progress_tx.send(value);
+            }
+        };
+        match ensure::ensure_agent_ready_opts(
+            &agent_id,
+            prefer_update,
+            force_install,
+            Some(&progress),
+        )
+        .await
+        {
+            Ok(result) => {
+                let _ = tx.send(json!({
+                    "type": "done",
+                    "result": ensure_ready_json(&result),
+                }));
+            }
+            Err(detail) => {
+                let _ = tx.send(json!({
+                    "type": "error",
+                    "detail": detail,
+                }));
+            }
+        }
+    });
+
+    let stream = stream::unfold(Some(rx), |state| async move {
+        let mut rx = state?;
+        match rx.recv().await {
+            Some(value) => {
+                let terminal = value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "done" || t == "error");
+                let json = value.to_string();
+                let item = Ok::<Event, Infallible>(Event::default().event("progress").data(json));
+                if terminal {
+                    Some((item, None))
+                } else {
+                    Some((item, Some(rx)))
+                }
+            }
+            None => None,
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
 fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {
-    let status = match err {
-        ManagerError::NoSession(_) => StatusCode::CONFLICT,
-        ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (status, Json(json!({ "detail": err.to_string() })))
+    match &err {
+        ManagerError::Spawn(crate::agent::SpawnError::AuthRequired(payload)) => {
+            let mut body = serde_json::to_value(payload).unwrap_or_else(|_| {
+                json!({
+                    "code": "auth_required",
+                    "detail": payload.detail,
+                })
+            });
+            // Keep `detail` at top-level for older clients that only read detail.
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("detail".into(), json!(payload.detail));
+            }
+            (StatusCode::CONFLICT, Json(body))
+        }
+        ManagerError::NoSession(_) => (StatusCode::CONFLICT, Json(json!({ "detail": err.to_string() }))),
+        ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => {
+            (StatusCode::NOT_FOUND, Json(json!({ "detail": err.to_string() })))
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": err.to_string() })),
+        ),
+    }
 }
 
 fn sse_response(rx: mpsc::UnboundedReceiver<AguiEvent>) -> Response {

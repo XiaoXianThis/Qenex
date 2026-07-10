@@ -7,7 +7,7 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { AgentIcon } from "@/components/AgentIcon";
 import { AgentSettingsDialog } from "@/components/AgentSettingsDialog";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import {
@@ -16,17 +16,22 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  agentsActions,
   BUILTIN_TO_REGISTRY_ID,
   cn,
+  ensureAgentReadyWithProgress,
   fetchAgentRegistry,
   getAgentPreset,
   layoutActions,
+  legacyIdsForRegistry,
+  resolveAgentBridgeId,
   tabsActions,
   useAgentsStore,
   useHost,
   useLayoutStore,
   useTabsStore,
   type AgentReadiness,
+  type InstallProgressEvent,
 } from "@qenex/core";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -42,10 +47,12 @@ export function TabBar({ position = "top" }: TabBarProps) {
   const allTabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const preferredAgentId = useTabsStore((s) => s.preferredAgentId);
+  const skipCreateOnAgentPick = useTabsStore((s) => s.skipCreateOnAgentPick);
   const switchTab = tabsActions.switchTab;
   const closeTab = tabsActions.closeTab;
   const createTab = tabsActions.createTab;
   const setPreferredAgentId = tabsActions.setPreferredAgentId;
+  const setSkipCreateOnAgentPick = tabsActions.setSkipCreateOnAgentPick;
   const editMode = useLayoutStore((s) => s.editMode);
   const setEditMode = layoutActions.setEditMode;
   const agentPresets = useAgentsStore((s) => s.agents);
@@ -55,6 +62,8 @@ export function TabBar({ position = "top" }: TabBarProps) {
   const [readinessById, setReadinessById] = useState<
     Record<string, AgentReadiness>
   >({});
+  const [ensuring, setEnsuring] = useState(false);
+  const [ensureMessage, setEnsureMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,10 +158,57 @@ export function TabBar({ position = "top" }: TabBarProps) {
   const rightControlHoverClass =
     "pointer-events-none absolute inset-0 rounded-md bg-transparent group-hover:bg-foreground/10";
 
-  const handleCreateTab = async () => {
+  const handleCreateTab = async (agentId = preferredAgentId) => {
+    const preset = getAgentPreset(agentId);
+    const bridgeId = resolveAgentBridgeId(preset);
+    const readiness = readinessById[bridgeId];
+    const needsEnsure =
+      readiness !== undefined &&
+      readiness !== "ready" &&
+      readiness !== "needAuth";
+
+    if (needsEnsure) {
+      setEnsuring(true);
+      setEnsureMessage("准备 Agent…");
+      try {
+        const result = await ensureAgentReadyWithProgress(
+          bridgeId,
+          undefined,
+          (event: InstallProgressEvent) => {
+            if (event.type === "stage" || event.type === "download") {
+              setEnsureMessage(event.message);
+            }
+          },
+        );
+        agentsActions.upsertFromRegistry(
+          {
+            id: result.agentId,
+            name: preset.name || result.agentId,
+            command: [],
+            source: result.skippedDownload ? "detected" : "registry",
+            registryId: result.agentId,
+          },
+          legacyIdsForRegistry(result.agentId),
+        );
+        setReadinessById((prev) => ({
+          ...prev,
+          [result.agentId]: result.readiness,
+        }));
+      } catch (error) {
+        setEnsureMessage(
+          error instanceof Error ? error.message : "Agent 准备失败",
+        );
+        setEnsuring(false);
+        return;
+      } finally {
+        setEnsuring(false);
+        setEnsureMessage(null);
+      }
+    }
+
     const cwd = (await host.getDefaultWorkspace()) ?? ".";
     createTab({
-      agentId: getAgentPreset(preferredAgentId).id,
+      agentId: preset.id,
       cwd,
     });
   };
@@ -197,10 +253,9 @@ export function TabBar({ position = "top" }: TabBarProps) {
                 aria-label="加载中"
               />
             ) : (
-              <img
-                src={getAgentPresetIconUrl(tab.agentId)}
-                alt=""
-                className="agent-icon-stroke h-3.5 w-3.5 shrink-0 object-contain"
+              <AgentIcon
+                agentId={tab.agentId}
+                className="agent-icon-stroke h-3.5 w-3.5 shrink-0"
                 aria-hidden
               />
             )}
@@ -230,17 +285,31 @@ export function TabBar({ position = "top" }: TabBarProps) {
           <button
             type="button"
             onClick={() => void handleCreateTab()}
-            className="relative flex cursor-pointer items-center gap-1.5 py-1.25 pl-3 pr-2 text-[13px] font-medium"
-            aria-label={`新建 ${preferredAgent.name} 会话`}
-            title={`新建 ${preferredAgent.name} 会话`}
+            disabled={ensuring}
+            className="relative flex cursor-pointer items-center gap-1.5 py-1.25 pl-3 pr-2 text-[13px] font-medium disabled:cursor-wait disabled:opacity-80"
+            aria-label={
+              ensuring
+                ? (ensureMessage ?? "准备 Agent…")
+                : `新建 ${preferredAgent.name} 会话`
+            }
+            title={
+              ensuring
+                ? (ensureMessage ?? "准备 Agent…")
+                : `新建 ${preferredAgent.name} 会话`
+            }
           >
-            <img
-              src={getAgentPresetIconUrl(preferredAgentId)}
-              alt=""
-              className="h-3.5 w-3.5 shrink-0 object-contain brightness-0 invert"
-              aria-hidden
-            />
-            <span>新建</span>
+            {ensuring ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            ) : (
+              <span className="flex size-3.5 shrink-0 items-center justify-center rounded-[3px] bg-white/95 p-px">
+                <AgentIcon
+                  agentId={preferredAgentId}
+                  className="h-3 w-3"
+                  aria-hidden
+                />
+              </span>
+            )}
+            <span>{ensuring ? "准备中" : "新建"}</span>
           </button>
           <span
             className="relative my-auto h-2.5 w-px shrink-0 bg-white/25"
@@ -262,68 +331,104 @@ export function TabBar({ position = "top" }: TabBarProps) {
               className="w-auto min-w-[10rem] p-1"
               onOpenAutoFocus={(event) => event.preventDefault()}
             >
-              <div className="flex max-h-64 flex-col overflow-y-auto" role="listbox">
-                {agentPresets.map((agent) => {
-                  const selected = agent.id === preferredAgentId;
-                  const registryId =
-                    agent.registryId ??
-                    BUILTIN_TO_REGISTRY_ID[agent.id] ??
-                    agent.id;
-                  const readiness = readinessById[registryId];
-                  const needsAction =
-                    readiness !== undefined && readiness !== "ready";
-                  const hint =
-                    readiness === "needAdapter"
-                      ? "需适配层"
-                      : readiness === "install"
-                        ? "需安装"
-                        : readiness === "unavailable"
-                          ? "不可用"
-                          : null;
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
-                      onClick={() => {
-                        setPreferredAgentId(agent.id);
-                        setAgentPickerOpen(false);
-                      }}
-                    >
-                      <span className="flex size-3.5 shrink-0 items-center justify-center">
-                        {selected ? <CheckIcon className="size-3.5" /> : null}
-                      </span>
-                      <img
-                        src={getAgentPresetIconUrl(agent.id)}
-                        alt=""
-                        className="h-4 w-4 shrink-0 object-contain"
-                        aria-hidden
-                      />
-                      <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                      {needsAction && hint ? (
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
-                          {hint}
+              <div className="flex max-h-64 flex-col">
+                <div className="flex shrink-0 items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm">
+                  <span className="min-w-0 truncate">选项仅切换</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={skipCreateOnAgentPick}
+                    aria-label="选项仅切换"
+                    className={cn(
+                      "relative h-5 w-8 shrink-0 cursor-pointer rounded-full transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                      skipCreateOnAgentPick ? "bg-primary" : "bg-input",
+                    )}
+                    onClick={() =>
+                      setSkipCreateOnAgentPick(!skipCreateOnAgentPick)
+                    }
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-0.5 left-0.5 size-4 rounded-full bg-background shadow transition-transform",
+                        skipCreateOnAgentPick && "translate-x-3",
+                      )}
+                      aria-hidden
+                    />
+                  </button>
+                </div>
+                <div className="my-1 shrink-0 border-t border-border" />
+                <div className="min-h-0 flex-1 overflow-y-auto" role="listbox">
+                  {agentPresets.map((agent) => {
+                    const selected = agent.id === preferredAgentId;
+                    const registryId =
+                      agent.registryId ??
+                      BUILTIN_TO_REGISTRY_ID[agent.id] ??
+                      agent.id;
+                    const readiness = readinessById[registryId];
+                    const needsAction =
+                      readiness !== undefined &&
+                      readiness !== "ready" &&
+                      readiness !== "needAuth";
+                    const hint =
+                      readiness === "needAdapter"
+                        ? "需适配层"
+                        : readiness === "needAuth"
+                          ? "需登录"
+                          : readiness === "install"
+                            ? "需安装"
+                            : readiness === "unavailable"
+                              ? "不可用"
+                              : null;
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                        onClick={() => {
+                          setPreferredAgentId(agent.id);
+                          setAgentPickerOpen(false);
+                          if (!skipCreateOnAgentPick) {
+                            void handleCreateTab(agent.id);
+                          }
+                        }}
+                      >
+                        <span className="flex size-3.5 shrink-0 items-center justify-center">
+                          {selected ? <CheckIcon className="size-3.5" /> : null}
                         </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-                <div className="my-1 border-t border-border" />
-                <button
-                  type="button"
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
-                  onClick={() => {
-                    setAgentPickerOpen(false);
-                    setSettingsOpen(true);
-                  }}
-                >
-                  <span className="flex size-3.5 shrink-0 items-center justify-center">
-                    <Settings2 className="size-3.5 text-muted-foreground" />
-                  </span>
-                  <span className="min-w-0 truncate">从 Registry 安装…</span>
-                </button>
+                        <AgentIcon
+                          agentId={agent.id}
+                          className="h-4 w-4 shrink-0"
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          {agent.name}
+                        </span>
+                        {needsAction && hint ? (
+                          <span className="shrink-0 text-[10px] text-muted-foreground">
+                            {hint}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                  <div className="my-1 border-t border-border" />
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                    onClick={() => {
+                      setAgentPickerOpen(false);
+                      setSettingsOpen(true);
+                    }}
+                  >
+                    <span className="flex size-3.5 shrink-0 items-center justify-center">
+                      <Settings2 className="size-3.5 text-muted-foreground" />
+                    </span>
+                    <span className="min-w-0 truncate">从 Registry 安装…</span>
+                  </button>
+                </div>
               </div>
             </PopoverContent>
           </Popover>

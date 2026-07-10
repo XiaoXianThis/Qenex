@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Reset Qenex storage</title>
+  </head>
+  <body>
+    <p>Clearing local storage…</p>
+    <script>
+      (function () {
+        var removed = [];
+        for (var i = localStorage.length - 1; i >= 0; i--) {
+          var k = localStorage.key(i);
+          if (
+            k &&
+            (k.indexOf("qenex:") === 0 || k.indexOf("agent-center-") === 0)
+          ) {
+            removed.push(k);
+            localStorage.removeItem(k);
+          }
+        }
+        try {
+          sessionStorage.clear();
+        } catch (e) {}
+        var q = new URLSearchParams(location.search);
+        var next = q.get("next") || "/";
+        console.info("[qenex-reset] removed", removed);
+        location.replace(next);
+      })();
+    </script>
+  </body>
+</html>

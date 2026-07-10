@@ -1,5 +1,5 @@
-import { CheckIcon, ChevronDownIcon, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { CheckIcon, ChevronDownIcon, KeyRound, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Select,
   SelectContent,
@@ -13,6 +13,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { AgentAuthDialog } from "@/components/AgentAuthDialog";
+import { Button } from "@/components/ui/button";
 import { resolveModeIcon } from "@/config/mode-icons";
 import {
   useSessionConfig,
@@ -415,8 +417,21 @@ function SessionConfigSkeleton() {
 }
 
 export function SessionConfigBar({ className, trailing }: SessionConfigBarProps) {
-  const { config, agentId, changeMode, changeModel, changeThoughtLevel } =
-    useSessionConfig();
+  const {
+    config,
+    agentId,
+    changeMode,
+    changeModel,
+    changeThoughtLevel,
+    retryAfterAuth,
+  } = useSessionConfig();
+  const [authOpen, setAuthOpen] = useState(false);
+
+  useEffect(() => {
+    if (config.authChallenge) {
+      setAuthOpen(true);
+    }
+  }, [config.authChallenge]);
 
   const showControls =
     config.ready &&
@@ -424,9 +439,18 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
       config.models.length > 0 ||
       config.thoughtLevels.length > 0);
   const showSkeleton =
-    !showControls && !config.error && (config.loading || !config.ready);
+    !showControls &&
+    !config.error &&
+    !config.authChallenge &&
+    (config.loading || !config.ready);
 
-  if (!showControls && !showSkeleton && !config.error && !trailing) {
+  if (
+    !showControls &&
+    !showSkeleton &&
+    !config.error &&
+    !config.authChallenge &&
+    !trailing
+  ) {
     return null;
   }
 
@@ -499,7 +523,18 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
           ) : null}
         </div>
 
-        {config.error ? (
+        {config.authChallenge ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={() => setAuthOpen(true)}
+          >
+            <KeyRound className="size-3.5" />
+            需要登录
+          </Button>
+        ) : config.error ? (
           <p
             className="max-w-[12rem] shrink truncate text-xs text-destructive"
             title={config.error}
@@ -512,6 +547,16 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
           <div className="flex shrink-0 items-center gap-1.5">{trailing}</div>
         ) : null}
       </div>
+
+      {config.authChallenge ? (
+        <AgentAuthDialog
+          open={authOpen}
+          onOpenChange={setAuthOpen}
+          agentId={agentId}
+          challenge={config.authChallenge}
+          onRetry={retryAfterAuth}
+        />
+      ) : null}
     </div>
   );
 }

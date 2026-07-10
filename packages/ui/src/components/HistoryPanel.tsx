@@ -1,4 +1,4 @@
-import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { AgentIcon } from "@/components/AgentIcon";
 import { tabsActions, useTabsStore } from "@qenex/core";
 import { Trash2 } from "lucide-react";
 import { useMemo } from "react";
@@ -45,10 +45,9 @@ export function HistoryPanel({ onRestore }: HistoryPanelProps) {
                 onRestore?.();
               }}
             >
-              <img
-                src={getAgentPresetIconUrl(tab.agentId)}
-                alt=""
-                className="h-4 w-4 shrink-0 object-contain"
+              <AgentIcon
+                agentId={tab.agentId}
+                className="h-4 w-4 shrink-0"
                 aria-hidden
               />
               <span className="min-w-0 flex-1 truncate">{tab.title}</span>

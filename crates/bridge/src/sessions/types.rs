@@ -142,6 +142,19 @@ pub struct TaskSummary {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Present when a run is in flight (memory or inferred from events).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PollEventsResponse {
+    pub events: Vec<Value>,
+    pub after_id: i64,
+    pub done: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 fn default_idle() -> String {

@@ -211,80 +211,91 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
     [storePuckData],
   );
 
-  if (editMode) {
-    const puckData =
-      draftPuckData !== null && draftPresetRef.current === preset
-        ? draftPuckData
-        : clonePuckData(storePuckData);
+  const puckData =
+    draftPuckData !== null && draftPresetRef.current === preset
+      ? draftPuckData
+      : clonePuckData(storePuckData);
 
-    return (
-      <div className="h-dvh min-h-0 overflow-hidden" data-layout-editing="">
-        <Puck
-          key={`puck-edit-${preset}`}
-          config={puckConfig}
-          data={puckData}
-          metadata={metadata}
-          iframe={{ enabled: true }}
-          ui={{ leftSideBarVisible: false, rightSideBarVisible: false }}
-          overrides={{
-            header: () => <></>,
-            headerActions: () => <></>,
-            actionBar: (props) => <LayoutPanelActionBar {...props} />,
-            drawerItem: ({ children, name }) => (
-              <LayoutDrawerItem name={name}>{children}</LayoutDrawerItem>
-            ),
-          }}
-          onChange={(data) => {
-            if (revertingRef.current) return;
-            updateDraft(data);
-          }}
-          onAction={(action, _appState, prevAppState) => {
-            if (!isDepthLimitedAction(action)) return;
-
-            const layoutZone = layoutZoneFromDestination(
-              prevAppState.data,
-              action.destinationZone,
-            );
-            if (!layoutZone) return;
-
-            const { parentId } = parseZoneFromAction(action);
-            const insertedType =
-              action.type === "insert"
-                ? action.componentType
-                : getComponentTypeInZone(
-                    prevAppState.data,
-                    action.sourceZone ?? "",
-                    action.sourceIndex ?? -1,
-                  );
-
-            if (!insertedType) return;
-
-            if (
-              wouldExceedMaxDepth(
-                prevAppState.data,
-                layoutZone,
-                parentIdForDepth(parentId),
-                insertedType,
-              )
-            ) {
-              handleDepthViolation(prevAppState.data);
-            }
-          }}
-        >
-          <PuckDispatchBridge dispatchRef={puckDispatchRef} />
-          <div className="flex h-dvh min-h-0 min-w-0 overflow-hidden">
-            <ComponentDrawer />
-            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-              <Puck.Preview />
-            </div>
-          </div>
-        </Puck>
-      </div>
-    );
-  }
-
+  // 编辑时仍挂载 live Render（视觉隐藏），避免卸载 AgentRuntimeProvider 导致聊天中断。
+  // Puck iframe 预览用独立 stub runtime，只服务布局编辑。
   return (
-    <Render config={puckConfig} data={renderPuckData} metadata={metadata} />
+    <>
+      <div
+        className={
+          editMode
+            ? "pointer-events-none invisible absolute inset-0 h-0 w-0 overflow-hidden"
+            : undefined
+        }
+        aria-hidden={editMode || undefined}
+        data-layout-live-keepalive={editMode ? "" : undefined}
+      >
+        <Render config={puckConfig} data={renderPuckData} metadata={metadata} />
+      </div>
+      {editMode ? (
+        <div className="h-dvh min-h-0 overflow-hidden" data-layout-editing="">
+          <Puck
+            key={`puck-edit-${preset}`}
+            config={puckConfig}
+            data={puckData}
+            metadata={metadata}
+            iframe={{ enabled: true }}
+            ui={{ leftSideBarVisible: false, rightSideBarVisible: false }}
+            overrides={{
+              header: () => <></>,
+              headerActions: () => <></>,
+              actionBar: (props) => <LayoutPanelActionBar {...props} />,
+              drawerItem: ({ children, name }) => (
+                <LayoutDrawerItem name={name}>{children}</LayoutDrawerItem>
+              ),
+            }}
+            onChange={(data) => {
+              if (revertingRef.current) return;
+              updateDraft(data);
+            }}
+            onAction={(action, _appState, prevAppState) => {
+              if (!isDepthLimitedAction(action)) return;
+
+              const layoutZone = layoutZoneFromDestination(
+                prevAppState.data,
+                action.destinationZone,
+              );
+              if (!layoutZone) return;
+
+              const { parentId } = parseZoneFromAction(action);
+              const insertedType =
+                action.type === "insert"
+                  ? action.componentType
+                  : getComponentTypeInZone(
+                      prevAppState.data,
+                      action.sourceZone ?? "",
+                      action.sourceIndex ?? -1,
+                    );
+
+              if (!insertedType) return;
+
+              if (
+                wouldExceedMaxDepth(
+                  prevAppState.data,
+                  layoutZone,
+                  parentIdForDepth(parentId),
+                  insertedType,
+                )
+              ) {
+                handleDepthViolation(prevAppState.data);
+              }
+            }}
+          >
+            <PuckDispatchBridge dispatchRef={puckDispatchRef} />
+            <div className="flex h-dvh min-h-0 min-w-0 overflow-hidden">
+              <ComponentDrawer />
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                <Puck.Preview />
+              </div>
+            </div>
+          </Puck>
+        </div>
+      ) : null}
+    </>
   );
 };
 

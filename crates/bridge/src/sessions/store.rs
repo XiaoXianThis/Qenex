@@ -104,6 +104,49 @@ impl SessionStore {
         .execute(&pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS git_bindings (
+                task_id TEXT PRIMARY KEY,
+                cwd TEXT NOT NULL,
+                repo_root TEXT NOT NULL,
+                base_branch TEXT,
+                base_sha TEXT NOT NULL,
+                agent_branch TEXT NOT NULL,
+                tip_sha TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                pre_rewind_sha TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS git_turn_commits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                parent_sha TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_git_turns_task ON git_turn_commits(task_id, id ASC)",
+        )
+        .execute(&pool)
+        .await?;
+
         self.pool = Some(pool);
         Ok(())
     }
@@ -153,6 +196,7 @@ impl SessionStore {
             created_at: now.clone(),
             updated_at: now,
             agent_id: agent_id.map(|s| s.to_string()),
+            current_run_id: None,
         })
     }
 
@@ -289,25 +333,76 @@ impl SessionStore {
         task_id: &str,
         run_id: &str,
     ) -> Result<Vec<AguiEvent>, StoreError> {
+        Ok(self
+            .get_events_for_run_after(task_id, run_id, 0)
+            .await?
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect())
+    }
+
+    /// Events for a run with row ids, optionally after a given id (exclusive).
+    pub async fn get_events_for_run_after(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        after_id: i64,
+    ) -> Result<Vec<(i64, AguiEvent)>, StoreError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT event_data FROM events WHERE task_id = ? AND run_id = ? ORDER BY id ASC",
+            "SELECT id, event_data FROM events WHERE task_id = ? AND run_id = ? AND id > ? ORDER BY id ASC",
         )
         .bind(task_id)
         .bind(run_id)
+        .bind(after_id)
         .fetch_all(pool)
         .await?;
 
         let mut events = Vec::new();
         for row in rows {
+            let id: i64 = row.get("id");
             let event_data: String = row.get("event_data");
             if let Ok(event) = serde_json::from_str::<AguiEvent>(&event_data) {
-                events.push(event);
+                events.push((id, event));
             } else {
                 tracing::warn!("failed to deserialize event for run: {}", event_data);
             }
         }
         Ok(events)
+    }
+
+    /// Latest run_id for a task (by most recent event row).
+    pub async fn latest_run_id(&self, task_id: &str) -> Result<Option<String>, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            "SELECT run_id FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("run_id")))
+    }
+
+    /// Whether a run already has a terminal AG-UI event.
+    pub async fn run_is_complete(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<bool, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            r#"
+            SELECT 1 AS ok FROM events
+            WHERE task_id = ? AND run_id = ?
+              AND event_type IN ('RUN_FINISHED', 'RUN_ERROR')
+            LIMIT 1
+            "#,
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.is_some())
     }
 
     /// Delete events older than the specified number of days
@@ -326,6 +421,124 @@ impl SessionStore {
     pub async fn cleanup_events(&self) -> Result<u64, StoreError> {
         self.delete_old_events(30).await
     }
+
+    pub async fn upsert_git_binding(
+        &self,
+        binding: &super::git_session::GitSessionBinding,
+    ) -> Result<(), StoreError> {
+        let pool = self.pool()?;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO git_bindings (
+                task_id, cwd, repo_root, base_branch, base_sha, agent_branch,
+                tip_sha, enabled, pre_rewind_sha, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                cwd = excluded.cwd,
+                repo_root = excluded.repo_root,
+                base_branch = excluded.base_branch,
+                base_sha = excluded.base_sha,
+                agent_branch = excluded.agent_branch,
+                tip_sha = excluded.tip_sha,
+                enabled = excluded.enabled,
+                pre_rewind_sha = excluded.pre_rewind_sha,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&binding.task_id)
+        .bind(&binding.cwd)
+        .bind(&binding.repo_root)
+        .bind(&binding.base_branch)
+        .bind(&binding.base_sha)
+        .bind(&binding.agent_branch)
+        .bind(&binding.tip_sha)
+        .bind(if binding.enabled { 1 } else { 0 })
+        .bind(&binding.pre_rewind_sha)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_git_binding(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<super::git_session::GitSessionBinding>, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            r#"
+            SELECT task_id, cwd, repo_root, base_branch, base_sha, agent_branch,
+                   tip_sha, enabled, pre_rewind_sha
+            FROM git_bindings WHERE task_id = ?
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|r| super::git_session::GitSessionBinding {
+            task_id: r.get("task_id"),
+            cwd: r.get("cwd"),
+            repo_root: r.get("repo_root"),
+            base_branch: r.get("base_branch"),
+            base_sha: r.get("base_sha"),
+            agent_branch: r.get("agent_branch"),
+            tip_sha: r.get("tip_sha"),
+            enabled: r.get::<i64, _>("enabled") != 0,
+            pre_rewind_sha: r.get("pre_rewind_sha"),
+        }))
+    }
+
+    pub async fn insert_git_turn_commit(
+        &self,
+        turn: &super::git_session::GitTurnCommit,
+    ) -> Result<(), StoreError> {
+        let pool = self.pool()?;
+        sqlx::query(
+            r#"
+            INSERT INTO git_turn_commits (task_id, run_id, commit_sha, parent_sha, message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&turn.task_id)
+        .bind(&turn.run_id)
+        .bind(&turn.commit_sha)
+        .bind(&turn.parent_sha)
+        .bind(&turn.message)
+        .bind(&turn.created_at)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_git_turn_commits(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<super::git_session::GitTurnCommit>, StoreError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            r#"
+            SELECT task_id, run_id, commit_sha, parent_sha, message, created_at
+            FROM git_turn_commits WHERE task_id = ? ORDER BY id ASC
+            "#,
+        )
+        .bind(task_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| super::git_session::GitTurnCommit {
+                task_id: r.get("task_id"),
+                run_id: r.get("run_id"),
+                commit_sha: r.get("commit_sha"),
+                parent_sha: r.get("parent_sha"),
+                message: r.get("message"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
+    }
 }
 
 fn row_to_summary(row: &sqlx::sqlite::SqliteRow) -> TaskSummary {
@@ -338,5 +551,6 @@ fn row_to_summary(row: &sqlx::sqlite::SqliteRow) -> TaskSummary {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         agent_id: row.try_get("agent_id").ok().flatten(),
+        current_run_id: None,
     }
 }

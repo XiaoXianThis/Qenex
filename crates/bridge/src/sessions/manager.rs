@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{ContentBlock, ImageContent, TextContent};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{mpsc, Mutex};
@@ -14,6 +12,11 @@ use crate::bridge::{shared_bridge, PermissionRegistry, SharedBridge};
 use crate::policy::ToolPolicyEngine;
 
 use super::demo::enqueue_demo_events;
+use super::git_session::{
+    self, checkout_agent_branch, disabled_binding, ensure_agent_branch, GitSessionBinding,
+    GitSessionStatus, GitTurnCommit,
+};
+use super::prompt::build_prompt_blocks;
 use super::store::{SessionStore, StoreError};
 
 struct PersistEventJob {
@@ -149,6 +152,7 @@ impl SessionManager {
                     agent_id.as_deref(),
                 )
                 .await?;
+            self.bind_git_session(task_id, cwd).await;
             return Ok(ActiveSession {
                 task_id: task_id.to_string(),
                 agent_session_id,
@@ -299,7 +303,165 @@ impl SessionManager {
             )
             .await?;
 
+        self.bind_git_session(task_id, cwd).await;
+
         Ok(snapshot)
+    }
+
+    async fn bind_git_session(&self, task_id: &str, cwd: &str) {
+        // Rehydrate: reuse persisted binding so we never reset base_sha / tip history.
+        {
+            let store = self.store.lock().await;
+            if let Ok(Some(existing)) = store.get_git_binding(task_id).await {
+                drop(store);
+                if existing.enabled {
+                    if let Err(e) = checkout_agent_branch(&existing).await {
+                        tracing::warn!(
+                            task_id,
+                            error = %e,
+                            "failed to checkout existing git side-branch"
+                        );
+                    }
+                }
+                return;
+            }
+        }
+
+        let binding = match ensure_agent_branch(std::path::Path::new(cwd), task_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::info!(task_id, cwd, error = %e, "git session disabled");
+                disabled_binding(task_id, cwd)
+            }
+        };
+        if let Err(e) = self.store.lock().await.upsert_git_binding(&binding).await {
+            tracing::warn!(task_id, error = %e, "failed to persist git binding");
+        } else if binding.enabled {
+            tracing::info!(
+                task_id,
+                branch = %binding.agent_branch,
+                base = %binding.base_sha,
+                "git side-branch ready"
+            );
+        }
+    }
+
+    pub async fn get_git_status(&self, task_id: &str) -> Result<GitSessionStatus, ManagerError> {
+        let store = self.store.lock().await;
+        let binding = store
+            .get_git_binding(task_id)
+            .await?
+            .unwrap_or_else(|| disabled_binding(task_id, "."));
+        drop(store);
+        git_session::session_status(&binding)
+            .await
+            .map_err(|e| ManagerError::Agent(e.to_string()))
+    }
+
+    pub async fn get_git_binding(
+        &self,
+        task_id: &str,
+    ) -> Result<GitSessionBinding, ManagerError> {
+        Ok(self
+            .store
+            .lock()
+            .await
+            .get_git_binding(task_id)
+            .await?
+            .unwrap_or_else(|| disabled_binding(task_id, ".")))
+    }
+
+    pub async fn list_git_turns(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<GitTurnCommit>, ManagerError> {
+        Ok(self
+            .store
+            .lock()
+            .await
+            .list_git_turn_commits(task_id)
+            .await?)
+    }
+
+    pub async fn git_diff(
+        &self,
+        task_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+        file: Option<&str>,
+    ) -> Result<String, ManagerError> {
+        let binding = self.get_git_binding(task_id).await?;
+        git_session::diff_range(&binding, from, to, file)
+            .await
+            .map_err(|e| ManagerError::Agent(e.to_string()))
+    }
+
+    pub async fn git_rewind(
+        &self,
+        task_id: &str,
+        commit_sha: &str,
+    ) -> Result<GitSessionBinding, ManagerError> {
+        let mut binding = self.get_git_binding(task_id).await?;
+        if !binding.enabled {
+            return Err(ManagerError::Agent("git session disabled".into()));
+        }
+        git_session::rewind_to(&mut binding, commit_sha)
+            .await
+            .map_err(|e| ManagerError::Agent(e.to_string()))?;
+        self.store
+            .lock()
+            .await
+            .upsert_git_binding(&binding)
+            .await?;
+        Ok(binding)
+    }
+
+    pub async fn git_unrewind(&self, task_id: &str) -> Result<GitSessionBinding, ManagerError> {
+        let mut binding = self.get_git_binding(task_id).await?;
+        git_session::unrewind(&mut binding)
+            .await
+            .map_err(|e| ManagerError::Agent(e.to_string()))?;
+        self.store
+            .lock()
+            .await
+            .upsert_git_binding(&binding)
+            .await?;
+        Ok(binding)
+    }
+
+    pub async fn git_merge_base(&self, task_id: &str) -> Result<String, ManagerError> {
+        let binding = self.get_git_binding(task_id).await?;
+        git_session::merge_to_base(&binding)
+            .await
+            .map_err(|e| ManagerError::Agent(e.to_string()))
+    }
+
+    async fn maybe_commit_git_turn(store: Arc<Mutex<SessionStore>>, task_id: &str, run_id: &str) {
+        let binding = match store.lock().await.get_git_binding(task_id).await {
+            Ok(Some(b)) if b.enabled => b,
+            _ => return,
+        };
+        match git_session::commit_turn(&binding, run_id).await {
+            Ok(Some(turn)) => {
+                let mut updated = binding;
+                updated.tip_sha = Some(turn.commit_sha.clone());
+                updated.pre_rewind_sha = None;
+                let _ = store.lock().await.upsert_git_binding(&updated).await;
+                let _ = store.lock().await.insert_git_turn_commit(&turn).await;
+                tracing::info!(
+                    task_id,
+                    run_id,
+                    commit = %turn.commit_sha,
+                    "git turn committed"
+                );
+            }
+            Ok(None) => {
+                tracing::debug!(task_id, run_id, "git turn noop (clean tree)");
+            }
+            Err(e) => {
+                tracing::warn!(task_id, run_id, error = %e, "git turn commit failed");
+            }
+        }
     }
 
     pub async fn start_run(
@@ -389,7 +551,9 @@ impl SessionManager {
         };
 
         let task_id_owned = task_id.to_string();
+        let run_id_owned = run_id.clone();
         let store = self.store.clone();
+        let sessions = self.sessions.clone();
 
         tokio::spawn(async move {
             let result = match prompt_rx {
@@ -410,11 +574,23 @@ impl SessionManager {
             }
             drop(b);
 
+            {
+                let sessions = sessions.lock().await;
+                if let Some(active) = sessions.get(&task_id_owned) {
+                    let mut current = active.current_run_id.lock().await;
+                    if current.as_deref() == Some(run_id_owned.as_str()) {
+                        *current = None;
+                    }
+                }
+            }
+
             let _ = store
                 .lock()
                 .await
                 .update(&task_id_owned, None, Some("idle"))
                 .await;
+
+            SessionManager::maybe_commit_git_turn(store, &task_id_owned, &run_id_owned).await;
         });
 
         Ok(run_id)
@@ -502,6 +678,13 @@ impl SessionManager {
             let mut b = bridge.lock().await;
             if b.is_run_active() {
                 b.error_run("Run cancelled", Some("cancelled".to_string()));
+            }
+        }
+
+        {
+            let sessions = self.sessions.lock().await;
+            if let Some(active) = sessions.get(task_id) {
+                *active.current_run_id.lock().await = None;
             }
         }
 
@@ -765,6 +948,14 @@ impl SessionManager {
         self.sessions.lock().await.contains_key(task_id)
             || self.demo_tasks.lock().await.contains(task_id)
     }
+
+    /// In-memory current run id, if the session is still hot.
+    pub async fn current_run_id(&self, task_id: &str) -> Option<String> {
+        let sessions = self.sessions.lock().await;
+        let active = sessions.get(task_id)?;
+        let run_id = active.current_run_id.lock().await.clone();
+        run_id
+    }
 }
 
 fn apply_parsed_config(session: &mut InnerSession, parsed: &ParsedConfigOptions) {
@@ -886,52 +1077,23 @@ fn extract_user_text(input: &Value) -> Option<String> {
             if !text.is_empty() {
                 return Some(text);
             }
+            // Image/file-only user turns still need a persisted marker for history.
+            if parts.iter().any(|part| {
+                matches!(
+                    part.get("type").and_then(|t| t.as_str()),
+                    Some("image" | "file" | "document" | "audio" | "video" | "binary")
+                )
+            }) {
+                return Some("[attachment]".to_string());
+            }
+        }
+        if msg
+            .get("attachments")
+            .and_then(|a| a.as_array())
+            .is_some_and(|a| !a.is_empty())
+        {
+            return Some("[attachment]".to_string());
         }
     }
     None
-}
-
-fn build_prompt_blocks(input: &Value) -> Vec<ContentBlock> {
-    let messages = input.get("messages").and_then(|m| m.as_array());
-    let mut blocks = Vec::new();
-
-    if let Some(messages) = messages {
-        if let Some(last) = messages.last() {
-            if let Some(text) = last.get("content").and_then(|c| c.as_str()) {
-                if !text.is_empty() {
-                    blocks.push(ContentBlock::Text(TextContent::new(text)));
-                }
-            }
-
-            if let Some(attachments) = last.get("attachments").and_then(|a| a.as_array()) {
-                for att in attachments {
-                    let att_type = att.get("type").and_then(|t| t.as_str()).unwrap_or("file");
-                    if att_type == "image" {
-                        let data = att.get("data").and_then(|d| d.as_str()).unwrap_or("");
-                        let mime = att
-                            .get("mimeType")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("image/png");
-                        blocks.push(ContentBlock::Image(ImageContent::new(data, mime)));
-                    } else {
-                        let name = att.get("name").and_then(|n| n.as_str()).unwrap_or("unnamed");
-                        let data = att.get("data").and_then(|d| d.as_str()).unwrap_or("");
-                        let decoded = STANDARD
-                            .decode(data)
-                            .map(|b| String::from_utf8_lossy(&b).into_owned())
-                            .unwrap_or_else(|_| "[could not decode]".to_string());
-                        blocks.push(ContentBlock::Text(TextContent::new(format!(
-                            "[File: {name}]\n```\n{decoded}\n```"
-                        ))));
-                    }
-                }
-            }
-        }
-    }
-
-    if blocks.is_empty() {
-        blocks.push(ContentBlock::Text(TextContent::new("")));
-    }
-
-    blocks
 }

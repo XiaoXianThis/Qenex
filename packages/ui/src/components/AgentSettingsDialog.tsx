@@ -3,7 +3,7 @@
 import { json } from "@codemirror/lang-json";
 import type { Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
-import { getAgentPresetIconUrl } from "@/config/agent-icons";
+import { AgentIcon } from "@/components/AgentIcon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,12 +15,12 @@ import {
 } from "@/components/ui/dialog";
 import {
   agentsActions,
-  BUILTIN_TO_REGISTRY_ID,
   cn,
+  ensureAgentReadyWithProgress,
   fetchAgentRegistry,
-  formatAgentsConfig,
-  installAgentWithProgress,
-  parseAgentsConfigJson,
+  legacyIdsForRegistry,
+  mergeAgentsConfig,
+  parseOverlayJson,
   probeAgent,
   selectActiveThemeCss,
   STYLE_THEME_PRESETS,
@@ -30,6 +30,7 @@ import {
   useStyleStore,
   useTabsStore,
   type AgentPreset,
+  type AgentsJsonMode,
   type InstallProgressEvent,
   type RegistryAgentEntry,
 } from "@qenex/core";
@@ -104,17 +105,13 @@ function commandKey(command: string[]): string {
   return JSON.stringify(command);
 }
 
-function legacyIdsForRegistry(registryId: string): string[] {
-  return Object.entries(BUILTIN_TO_REGISTRY_ID)
-    .filter(([, mapped]) => mapped === registryId)
-    .map(([builtin]) => builtin);
-}
-
 export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
   open,
   onOpenChange,
 }) => {
   const storeAgents = useAgentsStore((s) => s.agents);
+  const systemAgents = useAgentsStore((s) => s.systemAgents);
+  const jsonMode = useAgentsStore((s) => s.mode);
   const defaultAgentId = useAgentsStore((s) => s.defaultAgentId);
   const preferredAgentId = useTabsStore((s) => s.preferredAgentId);
   const themeCss = useStyleStore(selectActiveThemeCss);
@@ -141,18 +138,64 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
   >({});
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const jsonEnabled = jsonMode !== "off";
+
   const validation = useMemo(
-    () => parseAgentsConfigJson(draftText || "{}"),
+    () => parseOverlayJson(draftText || "{}"),
     [draftText],
   );
 
-  const validConfigFingerprint = useMemo(() => {
+  const validOverlayFingerprint = useMemo(() => {
     if (!validation.ok) return null;
-    return JSON.stringify(validation.config);
+    return JSON.stringify(validation.document);
   }, [validation]);
 
+  const previewConfig = useMemo(() => {
+    if (!jsonEnabled || !validation.ok) {
+      return {
+        version: 1 as const,
+        defaultAgentId,
+        agents: storeAgents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          command: [...a.command],
+          source: a.source,
+          registryId: a.registryId,
+        })),
+      };
+    }
+    const docMode = validation.document.mode;
+    const mode: AgentsJsonMode =
+      docMode === "replace"
+        ? "replace"
+        : docMode === "extend"
+          ? "extend"
+          : jsonMode === "replace"
+            ? "replace"
+            : "extend";
+    return mergeAgentsConfig(
+      systemAgents.map((a) => ({
+        id: a.id,
+        name: a.name,
+        command: [...a.command],
+        source: a.source,
+        registryId: a.registryId,
+      })),
+      mode,
+      validation.document.agents,
+      validation.document.defaultAgentId ?? defaultAgentId,
+    );
+  }, [
+    defaultAgentId,
+    jsonEnabled,
+    jsonMode,
+    storeAgents,
+    systemAgents,
+    validation,
+  ]);
+
   const syncDraftFromStore = useCallback(() => {
-    setDraftText(formatAgentsConfig(agentsActions.getConfig()));
+    setDraftText(agentsActions.formatOverlayDraft());
   }, []);
 
   const loadRegistry = useCallback(async (refresh = false) => {
@@ -181,31 +224,46 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     void loadRegistry(false);
   }, [open, loadRegistry, syncDraftFromStore]);
 
-  // 有效配置即时写入 store，并校正默认 Agent 选择
+  // JSON 开启且有效时写入 overlay，并校正默认 Agent 选择
   useEffect(() => {
-    if (!open || tab !== "advanced" || !validation.ok || !validConfigFingerprint)
+    if (
+      !open ||
+      tab !== "advanced" ||
+      !jsonEnabled ||
+      !validation.ok ||
+      !validOverlayFingerprint
+    ) {
       return;
-    const current = agentsActions.getConfig();
-    const next = validation.config;
+    }
+    const next = validation.document;
+    const current = agentsActions.getOverlayDraft();
     const same =
-      current.defaultAgentId === next.defaultAgentId &&
-      JSON.stringify(current.agents) === JSON.stringify(next.agents);
+      JSON.stringify(current.agents) === JSON.stringify(next.agents) &&
+      (current.defaultAgentId ?? defaultAgentId) ===
+        (next.defaultAgentId ?? defaultAgentId) &&
+      (current.mode ?? jsonMode) === (next.mode ?? jsonMode);
     if (!same) {
-      agentsActions.setConfig(next);
+      agentsActions.setOverlay(next);
     }
-    if (!next.agents.some((agent) => agent.id === preferredAgentId)) {
-      tabsActions.setPreferredAgentId(next.defaultAgentId);
+    const effective = agentsActions.getConfig();
+    if (!effective.agents.some((agent) => agent.id === preferredAgentId)) {
+      tabsActions.setPreferredAgentId(effective.defaultAgentId);
     }
-  }, [open, preferredAgentId, tab, validConfigFingerprint, validation]);
+  }, [
+    defaultAgentId,
+    jsonEnabled,
+    jsonMode,
+    open,
+    preferredAgentId,
+    tab,
+    validOverlayFingerprint,
+    validation,
+  ]);
 
   const rows: AgentRowStatus[] = useMemo(() => {
-    if (tab === "advanced" && validation.ok) {
-      return validation.config.agents.map((agent) => ({
-        agent,
-        availability: availabilityById[agent.id] ?? { status: "idle" },
-      }));
-    }
-    return storeAgents.map((agent) => ({
+    const list =
+      tab === "advanced" ? previewConfig.agents : storeAgents;
+    return list.map((agent) => ({
       agent: {
         id: agent.id,
         name: agent.name,
@@ -215,15 +273,13 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
       },
       availability: availabilityById[agent.id] ?? { status: "idle" },
     }));
-  }, [availabilityById, storeAgents, tab, validation]);
+  }, [availabilityById, previewConfig.agents, storeAgents, tab]);
 
   // 配置有效时探测各 Agent 可执行文件是否可用（防抖）
   useEffect(() => {
     if (!open) return;
     const agents =
-      tab === "advanced" && validation.ok
-        ? validation.config.agents
-        : storeAgents;
+      tab === "advanced" ? previewConfig.agents : storeAgents;
     if (agents.length === 0) return;
 
     const timer = window.setTimeout(() => {
@@ -300,7 +356,29 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     return () => {
       window.clearTimeout(timer);
     };
-  }, [open, storeAgents, tab, validConfigFingerprint, validation]);
+  }, [open, previewConfig.agents, storeAgents, tab]);
+
+  const handleJsonEnabledChange = (enabled: boolean) => {
+    if (enabled) {
+      agentsActions.setMode("extend");
+    } else {
+      agentsActions.setMode("off");
+    }
+    syncDraftFromStore();
+    probedCommandsRef.current = {};
+  };
+
+  const handleJsonModeChange = (mode: "extend" | "replace") => {
+    if (mode === "replace" && jsonMode !== "replace") {
+      const ok = window.confirm(
+        "「完全手动」会忽略系统发现/安装的 Agent，仅以 JSON 为准。确定切换？",
+      );
+      if (!ok) return;
+    }
+    agentsActions.setMode(mode);
+    syncDraftFromStore();
+    probedCommandsRef.current = {};
+  };
 
   const handleReset = () => {
     agentsActions.resetToDefault();
@@ -313,16 +391,23 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     }
   };
 
-  const handleInstall = async (entry: RegistryAgentEntry) => {
+  const handleEnsure = async (
+    entry: RegistryAgentEntry,
+    options?: { preferUpdate?: boolean; forceInstall?: boolean },
+  ) => {
     setActionError(null);
     setBusyIds((prev) => ({ ...prev, [entry.id]: "install" }));
     setProgressById((prev) => ({
       ...prev,
-      [entry.id]: { message: "开始安装…", stage: "start" },
+      [entry.id]: {
+        message: options?.preferUpdate ? "开始更新…" : "开始准备…",
+        stage: "start",
+      },
     }));
     try {
-      const installed = await installAgentWithProgress(
+      const result = await ensureAgentReadyWithProgress(
         entry.id,
+        { preferUpdate: options?.preferUpdate },
         (event: InstallProgressEvent) => {
           if (event.type === "stage") {
             setProgressById((prev) => ({
@@ -348,20 +433,22 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
       );
       agentsActions.upsertFromRegistry(
         {
-          id: installed.agentId,
-          name: installed.name || entry.name,
-          // Prefer Bridge detect via registry id; keep empty override.
+          id: result.agentId,
+          name: entry.name,
           command: [],
-          source: "registry",
-          registryId: installed.agentId,
+          source: result.skippedDownload ? "detected" : "registry",
+          registryId: result.agentId,
         },
-        legacyIdsForRegistry(installed.agentId),
+        legacyIdsForRegistry(result.agentId),
       );
       if (
-        legacyIdsForRegistry(installed.agentId).includes(preferredAgentId) ||
-        preferredAgentId === installed.agentId
+        legacyIdsForRegistry(result.agentId).includes(preferredAgentId) ||
+        preferredAgentId === result.agentId
       ) {
-        tabsActions.setPreferredAgentId(installed.agentId);
+        tabsActions.setPreferredAgentId(result.agentId);
+      }
+      if (result.authHint) {
+        setActionError(result.authHint);
       }
       syncDraftFromStore();
       probedCommandsRef.current = {};
@@ -422,8 +509,8 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
             Agent 配置
           </DialogTitle>
           <DialogDescription>
-            从官方 ACP Registry 发现 / 安装 Agent（原生或适配层）。Bridge 会自动探测本机
-            PATH 与 ~/.qenex；高级 JSON 仅作命令兜底。
+            默认仅内置 OpenCode，其余来自本机发现与 Registry 安装。高级 JSON
+            默认关闭；开启后可扩展或完全手动覆盖。
           </DialogDescription>
         </DialogHeader>
 
@@ -496,31 +583,39 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                     const busy = busyIds[entry.id];
                     const installed = Boolean(entry.installed);
                     const readiness = entry.readiness ?? "install";
-                    const ready = readiness === "ready";
+                    const ready =
+                      readiness === "ready" || readiness === "needAuth";
                     const needAdapter = readiness === "needAdapter";
+                    const onPath =
+                      ready &&
+                      (entry.detected === "path" ||
+                        entry.detected === "vendor");
                     const canInstall =
                       entry.installable &&
                       (needAdapter ||
                         readiness === "install" ||
                         entry.updateAvailable ||
-                        installed);
+                        (!onPath && !ready));
+                    const canHost =
+                      entry.installable &&
+                      onPath &&
+                      !installed &&
+                      !entry.updateAvailable;
                     const installLabel = entry.updateAvailable
                       ? "更新"
                       : needAdapter
                         ? "安装适配层"
-                        : installed
-                          ? "重装"
-                          : "安装";
+                        : "安装";
                     return (
                       <li
                         key={entry.id}
                         className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
                       >
                         <div className="flex items-start gap-2.5">
-                          <img
-                            src={getAgentPresetIconUrl(entry.id, entry.icon)}
-                            alt=""
-                            className="mt-0.5 h-5 w-5 shrink-0 object-contain"
+                          <AgentIcon
+                            agentId={entry.id}
+                            remoteIcon={entry.icon}
+                            className="mt-0.5 h-5 w-5 shrink-0"
                             aria-hidden
                           />
                           <div className="min-w-0 flex-1">
@@ -539,12 +634,18 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                   ? "适配层"
                                   : "原生"}
                               </span>
-                              {ready ? (
+                              {readiness === "ready" ? (
                                 <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
-                                  可用
-                                  {entry.installed
-                                    ? ` ${entry.installed.version}`
-                                    : ""}
+                                  {onPath
+                                    ? "本机已有"
+                                    : entry.installed
+                                      ? `可用 ${entry.installed.version}`
+                                      : "可用"}
+                                </span>
+                              ) : null}
+                              {readiness === "needAuth" ? (
+                                <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                                  需登录
                                 </span>
                               ) : null}
                               {needAdapter ? (
@@ -577,6 +678,11 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                 Claude 或 Codex
                               </p>
                             ) : null}
+                            {entry.authHint ? (
+                              <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                                {entry.authHint}
+                              </p>
+                            ) : null}
                             {entry.detail ? (
                               <p className="mt-1 text-[10px] text-muted-foreground">
                                 {entry.detail}
@@ -589,16 +695,32 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                             ) : null}
                           </div>
                           <div className="flex shrink-0 flex-col gap-1">
+                            {onPath && !entry.updateAvailable ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 gap-1 px-2 text-xs"
+                                disabled
+                              >
+                                <CheckCircle2 className="size-3.5" />
+                                本机已有
+                              </Button>
+                            ) : null}
                             {canInstall ? (
                               <Button
                                 type="button"
                                 size="sm"
                                 variant={
-                                  ready || installed ? "outline" : "default"
+                                  entry.updateAvailable ? "default" : "default"
                                 }
                                 className="h-7 gap-1 px-2 text-xs"
                                 disabled={Boolean(busy)}
-                                onClick={() => void handleInstall(entry)}
+                                onClick={() =>
+                                  void handleEnsure(entry, {
+                                    preferUpdate: entry.updateAvailable,
+                                  })
+                                }
                               >
                                 {busy === "install" ? (
                                   <Loader2 className="size-3.5 animate-spin" />
@@ -606,6 +728,27 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                   <Download className="size-3.5" />
                                 )}
                                 {installLabel}
+                              </Button>
+                            ) : null}
+                            {canHost ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 gap-1 px-2 text-xs"
+                                disabled={Boolean(busy)}
+                                onClick={() =>
+                                  void handleEnsure(entry, {
+                                    forceInstall: true,
+                                  })
+                                }
+                              >
+                                {busy === "install" ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Download className="size-3.5" />
+                                )}
+                                托管安装
                               </Button>
                             ) : null}
                             {installed ? (
@@ -658,10 +801,9 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                         className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
                       >
                         <div className="flex items-start gap-2.5">
-                          <img
-                            src={getAgentPresetIconUrl(agent.id)}
-                            alt=""
-                            className="mt-0.5 h-5 w-5 shrink-0 object-contain"
+                          <AgentIcon
+                            agentId={agent.id}
+                            className="mt-0.5 h-5 w-5 shrink-0"
                             aria-hidden
                           />
                           <div className="min-w-0 flex-1">
@@ -684,7 +826,9 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                               ) : null}
                             </div>
                             <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {agent.command.join(" ")}
+                              {agent.command.length > 0
+                                ? agent.command.join(" ")
+                                : "（由 Bridge 解析）"}
                             </p>
                             <AvailabilityBadge availability={availability} />
                           </div>
@@ -699,98 +843,186 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
         ) : null}
 
         {tab === "advanced" ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden md:grid-cols-2">
-            <div className="flex min-h-0 flex-col border-b border-border md:border-b-0 md:border-e">
-              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  配置 JSON
-                </span>
-                {validation.ok ? (
-                  <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 className="size-3.5" />
-                    有效
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-xs text-destructive">
-                    <AlertCircle className="size-3.5" />
-                    无效
-                  </span>
-                )}
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3">
-                <div className="overflow-hidden rounded-md border border-border">
-                  <CodeMirror
-                    value={draftText}
-                    height="420px"
-                    theme={editorTheme}
-                    extensions={JSON_EDITOR_EXTENSIONS}
-                    basicSetup={{
-                      lineNumbers: true,
-                      foldGutter: true,
-                      highlightActiveLine: true,
-                      highlightActiveLineGutter: true,
-                    }}
-                    className="text-[13px] [&_.cm-scroller]:overflow-auto"
-                    onChange={setDraftText}
-                  />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-3.5 accent-primary"
+                  checked={jsonEnabled}
+                  onChange={(e) => handleJsonEnabledChange(e.target.checked)}
+                />
+                <span>启用高级 JSON</span>
+              </label>
+              {jsonEnabled ? (
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="text-muted-foreground">合并模式</span>
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      name="agents-json-mode"
+                      className="accent-primary"
+                      checked={jsonMode === "extend"}
+                      onChange={() => handleJsonModeChange("extend")}
+                    />
+                    扩展系统列表
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      name="agents-json-mode"
+                      className="accent-primary"
+                      checked={jsonMode === "replace"}
+                      onChange={() => handleJsonModeChange("replace")}
+                    />
+                    完全手动（危险）
+                  </label>
                 </div>
-              </div>
-              {!validation.ok ? (
-                <p className="border-t border-border px-4 py-2 text-xs text-destructive">
-                  {validation.error}
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  关闭时仅使用系统层：OpenCode + 本机发现 + Registry 安装。
                 </p>
-              ) : null}
+              )}
             </div>
 
-            <div className="flex min-h-0 flex-col overflow-hidden">
-              <div className="border-b border-border px-4 py-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  预览
-                  {validation.ok
-                    ? `（默认：${validation.config.defaultAgentId}）`
-                    : ""}
-                </span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                {rows.length === 0 ? (
-                  <p className="px-1 py-6 text-center text-sm text-muted-foreground">
-                    暂无 Agent
-                  </p>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {rows.map(({ agent, availability }) => (
-                      <li
-                        key={agent.id}
-                        className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
-                      >
-                        <div className="flex items-start gap-2.5">
-                          <img
-                            src={getAgentPresetIconUrl(agent.id)}
-                            alt=""
-                            className="mt-0.5 h-5 w-5 shrink-0 object-contain"
-                            aria-hidden
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="truncate text-sm font-medium">
-                                {agent.name}
-                              </span>
-                              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                                {agent.id}
-                              </span>
+            {jsonEnabled ? (
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden md:grid-cols-2">
+                <div className="flex min-h-0 flex-col border-b border-border md:border-b-0 md:border-e">
+                  <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {jsonMode === "replace"
+                        ? "完整 Agent 列表 JSON"
+                        : "扩展补丁 JSON（可 hidden / 覆盖 command）"}
+                    </span>
+                    {validation.ok ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="size-3.5" />
+                        有效
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs text-destructive">
+                        <AlertCircle className="size-3.5" />
+                        无效
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto p-3">
+                    <div className="overflow-hidden rounded-md border border-border">
+                      <CodeMirror
+                        value={draftText}
+                        height="360px"
+                        theme={editorTheme}
+                        extensions={JSON_EDITOR_EXTENSIONS}
+                        basicSetup={{
+                          lineNumbers: true,
+                          foldGutter: true,
+                          highlightActiveLine: true,
+                          highlightActiveLineGutter: true,
+                        }}
+                        className="text-[13px] [&_.cm-scroller]:overflow-auto"
+                        onChange={setDraftText}
+                      />
+                    </div>
+                  </div>
+                  {!validation.ok ? (
+                    <p className="border-t border-border px-4 py-2 text-xs text-destructive">
+                      {validation.error}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex min-h-0 flex-col overflow-hidden">
+                  <div className="border-b border-border px-4 py-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      生效预览
+                      {`（默认：${previewConfig.defaultAgentId}）`}
+                    </span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                    {rows.length === 0 ? (
+                      <p className="px-1 py-6 text-center text-sm text-muted-foreground">
+                        暂无 Agent
+                      </p>
+                    ) : (
+                      <ul className="flex flex-col gap-2">
+                        {rows.map(({ agent, availability }) => (
+                          <li
+                            key={agent.id}
+                            className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <AgentIcon
+                                agentId={agent.id}
+                                className="mt-0.5 h-5 w-5 shrink-0"
+                                aria-hidden
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="truncate text-sm font-medium">
+                                    {agent.name}
+                                  </span>
+                                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                                    {agent.id}
+                                  </span>
+                                </div>
+                                <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                                  {agent.command.length > 0
+                                    ? agent.command.join(" ")
+                                    : "（由 Bridge 解析）"}
+                                </p>
+                                <AvailabilityBadge availability={availability} />
+                              </div>
                             </div>
-                            <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {agent.command.join(" ")}
-                            </p>
-                            <AvailabilityBadge availability={availability} />
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <p className="mb-3 text-xs text-muted-foreground">
+                  当前生效列表（只读）。开启 JSON 后可编写扩展补丁或完整列表。
+                </p>
+                <ul className="flex flex-col gap-2">
+                  {storeAgents.map((agent) => (
+                    <li
+                      key={agent.id}
+                      className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <AgentIcon
+                          agentId={agent.id}
+                          className="mt-0.5 h-5 w-5 shrink-0"
+                          aria-hidden
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate text-sm font-medium">
+                              {agent.name}
+                            </span>
+                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              {agent.id}
+                            </span>
+                            {agent.source ? (
+                              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {agent.source}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                            {agent.command.length > 0
+                              ? agent.command.join(" ")
+                              : "（由 Bridge 解析）"}
+                          </p>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         ) : null}
 

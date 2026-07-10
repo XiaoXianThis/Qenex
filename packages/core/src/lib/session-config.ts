@@ -1,7 +1,18 @@
+import type { AuthMethodInfo } from "./bridge-client.ts";
+
+export type { AuthMethodInfo };
+
 export type SessionOption = {
   id: string;
   name: string;
   description?: string;
+};
+
+/** Structured auth challenge when ACP requires login before session/new. */
+export type AuthChallenge = {
+  detail: string;
+  methods: AuthMethodInfo[];
+  agentName?: string | null;
 };
 
 export type SessionConfig = {
@@ -15,6 +26,8 @@ export type SessionConfig = {
   ready: boolean;
   loading: boolean;
   error: string | null;
+  /** Present when spawn failed with ACP auth_required. */
+  authChallenge: AuthChallenge | null;
 };
 
 export const EMPTY_SESSION_CONFIG: SessionConfig = {
@@ -28,6 +41,7 @@ export const EMPTY_SESSION_CONFIG: SessionConfig = {
   ready: false,
   loading: false,
   error: null,
+  authChallenge: null,
 };
 
 export function parseSessionOptions(value: unknown): SessionOption[] {

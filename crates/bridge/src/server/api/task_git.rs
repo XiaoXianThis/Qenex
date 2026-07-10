@@ -1,0 +1,113 @@
+//! Task-scoped git side-branch APIs (Plan B).
+
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::server::AppState;
+use crate::sessions::{GitSessionBinding, GitSessionStatus, GitTurnCommit, ManagerError};
+
+fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {
+    let status = match &err {
+        ManagerError::NoSession(_) => StatusCode::NOT_FOUND,
+        ManagerError::Store(crate::sessions::StoreError::NotFound(_)) => StatusCode::NOT_FOUND,
+        ManagerError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (status, Json(json!({ "error": err.to_string() })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiffQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindRequest {
+    pub commit_sha: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSessionResponse {
+    #[serde(flatten)]
+    pub status: GitSessionStatus,
+    pub turns: Vec<GitTurnCommit>,
+}
+
+pub async fn get_task_git(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<GitSessionResponse>, (StatusCode, Json<Value>)> {
+    let status = state
+        .session_manager
+        .get_git_status(&task_id)
+        .await
+        .map_err(manager_status)?;
+    let turns = state
+        .session_manager
+        .list_git_turns(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(GitSessionResponse { status, turns }))
+}
+
+pub async fn get_task_git_diff(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Query(q): Query<DiffQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let diff = state
+        .session_manager
+        .git_diff(
+            &task_id,
+            q.from.as_deref(),
+            q.to.as_deref(),
+            q.file.as_deref(),
+        )
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(json!({ "diff": diff })))
+}
+
+pub async fn post_task_git_rewind(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<RewindRequest>,
+) -> Result<Json<GitSessionBinding>, (StatusCode, Json<Value>)> {
+    let binding = state
+        .session_manager
+        .git_rewind(&task_id, &body.commit_sha)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(binding))
+}
+
+pub async fn post_task_git_unrewind(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<GitSessionBinding>, (StatusCode, Json<Value>)> {
+    let binding = state
+        .session_manager
+        .git_unrewind(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(binding))
+}
+
+pub async fn post_task_git_merge(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let hash = state
+        .session_manager
+        .git_merge_base(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(json!({ "success": true, "hash": hash })))
+}

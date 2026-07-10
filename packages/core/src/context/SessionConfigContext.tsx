@@ -9,14 +9,20 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ensureAgentReadyWithProgress,
   ensureSession,
   getSessionConfig,
+  isAgentNotReadyError,
   setConfigOption,
   setMode,
   setModel,
 } from "../lib/bridge-api.ts";
+import { isAuthRequiredError } from "../lib/bridge-client.ts";
+import { agentsActions } from "../store/agents-store.ts";
+import { legacyIdsForRegistry } from "../config/agents.ts";
 import {
   EMPTY_SESSION_CONFIG,
+  type AuthChallenge,
   type SessionConfig,
 } from "../lib/session-config.ts";
 import { modelThoughtPrefsActions } from "../store/model-thought-prefs-store.ts";
@@ -29,6 +35,8 @@ type SessionConfigContextValue = {
   changeModel: (modelId: string) => Promise<void>;
   changeThoughtLevel: (value: string) => Promise<void>;
   refresh: () => Promise<void>;
+  /** Re-run session bootstrap after the user completed external login. */
+  retryAfterAuth: () => Promise<void>;
 };
 
 const SessionConfigContext = createContext<SessionConfigContextValue | null>(
@@ -62,10 +70,16 @@ export function SessionConfigProvider({
     loading: true,
   });
 
-  const bootstrap = useCallback(async (signal?: AbortSignal) => {
-    setConfig((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const result = await ensureSession({
+  const bootstrap = useCallback(async (signal?: AbortSignal): Promise<"ok" | "auth" | "error"> => {
+    setConfig((current) => ({
+      ...current,
+      loading: true,
+      error: null,
+      authChallenge: null,
+    }));
+
+    const runEnsureSession = async () =>
+      ensureSession({
         taskId: threadId,
         cwd,
         agentId,
@@ -73,8 +87,57 @@ export function SessionConfigProvider({
           agentCommand && agentCommand.length > 0 ? agentCommand : undefined,
         resumeSessionId: resumeSessionIdRef.current,
       });
+
+    try {
+      let result;
+      try {
+        result = await runEnsureSession();
+      } catch (firstError) {
+        if (isAuthRequiredError(firstError)) {
+          throw firstError;
+        }
+        const message =
+          firstError instanceof Error ? firstError.message : String(firstError);
+        if (!isAgentNotReadyError(message) || signal?.aborted) {
+          throw firstError;
+        }
+        setConfig((current) => ({
+          ...current,
+          loading: true,
+          error: null,
+          authChallenge: null,
+        }));
+        const ensured = await ensureAgentReadyWithProgress(
+          agentId,
+          undefined,
+          (event) => {
+            if (signal?.aborted) return;
+            if (event.type === "stage" || event.type === "download") {
+              setConfig((current) => ({
+                ...current,
+                loading: true,
+                error: null,
+              }));
+            }
+          },
+        );
+        if (signal?.aborted) {
+          return "error";
+        }
+        agentsActions.upsertFromRegistry(
+          {
+            id: ensured.agentId,
+            name: ensured.installed?.name || ensured.agentId,
+            command: [],
+            source: ensured.skippedDownload ? "detected" : "registry",
+            registryId: ensured.agentId,
+          },
+          legacyIdsForRegistry(ensured.agentId),
+        );
+        result = await runEnsureSession();
+      }
       if (signal?.aborted) {
-        return;
+        return "error";
       }
 
       let next = result.config;
@@ -128,20 +191,39 @@ export function SessionConfigProvider({
       }
 
       if (signal?.aborted) {
-        return;
+        return "error";
       }
       setConfig(next);
       setAgentSessionId(tabId, result.agentSessionId);
       setAgentLoading(tabId, false);
+      return "ok";
     } catch (error) {
       if (signal?.aborted) {
-        return;
+        return "error";
+      }
+      if (isAuthRequiredError(error)) {
+        const challenge = error.asAuthRequired();
+        const authChallenge: AuthChallenge | null = challenge
+          ? {
+              detail: challenge.detail,
+              methods: challenge.methods,
+              agentName: challenge.agentName,
+            }
+          : null;
+        setConfig({
+          ...EMPTY_SESSION_CONFIG,
+          error: challenge?.detail ?? error.message,
+          authChallenge,
+        });
+        setAgentLoading(tabId, false);
+        return "auth";
       }
       setConfig({
         ...EMPTY_SESSION_CONFIG,
         error: error instanceof Error ? error.message : "会话初始化失败",
       });
       setAgentLoading(tabId, false);
+      return "error";
     }
   }, [
     threadId,
@@ -157,6 +239,17 @@ export function SessionConfigProvider({
     const controller = new AbortController();
     void bootstrap(controller.signal);
     return () => controller.abort();
+  }, [bootstrap]);
+
+  const retryAfterAuth = useCallback(async () => {
+    const outcome = await bootstrap();
+    if (outcome === "ok") {
+      return;
+    }
+    if (outcome === "auth") {
+      throw new Error("仍需登录：请确认已完成终端登录后再试");
+    }
+    throw new Error("会话初始化失败，请重试");
   }, [bootstrap]);
 
   // Seed preference for the active model once session config is ready.
@@ -300,8 +393,17 @@ export function SessionConfigProvider({
       changeModel,
       changeThoughtLevel,
       refresh,
+      retryAfterAuth,
     }),
-    [config, agentId, changeMode, changeModel, changeThoughtLevel, refresh],
+    [
+      config,
+      agentId,
+      changeMode,
+      changeModel,
+      changeThoughtLevel,
+      refresh,
+      retryAfterAuth,
+    ],
   );
 
   return (

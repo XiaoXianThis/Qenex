@@ -15,10 +15,12 @@ import {
   setHostPersistStorage,
 } from "../lib/host-storage.ts";
 import {
+  agentsActions,
   agentsStore,
   hydrateAgentsStore,
   startAgentsPersist,
 } from "../store/agents-store.ts";
+import { discoverLocalAgents } from "../lib/bridge-api.ts";
 import {
   hydrateLayoutStore,
   startLayoutPersist,
@@ -67,6 +69,13 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     void (async () => {
       // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
       await hydrateAgentsStore();
+      // Best-effort: merge PATH/vendor-ready agents into presets.
+      try {
+        const discovered = await discoverLocalAgents(false);
+        agentsActions.mergeDetectedAgents(discovered.agents);
+      } catch {
+        // Bridge may be starting; ignore discover failures at hydrate time.
+      }
       await Promise.all([
         hydrateTabsStore(),
         hydrateLayoutStore(),
