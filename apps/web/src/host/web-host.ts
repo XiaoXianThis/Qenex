@@ -58,7 +58,8 @@ export function createWebHost(): QenexHost {
         return null;
       }
 
-      const input = window.prompt("工作目录路径", ".");
+      const fallback = import.meta.env.VITE_DEFAULT_WORKSPACE ?? ".";
+      const input = window.prompt("工作目录路径", fallback);
       if (!input?.trim()) {
         return null;
       }
@@ -66,7 +67,7 @@ export function createWebHost(): QenexHost {
     },
 
     async getDefaultWorkspace() {
-      return ".";
+      return import.meta.env.VITE_DEFAULT_WORKSPACE ?? ".";
     },
 
     storage: {

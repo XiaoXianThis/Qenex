@@ -1,142 +1,108 @@
-import { useCallback, useMemo, useState } from "react";
-import { useAuiState } from "@assistant-ui/store";
-import { sendApproval } from "@qenex/core";
+import { useEffect } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-
-type ApprovalOption = {
-  optionId?: string;
-  id?: string;
-  name?: string;
-  label?: string;
-  kind?: string;
-};
-
-type ApprovalState = {
-  pending?: boolean;
-  callId?: string;
-  toolName?: string;
-  summary?: string;
-  options?: ApprovalOption[];
-};
+  approvalActions,
+  findPanelZone,
+  getPendingApproval,
+  layoutActions,
+  useLayoutStore,
+  useTaskApproval,
+  type ApprovalState,
+  type BridgeHttpAgent,
+} from "@qenex/core";
+import { useAuiState } from "@assistant-ui/store";
+import { ApprovalPanelBody } from "@/layout/panels/ApprovalPanel";
 
 type ApprovalBridgeProps = {
   threadId: string;
+  agent: BridgeHttpAgent;
 };
 
-function optionId(option: ApprovalOption): string {
-  return option.optionId ?? option.id ?? "allow_once";
-}
-
-function optionLabel(option: ApprovalOption): string {
-  return option.name ?? option.label ?? optionId(option);
-}
-
-function isAllowKind(kind: string | undefined): boolean {
-  return kind === "allow_once" || kind === "allow_always";
+function applyApprovalDelta(taskId: string, delta: unknown): void {
+  if (!Array.isArray(delta)) return;
+  for (const op of delta) {
+    if (!op || typeof op !== "object") continue;
+    const patch = op as { op?: string; path?: string; value?: unknown };
+    if (patch.path !== "/approval") continue;
+    if (patch.op === "remove") {
+      approvalActions.clear(taskId);
+      continue;
+    }
+    if (patch.op === "add" || patch.op === "replace") {
+      approvalActions.set(taskId, patch.value);
+    }
+  }
 }
 
 /**
- * Shows approval UI only when the agent emits STATE_DELTA via
- * ACP session/request_permission (bridge begin_permission_request).
+ * Keeps approval store in sync with Bridge waiters + live STATE_DELTA.
+ * History replay does not restore thread.state.approval, so we hydrate via GET.
+ *
+ * Important: never assign live AG-UI state objects into valtio — valtio
+ * deep-proxies in place and breaks AG-UI structuredClone(state).
  */
-export function ApprovalBridge({ threadId }: ApprovalBridgeProps) {
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function ApprovalBridge({ threadId, agent }: ApprovalBridgeProps) {
+  const approval = useTaskApproval(threadId);
+  const pending = approval?.pending === true && !!approval.callId;
+  const puckData = useLayoutStore((s) => s.puckData);
+  const panelInLayout = findPanelZone(puckData, "approval") != null;
 
-  const approval = useAuiState((s) => {
+  const auiApproval = useAuiState((s) => {
     const state = s.thread.state as { approval?: ApprovalState } | null | undefined;
     return state?.approval;
   });
 
-  const pending = approval?.pending === true && !!approval.callId;
-  const options = useMemo(() => approval?.options ?? [], [approval?.options]);
+  useEffect(() => {
+    let cancelled = false;
+    void getPendingApproval(threadId)
+      .then((state) => {
+        if (!cancelled) approvalActions.set(threadId, state);
+      })
+      .catch(() => {
+        if (!cancelled) approvalActions.clear(threadId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId]);
 
-  const respond = useCallback(
-    async (approved: boolean, selectedOptionId?: string) => {
-      if (!approval?.callId) return;
-      setSubmitting(true);
-      setError(null);
-      try {
-        await sendApproval(
-          threadId,
-          approval.callId,
-          approved,
-          selectedOptionId,
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Approval failed");
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [approval?.callId, threadId],
-  );
+  useEffect(() => {
+    if (auiApproval) {
+      approvalActions.set(threadId, auiApproval);
+    }
+  }, [auiApproval, threadId]);
 
-  const handleOption = useCallback(
-    (option: ApprovalOption) => {
-      const id = optionId(option);
-      void respond(isAllowKind(option.kind), id);
-    },
-    [respond],
-  );
+  useEffect(() => {
+    const subscription = agent.subscribe({
+      onStateDeltaEvent: ({ event }) => {
+        applyApprovalDelta(threadId, event.delta);
+      },
+      onStateChanged: ({ state }) => {
+        const next = (state as { approval?: unknown } | null | undefined)?.approval;
+        if (next) {
+          approvalActions.set(threadId, next);
+        }
+      },
+    });
+    return () => subscription.unsubscribe();
+  }, [agent, threadId]);
+
+  useEffect(() => {
+    layoutActions.setPanelVisibleEphemeral("approval", pending);
+  }, [pending]);
+
+  if (panelInLayout) {
+    return null;
+  }
+
+  if (!pending || !approval) {
+    return null;
+  }
 
   return (
-    <Dialog open={pending} onOpenChange={() => undefined}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>需要审批工具调用</DialogTitle>
-          <DialogDescription>
-            {approval?.summary ??
-              `Agent 请求执行工具：${approval?.toolName ?? "unknown"}`}
-          </DialogDescription>
-        </DialogHeader>
-
-        {error ? (
-          <p className="text-sm text-destructive">{error}</p>
-        ) : null}
-
-        <DialogFooter className="flex flex-wrap gap-2 sm:justify-end">
-          {options.length > 0 ? (
-            options.map((option) => (
-              <Button
-                key={optionId(option)}
-                type="button"
-                variant={isAllowKind(option.kind) ? "default" : "destructive"}
-                disabled={submitting}
-                onClick={() => handleOption(option)}
-              >
-                {optionLabel(option)}
-              </Button>
-            ))
-          ) : (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={submitting}
-                onClick={() => void respond(false, "reject_once")}
-              >
-                拒绝
-              </Button>
-              <Button
-                type="button"
-                disabled={submitting}
-                onClick={() => void respond(true, "allow_once")}
-              >
-                批准
-              </Button>
-            </>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="border-border bg-background/95 supports-backdrop-filter:bg-background/80 fixed inset-x-0 bottom-0 z-40 border-t px-3 py-2 backdrop-blur">
+      <div className="mx-auto max-w-3xl">
+        <ApprovalPanelBody threadId={threadId} approval={approval} />
+      </div>
+    </div>
   );
 }

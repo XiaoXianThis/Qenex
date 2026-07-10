@@ -289,7 +289,10 @@ function normalizePersistedAttachments(
   return result;
 }
 
-function extractUserMessage(event: AguiEvent): ThreadMessage | null {
+function extractUserMessage(
+  event: AguiEvent,
+  runId?: string,
+): ThreadMessage | null {
   if (event.type !== "CUSTOM" || event.name !== "user_message") {
     return null;
   }
@@ -299,11 +302,17 @@ function extractUserMessage(event: AguiEvent): ThreadMessage | null {
   const record = value as {
     content?: unknown;
     message?: {
+      id?: string;
       role?: string;
       content?: unknown;
       attachments?: unknown;
     };
   };
+
+  const customMeta =
+    runId != null && runId.length > 0
+      ? { metadata: { custom: { runId } } }
+      : {};
 
   if (record.message?.role === "user") {
     const { text, attachments: fromContent } = agUiUserContentToThreadParts(
@@ -316,13 +325,19 @@ function extractUserMessage(event: AguiEvent): ThreadMessage | null {
       return null;
     }
 
+    const persistedId =
+      typeof record.message.id === "string" && record.message.id.length > 0
+        ? record.message.id
+        : undefined;
+
     return fromThreadMessageLike(
       {
-        id: generateId(),
+        id: persistedId ?? generateId(),
         role: "user",
         // Image-only turns: empty content array (avoid blank text bubble)
         content: text.length > 0 ? text : [],
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...customMeta,
       },
       generateId(),
       USER_STATUS,
@@ -330,7 +345,16 @@ function extractUserMessage(event: AguiEvent): ThreadMessage | null {
   }
 
   if (typeof record.content === "string" && record.content.length > 0) {
-    return toUserMessage(record.content);
+    return fromThreadMessageLike(
+      {
+        id: generateId(),
+        role: "user",
+        content: record.content,
+        ...customMeta,
+      },
+      generateId(),
+      USER_STATUS,
+    );
   }
 
   return null;
@@ -747,8 +771,11 @@ export function replayAgUiEvents(
   let parentId: string | null = null;
 
   for (const runEvents of splitIntoRuns(events)) {
+    const runId = runEvents.find((e) => e.type === "RUN_STARTED")?.runId;
+    const runIdStr = typeof runId === "string" ? runId : undefined;
+
     for (const event of runEvents) {
-      const userMessage = extractUserMessage(event);
+      const userMessage = extractUserMessage(event, runIdStr);
       if (!userMessage) continue;
 
       messages.push({ message: userMessage, parentId });

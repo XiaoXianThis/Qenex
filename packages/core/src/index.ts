@@ -19,6 +19,8 @@ export * from "./store/tabs-store.ts";
 export * from "./store/model-thought-prefs-store.ts";
 export * from "./store/layout-store.ts";
 export * from "./store/style-store.ts";
+export * from "./store/tool-progress-store.ts";
+export * from "./store/approval-store.ts";
 export * from "./style/types.ts";
 export * from "./style/defaults.ts";
 export * from "./style/css-theme.ts";

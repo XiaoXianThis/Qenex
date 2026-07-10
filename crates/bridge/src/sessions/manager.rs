@@ -80,6 +80,16 @@ pub struct ActiveSession {
     pub mode_config_id: Option<String>,
 }
 
+/// Result of rewinding conversation (+ optional git) to before a user turn.
+#[derive(Debug, Clone)]
+pub struct RewindTaskResult {
+    pub run_id: String,
+    pub target_sha: Option<String>,
+    pub deleted_events: u64,
+    pub deleted_turns: u64,
+    pub binding: Option<GitSessionBinding>,
+}
+
 /// Session configuration exposed to the frontend.
 #[derive(Debug, Clone)]
 pub struct SessionConfigSnapshot {
@@ -436,6 +446,170 @@ impl SessionManager {
             .map_err(|e| ManagerError::Agent(e.to_string()))
     }
 
+    /// Rewind conversation (+ git side-branch) to before a user message / run.
+    ///
+    /// Accepts either `run_id` or 0-based `user_message_index` among persisted
+    /// `CUSTOM user_message` events.
+    pub async fn rewind_task(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+        user_message_index: Option<usize>,
+    ) -> Result<RewindTaskResult, ManagerError> {
+        let store = self.store.clone();
+
+        let (from_event_id, resolved_run_id) = {
+            let s = store.lock().await;
+            if let Some(run_id) = run_id {
+                let from_id = s
+                    .first_event_id_for_run(task_id, run_id)
+                    .await?
+                    .ok_or_else(|| {
+                        ManagerError::Agent(format!("run not found: {run_id}"))
+                    })?;
+                (from_id, run_id.to_string())
+            } else if let Some(index) = user_message_index {
+                let (from_id, run_id) = s
+                    .find_user_message_boundary(task_id, index)
+                    .await?
+                    .ok_or_else(|| {
+                        ManagerError::Agent(format!(
+                            "user message index {index} not found"
+                        ))
+                    })?;
+                (from_id, run_id)
+            } else {
+                return Err(ManagerError::Agent(
+                    "runId or userMessageIndex required".into(),
+                ));
+            }
+        };
+
+        let run_ids = store
+            .lock()
+            .await
+            .run_ids_from_event_id(task_id, from_event_id)
+            .await?;
+
+        let mut binding = self.get_git_binding(task_id).await?;
+        let mut target_sha: Option<String> = None;
+
+        if binding.enabled {
+            let sha = self
+                .resolve_git_sha_before_runs(task_id, &resolved_run_id, &run_ids, &binding)
+                .await?;
+            target_sha = Some(sha.clone());
+            git_session::rewind_to(&mut binding, &sha)
+                .await
+                .map_err(|e| ManagerError::Agent(e.to_string()))?;
+            store.lock().await.upsert_git_binding(&binding).await?;
+        }
+
+        let deleted_turns = store
+            .lock()
+            .await
+            .delete_git_turns_for_runs(task_id, &run_ids)
+            .await?;
+        let deleted_events = store
+            .lock()
+            .await
+            .delete_events_from_id(task_id, from_event_id)
+            .await?;
+
+        // Best-effort: drop ACP session so the agent does not retain deleted turns.
+        if let Err(e) = self.reset_agent_session_fresh(task_id).await {
+            tracing::warn!(
+                task_id,
+                error = %e,
+                "rewind truncated history but failed to reset agent session"
+            );
+        }
+
+        Ok(RewindTaskResult {
+            run_id: resolved_run_id,
+            target_sha,
+            deleted_events,
+            deleted_turns,
+            binding: if binding.enabled { Some(binding) } else { None },
+        })
+    }
+
+    async fn resolve_git_sha_before_runs(
+        &self,
+        task_id: &str,
+        primary_run_id: &str,
+        run_ids: &[String],
+        binding: &GitSessionBinding,
+    ) -> Result<String, ManagerError> {
+        let store = self.store.lock().await;
+        if let Some(turn) = store.get_git_turn_by_run_id(task_id, primary_run_id).await? {
+            return Ok(turn.parent_sha);
+        }
+        let turns = store.list_git_turn_commits(task_id).await?;
+        drop(store);
+        for turn in turns {
+            if run_ids.iter().any(|id| id == &turn.run_id) {
+                return Ok(turn.parent_sha);
+            }
+        }
+        Ok(binding
+            .tip_sha
+            .clone()
+            .unwrap_or_else(|| binding.base_sha.clone()))
+    }
+
+    /// Stop in-memory ACP session and spawn a fresh one (no resume).
+    async fn reset_agent_session_fresh(&self, task_id: &str) -> Result<(), ManagerError> {
+        let stored = self
+            .store
+            .lock()
+            .await
+            .get(task_id)
+            .await?
+            .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+
+        let _ = self.stop(task_id).await?;
+
+        // Force a new ACP session so the agent does not retain deleted turns.
+        // create_task upserts agent_session_id and reuses the existing git binding.
+        let _ = self
+            .create_task(
+                task_id,
+                &stored.cwd,
+                &stored.title,
+                None,
+                None,
+                None,
+                None,
+                None,
+                stored.agent_id.clone(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Discard all side-branch file changes (reset to base), keep conversation.
+    pub async fn git_undo_all_changes(
+        &self,
+        task_id: &str,
+    ) -> Result<GitSessionBinding, ManagerError> {
+        let binding = self.get_git_binding(task_id).await?;
+        if !binding.enabled {
+            return Err(ManagerError::Agent("git session disabled".into()));
+        }
+        let base = binding.base_sha.clone();
+        self.git_rewind(task_id, &base).await?;
+        // Drop turn records so UI matches working tree (conversation kept).
+        let turns = self.list_git_turns(task_id).await?;
+        let run_ids: Vec<String> = turns.into_iter().map(|t| t.run_id).collect();
+        self.store
+            .lock()
+            .await
+            .delete_git_turns_for_runs(task_id, &run_ids)
+            .await?;
+        self.get_git_binding(task_id).await
+    }
+
     async fn maybe_commit_git_turn(store: Arc<Mutex<SessionStore>>, task_id: &str, run_id: &str) {
         let binding = match store.lock().await.get_git_binding(task_id).await {
             Ok(Some(b)) if b.enabled => b,
@@ -656,6 +830,23 @@ impl SessionManager {
         }
 
         Ok(())
+    }
+
+    /// Live pending approval UI state (survives page refresh while Bridge holds waiters).
+    pub async fn pending_approval(&self, task_id: &str) -> Result<Value, ManagerError> {
+        if self.demo_tasks.lock().await.contains(task_id) {
+            return Ok(json!({ "pending": false, "pendingCount": 0 }));
+        }
+        let bridge = {
+            let sessions = self.sessions.lock().await;
+            let Some(active) = sessions.get(task_id) else {
+                // Task may exist in DB but session not in memory (e.g. after restart).
+                return Ok(json!({ "pending": false, "pendingCount": 0 }));
+            };
+            active.bridge.clone()
+        };
+        let b = bridge.lock().await;
+        Ok(b.current_approval_ui())
     }
 
     pub async fn cancel_run(&self, task_id: &str) -> Result<(), ManagerError> {

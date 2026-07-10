@@ -5,6 +5,7 @@ import {
   type SessionOption,
 } from "./session-config.ts";
 import type { AguiEvent } from "./bridge-agent.ts";
+import type { ApprovalState } from "../store/approval-store.ts";
 
 export type ApprovalResponse = {
   success: boolean;
@@ -192,6 +193,11 @@ export async function sendApproval(
       optionId: optionId ?? null,
     }),
   });
+}
+
+/** Live pending approval (Bridge waiters) — used to restore UI after refresh. */
+export async function getPendingApproval(taskId: string): Promise<ApprovalState> {
+  return fetchJson<ApprovalState>(`/v2/tasks/${taskId}/approval`);
 }
 
 export async function listTasks(): Promise<TaskListResponse> {
@@ -670,6 +676,36 @@ export async function mergeTaskGit(
     `/v2/tasks/${taskId}/git/merge`,
     { method: "POST" },
   );
+}
+
+export async function undoAllTaskGit(
+  taskId: string,
+): Promise<GitSessionBinding> {
+  return fetchJson<GitSessionBinding>(`/v2/tasks/${taskId}/git/undo-all`, {
+    method: "POST",
+  });
+}
+
+export type RewindTaskResponse = {
+  runId: string;
+  targetSha: string | null;
+  deletedEvents: number;
+  deletedTurns: number;
+  binding: GitSessionBinding | null;
+};
+
+/** Rewind conversation (+ git) to before a user message / run. */
+export async function rewindTask(
+  taskId: string,
+  opts: { runId?: string; userMessageIndex?: number },
+): Promise<RewindTaskResponse> {
+  return fetchJson<RewindTaskResponse>(`/v2/tasks/${taskId}/rewind`, {
+    method: "POST",
+    body: JSON.stringify({
+      runId: opts.runId,
+      userMessageIndex: opts.userMessageIndex,
+    }),
+  });
 }
 
 export function hasSelectableOptions(options: SessionOption[]): boolean {

@@ -4,16 +4,14 @@ import type { PanelId } from "@qenex/core";
 import {
   CheckSquare,
   Coins,
-  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { FC } from "react";
 
 const WIDGET_META: Record<
-  Extract<PanelId, "approval" | "checklist" | "tokenStats">,
+  Extract<PanelId, "checklist" | "tokenStats">,
   { title: string; icon: LucideIcon }
 > = {
-  approval: { title: "审批", icon: ShieldCheck },
   checklist: { title: "CheckList", icon: CheckSquare },
   tokenStats: { title: "Token 统计", icon: Coins },
 };

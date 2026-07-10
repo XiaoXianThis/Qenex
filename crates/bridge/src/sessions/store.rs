@@ -539,6 +539,154 @@ impl SessionStore {
             })
             .collect())
     }
+
+    pub async fn get_git_turn_by_run_id(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<Option<super::git_session::GitTurnCommit>, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            r#"
+            SELECT task_id, run_id, commit_sha, parent_sha, message, created_at
+            FROM git_turn_commits
+            WHERE task_id = ? AND run_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|r| super::git_session::GitTurnCommit {
+            task_id: r.get("task_id"),
+            run_id: r.get("run_id"),
+            commit_sha: r.get("commit_sha"),
+            parent_sha: r.get("parent_sha"),
+            message: r.get("message"),
+            created_at: r.get("created_at"),
+        }))
+    }
+
+    /// First event row id for a run (boundary for truncate).
+    pub async fn first_event_id_for_run(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            "SELECT id FROM events WHERE task_id = ? AND run_id = ? ORDER BY id ASC LIMIT 1",
+        )
+        .bind(task_id)
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.map(|r| r.get("id")))
+    }
+
+    /// Resolve the Nth persisted user_message (0-based) → (event_id, run_id).
+    pub async fn find_user_message_boundary(
+        &self,
+        task_id: &str,
+        user_message_index: usize,
+    ) -> Result<Option<(i64, String)>, StoreError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            r#"
+            SELECT id, run_id, event_data
+            FROM events
+            WHERE task_id = ? AND event_type = 'CUSTOM'
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(task_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut seen = 0usize;
+        for row in rows {
+            let event_data: String = row.get("event_data");
+            let Ok(event) = serde_json::from_str::<AguiEvent>(&event_data) else {
+                continue;
+            };
+            let is_user = matches!(
+                &event,
+                AguiEvent::Custom { name, .. } if name == "user_message"
+            );
+            if !is_user {
+                continue;
+            }
+            if seen == user_message_index {
+                let id: i64 = row.get("id");
+                let run_id: String = row.get("run_id");
+                return Ok(Some((id, run_id)));
+            }
+            seen += 1;
+        }
+        Ok(None)
+    }
+
+    pub async fn delete_events_from_id(
+        &self,
+        task_id: &str,
+        from_id: i64,
+    ) -> Result<u64, StoreError> {
+        let pool = self.pool()?;
+        let result = sqlx::query("DELETE FROM events WHERE task_id = ? AND id >= ?")
+            .bind(task_id)
+            .bind(from_id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn delete_git_turns_for_runs(
+        &self,
+        task_id: &str,
+        run_ids: &[String],
+    ) -> Result<u64, StoreError> {
+        if run_ids.is_empty() {
+            return Ok(0);
+        }
+        let pool = self.pool()?;
+        let mut total = 0u64;
+        for run_id in run_ids {
+            let result = sqlx::query(
+                "DELETE FROM git_turn_commits WHERE task_id = ? AND run_id = ?",
+            )
+            .bind(task_id)
+            .bind(run_id)
+            .execute(pool)
+            .await?;
+            total += result.rows_affected();
+        }
+        Ok(total)
+    }
+
+    /// Distinct run_ids for events with id >= from_id.
+    pub async fn run_ids_from_event_id(
+        &self,
+        task_id: &str,
+        from_id: i64,
+    ) -> Result<Vec<String>, StoreError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            r#"
+            SELECT run_id FROM events
+            WHERE task_id = ? AND id >= ?
+            GROUP BY run_id
+            ORDER BY MIN(id) ASC
+            "#,
+        )
+        .bind(task_id)
+        .bind(from_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get("run_id")).collect())
+    }
 }
 
 fn row_to_summary(row: &sqlx::sqlite::SqliteRow) -> TaskSummary {

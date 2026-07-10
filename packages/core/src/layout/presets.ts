@@ -30,6 +30,7 @@ function classicPuckData() {
       columnOfPanels([
         "followupSuggestions",
         "scrollToBottom",
+        "approval",
         "composer",
         "welcomeSuggestions",
       ]),
@@ -45,6 +46,7 @@ function composerTopPuckData() {
       columnOfPanels([
         "followupSuggestions",
         "scrollToBottom",
+        "approval",
         "welcomeSuggestions",
       ]),
     ],
@@ -60,6 +62,7 @@ function tabsBottomPuckData() {
         "tabBar",
         "followupSuggestions",
         "scrollToBottom",
+        "approval",
         "composer",
         "welcomeSuggestions",
       ]),
@@ -71,7 +74,7 @@ function minimalPuckData() {
   resetPuckIdCounter();
   return buildPuckData({
     top: [columnOfPanels(["tabBar"])],
-    bottom: [columnOfPanels(["composer"])],
+    bottom: [columnOfPanels(["approval", "composer"])],
   });
 }
 
@@ -85,14 +88,20 @@ function workspacePuckData() {
     bottom: [
       columnOfPanels(["composer"]),
       columnOfPanels(["followupSuggestions"]),
+      columnOfPanels(["approval"]),
       columnOfPanels(["checklist"]),
     ],
   });
 }
 
+const APPROVAL_HIDDEN = {
+  approval: { visible: false, widthScope: "viewport" as const },
+};
+
 export const CLASSIC_LAYOUT: LayoutPersistedState = buildState(
   "classic",
   classicPuckData(),
+  APPROVAL_HIDDEN,
 );
 
 export const LAYOUT_PRESETS: Record<
@@ -100,8 +109,16 @@ export const LAYOUT_PRESETS: Record<
   LayoutPersistedState
 > = {
   classic: CLASSIC_LAYOUT,
-  composerTop: buildState("composerTop", composerTopPuckData()),
-  tabsBottom: buildState("tabsBottom", tabsBottomPuckData()),
+  composerTop: buildState(
+    "composerTop",
+    composerTopPuckData(),
+    APPROVAL_HIDDEN,
+  ),
+  tabsBottom: buildState(
+    "tabsBottom",
+    tabsBottomPuckData(),
+    APPROVAL_HIDDEN,
+  ),
   minimal: buildState(
     "minimal",
     minimalPuckData(),

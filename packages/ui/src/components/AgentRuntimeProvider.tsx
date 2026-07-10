@@ -5,8 +5,9 @@ import {
   type ChatModelAdapter,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ApprovalBridge } from "@/components/ApprovalBridge";
+import { ApprovalBridge } from "@/components/approvalBridge";
 import { TabTitleBridge } from "@/components/TabTitleBridge";
+import { ToolProgressBridge } from "@/components/ToolProgressBridge";
 import {
   BridgeHttpAgent,
   SessionConfigProvider,
@@ -109,7 +110,8 @@ function AgentRuntimeProviderInner({
         tabId={session.tabId}
         threadId={session.threadId}
       />
-      <ApprovalBridge threadId={session.threadId} />
+      <ToolProgressBridge agent={agent} />
+      <ApprovalBridge threadId={session.threadId} agent={agent} />
       {children}
     </AssistantRuntimeProvider>
   );

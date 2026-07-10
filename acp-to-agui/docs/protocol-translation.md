@@ -17,9 +17,9 @@ The bridge sits between them, maintaining state and emitting properly sequenced 
 | `session/update` → `agent_message_chunk` | First text in turn | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` | Opens new message |
 | `session/update` → `agent_message_chunk` | Subsequent text | `TEXT_MESSAGE_CONTENT` only | Same message ID |
 | `session/update` → `tool_call` | No approval needed | `TOOL_CALL_START` + `TOOL_CALL_ARGS` | Closes open text message first |
-| `session/update` → `tool_call` | Approval needed | + `STATE_UPDATE` (approval pending) | Frontend shows approval dialog |
-| `session/update` → `tool_call_update` | `status=running` | `TOOL_CALL_ARGS` (progress) | Intermediate update |
-| `session/update` → `tool_call_update` | `status=completed/failed` | `TOOL_CALL_END` | Removes from open set |
+| `session/update` → `tool_call` | Approval needed | + `STATE_UPDATE` (approval pending) | Frontend shows approval panel |
+| `session/update` → `tool_call_update` | intermediate content / running | `CUSTOM` (`tool_call_progress`) | Not `TOOL_CALL_ARGS` (AG-UI args are JSON only) |
+| `session/update` → `tool_call_update` | `status=completed/failed` | `TOOL_CALL_RESULT` + `TOOL_CALL_END` | Removes from open set |
 | `session/update` → `turn_end` | — | `TEXT_MESSAGE_END` + all `TOOL_CALL_END` + `RUN_FINISHED` | Closes everything |
 | `session/update` → `current_mode_update` | — | `CUSTOM` (name: `agent:mode_update`) | Mode change |
 | `session/request_permission` | — | `STATE_UPDATE` (approval pending) | RPC ID stored for response |
@@ -82,7 +82,7 @@ ACP uses a request/response pattern for tool approvals. AG-UI has no concept of 
    Bridge stores: pending_permissions["tool_call_xyz"] = 42
    Bridge emits:  STATE_UPDATE { approval: { pending: true, callId: "tool_call_xyz", ... } }
 
-2. Frontend shows approval dialog
+2. Frontend shows approval panel
    User clicks "Approve"
    Frontend sends: POST /v2/tasks/{id}/approval { callId: "tool_call_xyz", approved: true }
 

@@ -3,13 +3,23 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-export default defineConfig({
+const agentTestWorkspace = path.resolve(__dirname, "../../agent-test");
+
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "../../packages/ui/src"),
     },
   },
+  define:
+    mode === "development"
+      ? {
+          "import.meta.env.VITE_DEFAULT_WORKSPACE": JSON.stringify(
+            agentTestWorkspace,
+          ),
+        }
+      : undefined,
   server: {
     port: 3000,
     proxy: {
@@ -27,4 +37,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

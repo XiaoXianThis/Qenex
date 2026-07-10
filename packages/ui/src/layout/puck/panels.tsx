@@ -9,6 +9,7 @@ import {
   ThreadSuggestions,
 } from "@/components/assistant-ui/thread";
 import { WidgetPlaceholder } from "@/layout/panels/WidgetPlaceholder";
+import { ApprovalPanel } from "@/layout/panels/ApprovalPanel";
 import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import type { PanelId } from "@qenex/core";
 import { AuiIf, useAuiState, type AssistantState } from "@assistant-ui/react";
@@ -94,7 +95,7 @@ export function renderPanel(
     case "checklist":
       return <WidgetPlaceholder panelId="checklist" />;
     case "approval":
-      return <WidgetPlaceholder panelId="approval" />;
+      return <ApprovalPanel />;
     default:
       return null;
   }

@@ -22,7 +22,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { cn } from "@qenex/core";
+import { cn, useToolProgress } from "@qenex/core";
 import { Button } from "@/components/ui/button";
 
 const ANIMATION_DURATION = 200;
@@ -269,6 +269,33 @@ function ToolFallbackResult({
       </p>
       <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 rounded-md p-2.5 text-xs whitespace-pre-wrap">
         {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+function ToolFallbackProgress({
+  toolCallId: _toolCallId,
+  hasResult,
+  text,
+  className,
+  ...props
+}: React.ComponentProps<"div"> & {
+  toolCallId?: string;
+  hasResult: boolean;
+  text?: string | null;
+}) {
+  if (hasResult || !text) return null;
+
+  return (
+    <div
+      data-slot="tool-fallback-progress"
+      className={cn("aui-tool-fallback-progress", className)}
+      {...props}
+    >
+      <p className="text-muted-foreground text-xs font-medium">Output:</p>
+      <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-64 overflow-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+        {text}
       </pre>
     </div>
   );
@@ -527,6 +554,7 @@ function ToolFallbackApproval({
 
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   toolName,
+  toolCallId,
   argsText,
   result,
   status,
@@ -548,6 +576,14 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
     if (isRequiresAction) setOpen(true);
   }
 
+  const liveProgress = useToolProgress(toolCallId);
+  const [prevHadProgress, setPrevHadProgress] = useState(false);
+  const hasLiveProgress = Boolean(liveProgress) && result === undefined;
+  if (hasLiveProgress !== prevHadProgress) {
+    setPrevHadProgress(hasLiveProgress);
+    if (hasLiveProgress) setOpen(true);
+  }
+
   return (
     <ToolFallbackRoot open={open} onOpenChange={setOpen}>
       <ToolFallbackTrigger toolName={toolName} status={status} />
@@ -564,6 +600,13 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
             interrupt={interrupt}
             approval={approval}
             respondToApproval={respondToApproval}
+          />
+        )}
+        {!isCancelled && (
+          <ToolFallbackProgress
+            toolCallId={toolCallId}
+            hasResult={result !== undefined}
+            text={liveProgress}
           />
         )}
         {!isCancelled && <ToolFallbackResult result={result} />}

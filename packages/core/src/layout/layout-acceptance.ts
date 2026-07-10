@@ -139,6 +139,14 @@ assert(
   "classic composer → bottom",
 );
 assert(
+  findPanelZone(LAYOUT_PRESETS.classic.puckData, "approval") === "bottom",
+  "classic approval → bottom",
+);
+assert(
+  LAYOUT_PRESETS.classic.panels.approval.visible === false,
+  "classic approval hidden by default",
+);
+assert(
   findPanelZone(LAYOUT_PRESETS.tabsBottom.puckData, "tabBar") === "bottom",
   "tabsBottom tabBar → bottom",
 );

@@ -32,9 +32,9 @@ export const LAYOUT_SLOT_ALLOW = [
 
 /** Base layout on Puck slot / Children (no edit-only spacing). */
 const LAYOUT_ROW_SLOT_BASE =
-  "flex w-full gap-2 [&>*]:min-w-0 [&>*]:flex-1";
+  "flex w-full [&>*]:min-w-0 [&>*]:flex-1";
 
-const LAYOUT_COLUMN_SLOT_BASE = "flex w-full flex-col gap-2";
+const LAYOUT_COLUMN_SLOT_BASE = "flex w-full flex-col";
 
 const LAYOUT_ROOT_SLOT_BASE = "flex w-full flex-col gap-2";
 

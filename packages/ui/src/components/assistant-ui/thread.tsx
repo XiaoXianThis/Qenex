@@ -26,6 +26,7 @@ import { AgentIcon } from "@/components/AgentIcon";
 import {
   cn,
   getAgentPreset,
+  rewindTask,
   useLayoutStore,
   useSessionConfig,
   useTabsStore,
@@ -43,6 +44,8 @@ import {
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
   useAuiState,
+  useComposerRuntime,
+  useThreadRuntime,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -56,6 +59,7 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   SquareIcon,
 } from "lucide-react";
 import {
@@ -530,17 +534,103 @@ const UserMessage: FC = () => {
 };
 
 const UserActionBar: FC = () => {
+  const threadRuntime = useThreadRuntime();
+  const messageId = useAuiState((s) => s.message.id);
+  const messageContent = useAuiState((s) => s.message.content);
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+  const tabs = useTabsStore((s) => s.tabs);
+  const taskId = tabs.find((t) => t.id === activeTabId)?.taskId;
+  const [busy, setBusy] = useState(false);
+
+  const handleUndo = async () => {
+    if (!taskId || busy) return;
+    if (
+      !window.confirm(
+        "撤销到这条消息发送前？之后的对话与文件改动都会丢弃。",
+      )
+    ) {
+      return;
+    }
+
+    const exported = threadRuntime.export();
+    const idx = exported.messages.findIndex((m) => m.message.id === messageId);
+    if (idx < 0) return;
+
+    const userMessageIndex =
+      exported.messages
+        .slice(0, idx + 1)
+        .filter((m) => m.message.role === "user").length - 1;
+    if (userMessageIndex < 0) return;
+
+    const textParts = Array.isArray(messageContent)
+      ? messageContent
+          .filter(
+            (p): p is { type: "text"; text: string } =>
+              p.type === "text" && typeof p.text === "string",
+          )
+          .map((p) => p.text)
+      : [];
+    const restoreText = textParts.join("\n");
+
+    setBusy(true);
+    try {
+      await rewindTask(taskId, { userMessageIndex });
+      const kept = exported.messages.slice(0, idx);
+      const remapped = kept.map((item, i) => ({
+        message: item.message,
+        parentId: i === 0 ? null : kept[i - 1]!.message.id,
+      }));
+      threadRuntime.import({
+        messages: remapped,
+        headId: remapped.at(-1)?.message.id ?? null,
+      });
+      if (restoreText) {
+        threadRuntime.composer.setText(restoreText);
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
-      className="aui-user-action-bar-root flex flex-col items-end"
+      className="aui-user-action-bar-root flex flex-col items-end gap-0.5"
     >
-      <ActionBarPrimitive.Edit asChild>
-        <TooltipIconButton tooltip="Edit" className="aui-user-action-edit">
-          <PencilIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Edit>
+      <TooltipIconButton
+        tooltip="撤销"
+        className="aui-user-action-undo"
+        disabled={busy || !taskId}
+        onClick={() => void handleUndo()}
+      >
+        <RotateCcwIcon />
+      </TooltipIconButton>
+      <ActionBarMorePrimitive.Root>
+        <ActionBarMorePrimitive.Trigger asChild>
+          <TooltipIconButton
+            tooltip="更多"
+            className="data-[state=open]:bg-accent"
+          >
+            <MoreHorizontalIcon />
+          </TooltipIconButton>
+        </ActionBarMorePrimitive.Trigger>
+        <ActionBarMorePrimitive.Content
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          className="aui-action-bar-more-content bg-popover/95 text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5 shadow-lg backdrop-blur-sm"
+        >
+          <ActionBarPrimitive.Edit asChild>
+            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none">
+              <PencilIcon className="size-4" />
+              编辑并重发
+            </ActionBarMorePrimitive.Item>
+          </ActionBarPrimitive.Edit>
+        </ActionBarMorePrimitive.Content>
+      </ActionBarMorePrimitive.Root>
     </ActionBarPrimitive.Root>
   );
 };
@@ -556,24 +646,68 @@ const EditComposer: FC = () => {
           className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
           autoFocus
         />
-        <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
-          <ComposerPrimitive.Cancel asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-full px-3.5"
-            >
-              Cancel
-            </Button>
-          </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="h-8 rounded-full px-3.5">
-              Update
-            </Button>
-          </ComposerPrimitive.Send>
-        </div>
+        <EditComposerFooter />
       </ComposerPrimitive.Root>
     </MessagePrimitive.Root>
+  );
+};
+
+/** Must render under ComposerPrimitive.Root so useComposerRuntime binds to the edit composer. */
+const EditComposerFooter: FC = () => {
+  const threadRuntime = useThreadRuntime();
+  const composerRuntime = useComposerRuntime();
+  const messageId = useAuiState((s) => s.message.id);
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+  const tabs = useTabsStore((s) => s.tabs);
+  const taskId = tabs.find((t) => t.id === activeTabId)?.taskId;
+  const [busy, setBusy] = useState(false);
+
+  const handleUpdate = async () => {
+    if (busy) return;
+
+    const exported = threadRuntime.export();
+    const idx = exported.messages.findIndex((m) => m.message.id === messageId);
+    if (idx < 0) return;
+
+    const userMessageIndex =
+      exported.messages
+        .slice(0, idx + 1)
+        .filter((m) => m.message.role === "user").length - 1;
+
+    setBusy(true);
+    try {
+      if (taskId && userMessageIndex >= 0) {
+        await rewindTask(taskId, { userMessageIndex });
+      }
+      composerRuntime.send();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
+      <ComposerPrimitive.Cancel asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 rounded-full px-3.5"
+          disabled={busy}
+        >
+          Cancel
+        </Button>
+      </ComposerPrimitive.Cancel>
+      <Button
+        size="sm"
+        className="h-8 rounded-full px-3.5"
+        disabled={busy}
+        onClick={() => void handleUpdate()}
+      >
+        Update
+      </Button>
+    </div>
   );
 };
 

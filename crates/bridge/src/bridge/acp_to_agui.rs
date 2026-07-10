@@ -29,8 +29,12 @@ pub struct AcpToAguiBridge {
     has_open_reasoning_message: bool,
     has_reasoning_session: bool,
     open_tool_calls: HashSet<String>,
+    /// Tool calls that already emitted END this run — ignore late ACP updates.
+    finished_tool_calls: HashSet<String>,
     pending_notifications: Vec<(String, Value)>,
     permissions: PermissionRegistry,
+    /// Pending approval UI payloads (LIFO display). Registry waiters are separate.
+    pending_approvals: Vec<Value>,
     approval_state_seeded: bool,
     persist_callback: Option<Arc<dyn Fn(String, String, AguiEvent) + Send + Sync>>,
 }
@@ -53,8 +57,10 @@ impl AcpToAguiBridge {
             has_open_reasoning_message: false,
             has_reasoning_session: false,
             open_tool_calls: HashSet::new(),
+            finished_tool_calls: HashSet::new(),
             pending_notifications: Vec::new(),
             permissions,
+            pending_approvals: Vec::new(),
             approval_state_seeded: false,
             persist_callback: None,
         }
@@ -106,6 +112,8 @@ impl AcpToAguiBridge {
         self.has_open_reasoning_message = false;
         self.has_reasoning_session = false;
         self.open_tool_calls.clear();
+        self.finished_tool_calls.clear();
+        self.pending_approvals.clear();
         self.approval_state_seeded = false;
 
         self.emit(AguiEvent::run_started_with_thread(
@@ -263,6 +271,10 @@ impl AcpToAguiBridge {
     }
 
     /// Register a permission request and emit STATE_DELTA.
+    ///
+    /// Multiple pending requests are queued; the UI slot always shows the
+    /// newest (LIFO). Resolving one resurfaces the next remaining request so
+    /// nothing is lost from the single-slot display.
     pub fn start_permission_request(
         &mut self,
         call_id: impl Into<String>,
@@ -286,16 +298,40 @@ impl AcpToAguiBridge {
             approval["category"] = json!(cat);
         }
 
-        self.emit_approval_state(approval);
+        self.pending_approvals.push(approval);
+        self.emit_current_approval_ui(None);
         self.permissions.register(call_id)
     }
 
+    /// Current single-slot approval UI payload (for refresh / reconnect hydrate).
+    pub fn current_approval_ui(&self) -> Value {
+        if let Some(current) = self.pending_approvals.last() {
+            let mut approval = current.clone();
+            approval["pendingCount"] = json!(self.pending_approvals.len());
+            approval
+        } else {
+            json!({
+                "pending": false,
+                "pendingCount": 0,
+            })
+        }
+    }
+
     pub fn emit_approval_resolved(&mut self, call_id: &str, approved: bool) {
-        self.emit_approval_state(json!({
-            "pending": false,
-            "callId": call_id,
-            "approved": approved,
-        }));
+        self.pending_approvals
+            .retain(|a| a.get("callId").and_then(|v| v.as_str()) != Some(call_id));
+
+        if self.pending_approvals.is_empty() {
+            self.emit_approval_state(json!({
+                "pending": false,
+                "callId": call_id,
+                "approved": approved,
+                "pendingCount": 0,
+            }));
+        } else {
+            // Keep single-slot UI filled with the newest remaining request.
+            self.emit_current_approval_ui(Some((call_id, approved)));
+        }
     }
 
     pub async fn wait_for_permission_request(
@@ -437,6 +473,7 @@ impl AcpToAguiBridge {
             tool_name.clone(),
             parent_message_id,
         ));
+        self.finished_tool_calls.remove(&tool_call_id);
         self.open_tool_calls.insert(tool_call_id.clone());
 
         let args_json = serde_json::to_string(&raw_input).unwrap_or_else(|_| "{}".to_string());
@@ -445,7 +482,15 @@ impl AcpToAguiBridge {
 
     fn handle_tool_call_update(&mut self, update: &ToolCallUpdate) {
         let tool_call_id = update.tool_call_id.to_string();
+        if self.finished_tool_calls.contains(&tool_call_id) {
+            tracing::debug!(
+                tool_call_id,
+                "ignoring tool_call_update for already-finished call"
+            );
+            return;
+        }
         let status = update.fields.status;
+        let tool_name = update.fields.title.as_deref();
         let result = update
             .fields
             .raw_output
@@ -453,13 +498,16 @@ impl AcpToAguiBridge {
             .or_else(|| update.fields.content.as_ref().map(|c| json!(c)));
 
         if matches!(status, Some(ToolCallStatus::Completed | ToolCallStatus::Failed)) {
+            self.ensure_tool_call_open(&tool_call_id, tool_name);
             if self.open_tool_calls.remove(&tool_call_id) {
                 self.emit_tool_call_completed(&tool_call_id, result);
             }
         } else if let Some(result) = result {
-            let delta = serde_json::to_string(&json!({ "_progress": result }))
-                .unwrap_or_else(|_| "{}".to_string());
-            self.emit(AguiEvent::tool_call_args(tool_call_id, delta));
+            // AG-UI: TOOL_CALL_ARGS is for argument JSON only. Stream tool
+            // execution output via CUSTOM so clients do not concatenate it
+            // into args (which breaks after args are finalized).
+            self.ensure_tool_call_open(&tool_call_id, tool_name);
+            self.emit_tool_call_progress(&tool_call_id, &result);
         }
     }
 
@@ -489,6 +537,7 @@ impl AcpToAguiBridge {
             tool_name.clone(),
             parent_message_id,
         ));
+        self.finished_tool_calls.remove(&tool_call_id);
         self.open_tool_calls.insert(tool_call_id.clone());
 
         let args_json = serde_json::to_string(&raw_input).unwrap_or_else(|_| "{}".to_string());
@@ -498,21 +547,72 @@ impl AcpToAguiBridge {
     fn handle_tool_call_update_dict(&mut self, update: &Value) {
         let tool_call_id = update
             .get("toolCallId")
+            .or_else(|| update.get("tool_call_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        if tool_call_id.is_empty() {
+            return;
+        }
+        if self.finished_tool_calls.contains(&tool_call_id) {
+            tracing::debug!(
+                tool_call_id,
+                "ignoring tool_call_update for already-finished call"
+            );
+            return;
+        }
         let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        let result = update.get("result").cloned();
+        let tool_name = update
+            .get("title")
+            .or_else(|| update.get("toolName"))
+            .and_then(|v| v.as_str());
+        let result = update
+            .get("result")
+            .cloned()
+            .or_else(|| update.get("rawOutput").cloned())
+            .or_else(|| update.get("content").cloned());
 
         if status == "completed" || status == "failed" {
+            self.ensure_tool_call_open(&tool_call_id, tool_name);
             if self.open_tool_calls.remove(&tool_call_id) {
                 self.emit_tool_call_completed(&tool_call_id, result);
             }
         } else if let Some(result) = result {
-            let delta = serde_json::to_string(&json!({ "_progress": result }))
-                .unwrap_or_else(|_| "{}".to_string());
-            self.emit(AguiEvent::tool_call_args(tool_call_id, delta));
+            self.ensure_tool_call_open(&tool_call_id, tool_name);
+            self.emit_tool_call_progress(&tool_call_id, &result);
         }
+    }
+
+    /// Open a tool call if the agent skipped `tool_call` and only sent updates.
+    fn ensure_tool_call_open(&mut self, tool_call_id: &str, tool_name: Option<&str>) {
+        if self.open_tool_calls.contains(tool_call_id)
+            || self.finished_tool_calls.contains(tool_call_id)
+        {
+            return;
+        }
+        self.close_open_reasoning();
+        let parent_message_id = self.close_open_message();
+        self.emit(AguiEvent::tool_call_start(
+            tool_call_id.to_string(),
+            tool_name.unwrap_or("unknown").to_string(),
+            parent_message_id,
+        ));
+        self.open_tool_calls.insert(tool_call_id.to_string());
+    }
+
+    fn emit_tool_call_progress(&mut self, tool_call_id: &str, content: &Value) {
+        if !self.open_tool_calls.contains(tool_call_id) {
+            return;
+        }
+        let text = extract_tool_progress_text(content);
+        self.emit(AguiEvent::custom(
+            "tool_call_progress",
+            json!({
+                "toolCallId": tool_call_id,
+                "content": content,
+                "text": text,
+            }),
+        ));
     }
 
     fn handle_agent_extension(&mut self, method: &str, params: Value) {
@@ -571,6 +671,7 @@ impl AcpToAguiBridge {
 
     fn close_all_tool_calls(&mut self) {
         for tc_id in self.open_tool_calls.drain().collect::<Vec<_>>() {
+            self.finished_tool_calls.insert(tc_id.clone());
             self.emit(AguiEvent::tool_call_end(tc_id));
         }
     }
@@ -584,26 +685,47 @@ impl AcpToAguiBridge {
             ));
         }
         self.emit(AguiEvent::tool_call_end(tool_call_id));
+        self.finished_tool_calls.insert(tool_call_id.to_string());
     }
 
     fn cancel_all_permission_waiters(&mut self) {
         let cleared = self.permissions.cancel_all();
-        for call_id in cleared {
-            self.emit_approval_state(json!({
-                "pending": false,
-                "callId": call_id,
-                "approved": false,
-            }));
+        self.pending_approvals.clear();
+        if cleared.is_empty() {
+            return;
         }
+        // Single clear is enough for the UI slot; waiters are already cancelled.
+        self.emit_approval_state(json!({
+            "pending": false,
+            "approved": false,
+            "pendingCount": 0,
+        }));
     }
 
     /// Clear approval UI when the run ends and no permission is still pending.
     fn clear_stale_approval_ui(&mut self) {
         if self.approval_state_seeded && !self.permissions.has_pending() {
+            self.pending_approvals.clear();
             self.emit_approval_state(json!({
                 "pending": false,
+                "pendingCount": 0,
             }));
         }
+    }
+
+    /// Emit the newest queued approval (LIFO), with optional last-resolved hint.
+    fn emit_current_approval_ui(&mut self, last_resolved: Option<(&str, bool)>) {
+        let Some(current) = self.pending_approvals.last() else {
+            return;
+        };
+        let mut approval = current.clone();
+        let count = self.pending_approvals.len();
+        approval["pendingCount"] = json!(count);
+        if let Some((call_id, approved)) = last_resolved {
+            approval["lastResolvedCallId"] = json!(call_id);
+            approval["lastResolvedApproved"] = json!(approved);
+        }
+        self.emit_approval_state(approval);
     }
 
     fn emit_approval_state(&mut self, approval: Value) {
@@ -661,6 +783,44 @@ impl AcpToAguiBridge {
             persist_fn(self.task_id.clone(), run_id, event);
         }
     }
+}
+
+/// Best-effort plain text from ACP tool progress payloads (content blocks / stdout).
+fn extract_tool_progress_text(content: &Value) -> Option<String> {
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(stdout) = content.get("stdout").and_then(|v| v.as_str()) {
+        return Some(stdout.to_string());
+    }
+    if let Some(text) = content
+        .get("text")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            content
+                .get("content")
+                .and_then(|c| c.get("text"))
+                .and_then(|t| t.as_str())
+        })
+    {
+        return Some(text.to_string());
+    }
+    if let Some(arr) = content.as_array() {
+        let mut parts = Vec::new();
+        for item in arr {
+            if let Some(t) = item
+                .pointer("/content/text")
+                .and_then(|v| v.as_str())
+                .or_else(|| item.get("text").and_then(|v| v.as_str()))
+            {
+                parts.push(t);
+            }
+        }
+        if !parts.is_empty() {
+            return Some(parts.join(""));
+        }
+    }
+    None
 }
 
 /// Thread-safe wrapper around the bridge.
@@ -915,6 +1075,147 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_progress_emits_custom_not_args() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        let tool = ToolCall::new(ToolCallId::new("call_devin"), "Ran command");
+        bridge.handle_session_update(SessionUpdate::ToolCall(tool));
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ToolCallStart
+        );
+        match rx.try_recv().unwrap() {
+            AguiEvent::ToolCallArgs { delta, .. } => {
+                assert!(!delta.contains("_progress"));
+            }
+            other => panic!("expected TOOL_CALL_ARGS, got {:?}", other.event_type()),
+        }
+
+        // Devin-style cumulative content updates (not completed yet)
+        for text in ["total 8", "total 8\ndrwxr-xr-x ."] {
+            let update = ToolCallUpdate::new(
+                ToolCallId::new("call_devin"),
+                ToolCallUpdateFields::new().content(vec![ContentBlock::Text(
+                    TextContent::new(text),
+                )
+                .into()]),
+            );
+            bridge.handle_session_update(SessionUpdate::ToolCallUpdate(update));
+            match rx.try_recv().unwrap() {
+                AguiEvent::Custom { name, value, .. } => {
+                    assert_eq!(name, "tool_call_progress");
+                    assert_eq!(
+                        value.get("toolCallId").and_then(|v| v.as_str()),
+                        Some("call_devin")
+                    );
+                    assert_eq!(value.get("text").and_then(|v| v.as_str()), Some(text));
+                }
+                other => panic!(
+                    "expected CUSTOM tool_call_progress, got {:?}",
+                    other.event_type()
+                ),
+            }
+            assert!(rx.try_recv().is_err(), "must not emit TOOL_CALL_ARGS for progress");
+        }
+
+        let done = ToolCallUpdate::new(
+            ToolCallId::new("call_devin"),
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(json!("total 8\ndrwxr-xr-x .")),
+        );
+        bridge.handle_session_update(SessionUpdate::ToolCallUpdate(done));
+        let mut saw_result = false;
+        let mut saw_end = false;
+        while let Ok(event) = rx.try_recv() {
+            match event.event_type() {
+                AguiEventType::ToolCallResult => saw_result = true,
+                AguiEventType::ToolCallEnd => saw_end = true,
+                AguiEventType::Custom => panic!("completed must not emit progress CUSTOM"),
+                AguiEventType::ToolCallArgs => panic!("completed must not emit ARGS"),
+                AguiEventType::StateDelta => {}
+                other => panic!("unexpected {:?}", other),
+            }
+        }
+        assert!(saw_result && saw_end);
+    }
+
+    #[test]
+    fn late_tool_call_update_after_completed_is_ignored() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        let tool = ToolCall::new(ToolCallId::new("call_late"), "Ran command");
+        bridge.handle_session_update(SessionUpdate::ToolCall(tool));
+        let _ = rx.try_recv().unwrap(); // START
+        let _ = rx.try_recv().unwrap(); // ARGS
+
+        let progress = ToolCallUpdate::new(
+            ToolCallId::new("call_late"),
+            ToolCallUpdateFields::new().content(vec![ContentBlock::Text(TextContent::new(
+                "README.md",
+            ))
+            .into()]),
+        );
+        bridge.handle_session_update(SessionUpdate::ToolCallUpdate(progress));
+        assert_eq!(rx.try_recv().unwrap().event_type(), AguiEventType::Custom);
+
+        let done = ToolCallUpdate::new(
+            ToolCallId::new("call_late"),
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(json!("README.md\n")),
+        );
+        bridge.handle_session_update(SessionUpdate::ToolCallUpdate(done));
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ToolCallResult
+        );
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ToolCallEnd
+        );
+
+        // Devin-style trailing content update after completed — must not re-START.
+        let trailing = ToolCallUpdate::new(
+            ToolCallId::new("call_late"),
+            ToolCallUpdateFields::new().content(vec![ContentBlock::Text(TextContent::new(
+                "README.md\n",
+            ))
+            .into()]),
+        );
+        bridge.handle_session_update(SessionUpdate::ToolCallUpdate(trailing));
+        assert!(
+            rx.try_recv().is_err(),
+            "late update must not emit START/progress/END again"
+        );
+    }
+
+    #[test]
+    fn tool_call_update_without_start_synthesizes_start() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap();
+
+        bridge.handle_session_update_value(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "orphan-1",
+            "title": "shell",
+            "content": [{ "type": "content", "content": { "type": "text", "text": "hi" } }]
+        }));
+
+        assert_eq!(
+            rx.try_recv().unwrap().event_type(),
+            AguiEventType::ToolCallStart
+        );
+        match rx.try_recv().unwrap() {
+            AguiEvent::Custom { name, .. } => assert_eq!(name, "tool_call_progress"),
+            other => panic!("expected CUSTOM, got {:?}", other.event_type()),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn finish_run_clears_active_state() {
         let (mut bridge, mut rx) = test_bridge();
         let _ = rx.try_recv().unwrap();
@@ -1002,9 +1303,75 @@ mod tests {
         while let Ok(event) = rx.try_recv() {
             if event.event_type() == AguiEventType::StateDelta {
                 saw_approval = true;
+                let approval = approval_from_delta(&event);
+                assert_eq!(approval["callId"], "call-1");
+                assert_eq!(approval["pending"], true);
+                assert_eq!(approval["pendingCount"], 1);
             }
         }
         assert!(saw_approval);
+    }
+
+    #[test]
+    fn approval_queue_shows_newest_then_resurfaces() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        bridge.start_permission_request("call-1", "bash", json!([]), "a", None);
+        let a1 = approval_from_delta(&rx.try_recv().unwrap());
+        assert_eq!(a1["callId"], "call-1");
+        assert_eq!(a1["pendingCount"], 1);
+
+        bridge.start_permission_request("call-2", "edit", json!([]), "b", None);
+        let a2 = approval_from_delta(&rx.try_recv().unwrap());
+        assert_eq!(a2["callId"], "call-2");
+        assert_eq!(a2["pendingCount"], 2);
+
+        // Resolve newest — older request must resurface (not lost).
+        assert!(bridge.permissions().resolve("call-2", true, Some("allow_once")));
+        bridge.emit_approval_resolved("call-2", true);
+        let a3 = approval_from_delta(&rx.try_recv().unwrap());
+        assert_eq!(a3["pending"], true);
+        assert_eq!(a3["callId"], "call-1");
+        assert_eq!(a3["pendingCount"], 1);
+        assert_eq!(a3["lastResolvedCallId"], "call-2");
+
+        assert!(bridge.permissions().resolve("call-1", false, None));
+        bridge.emit_approval_resolved("call-1", false);
+        let a4 = approval_from_delta(&rx.try_recv().unwrap());
+        assert_eq!(a4["pending"], false);
+        assert_eq!(a4["pendingCount"], 0);
+        assert_eq!(a4["callId"], "call-1");
+    }
+
+    #[test]
+    fn current_approval_ui_reflects_queue() {
+        let (mut bridge, mut rx) = test_bridge();
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        assert_eq!(bridge.current_approval_ui()["pending"], false);
+
+        bridge.start_permission_request("call-1", "bash", json!([]), "a", None);
+        let _ = rx.try_recv().unwrap();
+        assert_eq!(bridge.current_approval_ui()["callId"], "call-1");
+        assert_eq!(bridge.current_approval_ui()["pendingCount"], 1);
+
+        bridge.start_permission_request("call-2", "edit", json!([]), "b", None);
+        let _ = rx.try_recv().unwrap();
+        assert_eq!(bridge.current_approval_ui()["callId"], "call-2");
+        assert_eq!(bridge.current_approval_ui()["pendingCount"], 2);
+    }
+
+    fn approval_from_delta(event: &AguiEvent) -> Value {
+        match event {
+            AguiEvent::StateDelta { delta, .. } => delta
+                .as_array()
+                .and_then(|ops| ops.first())
+                .and_then(|op| op.get("value"))
+                .cloned()
+                .expect("STATE_DELTA approval value"),
+            other => panic!("expected STATE_DELTA, got {:?}", other.event_type()),
+        }
     }
 
     #[test]

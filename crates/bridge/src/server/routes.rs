@@ -44,7 +44,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/events", get(stream_events))
         .route("/v2/tasks/{task_id}/events/poll", get(poll_events))
         .route("/v2/tasks/{task_id}/status", get(get_task_status))
-        .route("/v2/tasks/{task_id}/approval", post(handle_approval))
+        .route("/v2/tasks/{task_id}/approval", get(get_approval).post(handle_approval))
         .route("/v2/tasks/{task_id}/messages", get(get_messages))
         .route("/v2/tasks/{task_id}/mode", post(set_mode))
         .route("/v2/tasks/{task_id}/model", post(set_model))
@@ -67,6 +67,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v2/tasks/{task_id}/git/merge",
             post(api::task_git::post_task_git_merge),
+        )
+        .route(
+            "/v2/tasks/{task_id}/git/undo-all",
+            post(api::task_git::post_task_git_undo_all),
+        )
+        .route(
+            "/v2/tasks/{task_id}/rewind",
+            post(api::task_git::post_task_rewind),
         )
         .route("/v2/agents/probe", post(probe_agent))
         .route("/v2/agents/registry", get(list_registry))
@@ -598,6 +606,18 @@ async fn get_task_status(
     }
 
     Ok(Json(task))
+}
+
+async fn get_approval(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let approval = state
+        .session_manager
+        .pending_approval(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(approval))
 }
 
 async fn handle_approval(

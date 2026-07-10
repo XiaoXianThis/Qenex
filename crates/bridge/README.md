@@ -297,6 +297,7 @@ ACP `session/update` → AG-UI 事件的核心映射：
 | `agent_message_chunk` | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` |
 | `agent_thought_chunk` | `REASONING_START` + `REASONING_MESSAGE_*` |
 | `tool_call` | `TOOL_CALL_START` + `TOOL_CALL_ARGS` |
+| `tool_call_update` (running / content) | `CUSTOM` (`tool_call_progress`) |
 | `tool_call_update` (completed) | `TOOL_CALL_RESULT` + `TOOL_CALL_END` |
 | `request_permission` | `STATE_DELTA` (approval pending) + 阻塞至用户审批 |
 | `_kiro.dev/*` | `CUSTOM` |

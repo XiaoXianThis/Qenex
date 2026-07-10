@@ -1,0 +1,25 @@
+---
+description: 可点击按钮 hover 必须用手型光标 (cursor-pointer)
+alwaysApply: true
+---
+
+# 按钮光标
+
+所有可点击的按钮 / 类按钮控件，hover 时必须显示手型光标。
+
+## 要求
+
+- 使用共享 `Button` 组件时：已自带 `cursor-pointer`，不要覆盖掉。
+- 使用原生 `<button>` 或可点击的 `<div role="button">` 时：class 必须包含 `cursor-pointer`。
+- `disabled` 时可用 `disabled:cursor-not-allowed`（或 `disabled:pointer-events-none`，与现有 `Button` 一致）。
+- 链接式文字按钮、图标按钮、折叠触发器、列表行点击等同理。
+
+## 反例
+
+```tsx
+// ❌ 缺 cursor-pointer，默认箭头
+<button type="button" className="rounded px-2 py-1" onClick={...}>Undo</button>
+
+// ✅
+<button type="button" className="cursor-pointer rounded px-2 py-1" onClick={...}>Undo</button>
+```

@@ -32,12 +32,29 @@ pub struct RewindRequest {
     pub commit_sha: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindTaskRequest {
+    pub run_id: Option<String>,
+    pub user_message_index: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitSessionResponse {
     #[serde(flatten)]
     pub status: GitSessionStatus,
     pub turns: Vec<GitTurnCommit>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindTaskResponse {
+    pub run_id: String,
+    pub target_sha: Option<String>,
+    pub deleted_events: u64,
+    pub deleted_turns: u64,
+    pub binding: Option<GitSessionBinding>,
 }
 
 pub async fn get_task_git(
@@ -110,4 +127,39 @@ pub async fn post_task_git_merge(
         .await
         .map_err(manager_status)?;
     Ok(Json(json!({ "success": true, "hash": hash })))
+}
+
+pub async fn post_task_git_undo_all(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<GitSessionBinding>, (StatusCode, Json<Value>)> {
+    let binding = state
+        .session_manager
+        .git_undo_all_changes(&task_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(binding))
+}
+
+pub async fn post_task_rewind(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<RewindTaskRequest>,
+) -> Result<Json<RewindTaskResponse>, (StatusCode, Json<Value>)> {
+    let result = state
+        .session_manager
+        .rewind_task(
+            &task_id,
+            body.run_id.as_deref(),
+            body.user_message_index,
+        )
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(RewindTaskResponse {
+        run_id: result.run_id,
+        target_sha: result.target_sha,
+        deleted_events: result.deleted_events,
+        deleted_turns: result.deleted_turns,
+        binding: result.binding,
+    }))
 }

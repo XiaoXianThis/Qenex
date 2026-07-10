@@ -43,3 +43,6 @@ __pycache__/
 !apps/vscode/.vscode/**
 *.log
 .qoder/
+
+# Local Agent sandbox (independent git repo)
+/agent-test/

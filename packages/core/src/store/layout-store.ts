@@ -91,6 +91,14 @@ export const layoutActions = {
     layoutStore.panels[id] = { ...layoutStore.panels[id], visible };
   },
 
+  /** Toggle visibility without marking the layout as custom (runtime UI). */
+  setPanelVisibleEphemeral(id: PanelId, visible: boolean) {
+    const def = getPanelDefinition(id);
+    if (!def.hideable && !visible) return;
+    if (layoutStore.panels[id].visible === visible) return;
+    layoutStore.panels[id] = { ...layoutStore.panels[id], visible };
+  },
+
   setPanelWidthScope(id: PanelId, widthScope: WidthScope) {
     const def = getPanelDefinition(id);
     if (!def.resizableWidthScope.includes(widthScope)) return;
