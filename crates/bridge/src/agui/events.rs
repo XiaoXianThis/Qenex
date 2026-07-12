@@ -261,6 +261,16 @@ impl AguiEvent {
         }
     }
 
+    /// Run id carried by lifecycle events (`RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR`).
+    pub fn run_id(&self) -> Option<&str> {
+        match self {
+            Self::RunStarted { run_id, .. }
+            | Self::RunFinished { run_id, .. }
+            | Self::RunError { run_id, .. } => Some(run_id.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn timestamp(&self) -> f64 {
         match self {
             Self::RunStarted { timestamp, .. } => *timestamp,

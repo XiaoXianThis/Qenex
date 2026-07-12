@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, KeyRound, type LucideIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, KeyRound, RotateCcw, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Select,
@@ -426,12 +426,20 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
     retryAfterAuth,
   } = useSessionConfig();
   const [authOpen, setAuthOpen] = useState(false);
+  const [errorOpen, setErrorOpen] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     if (config.authChallenge) {
       setAuthOpen(true);
     }
   }, [config.authChallenge]);
+
+  useEffect(() => {
+    if (!config.error) {
+      setErrorOpen(false);
+    }
+  }, [config.error]);
 
   const showControls =
     config.ready &&
@@ -458,6 +466,23 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
     config.models.length === 0 &&
     (hasSelectableOptions(config.thoughtLevels) ||
       config.thoughtLevels.length === 1);
+
+  const errorSummary = config.error
+    ? config.error.split("\n").find((line) => line.trim())?.trim() ||
+      config.error
+    : null;
+
+  const handleRetrySpawn = async () => {
+    setRetrying(true);
+    try {
+      await retryAfterAuth();
+      setErrorOpen(false);
+    } catch {
+      // bootstrap already wrote config.error
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <div
@@ -534,13 +559,44 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
             <KeyRound className="size-3.5" />
             需要登录
           </Button>
-        ) : config.error ? (
-          <p
-            className="max-w-[12rem] shrink truncate text-xs text-destructive"
-            title={config.error}
-          >
-            {config.error}
-          </p>
+        ) : config.error && errorSummary ? (
+          <Popover open={errorOpen} onOpenChange={setErrorOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="text-destructive hover:bg-destructive/10 max-w-[16rem] cursor-pointer truncate rounded px-1.5 py-0.5 text-left text-xs"
+                title={config.error}
+              >
+                {errorSummary}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-[min(28rem,calc(100vw-2rem))] space-y-3 p-3"
+            >
+              <div className="space-y-1">
+                <p className="text-destructive text-sm font-medium">
+                  Agent 启动失败
+                </p>
+                <pre className="bg-muted/60 text-muted-foreground max-h-48 overflow-auto rounded-md p-2 text-[11px] leading-relaxed break-words whitespace-pre-wrap">
+                  {config.error}
+                </pre>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 px-2 text-xs"
+                disabled={retrying || config.loading}
+                onClick={() => {
+                  void handleRetrySpawn();
+                }}
+              >
+                <RotateCcw className="size-3.5" />
+                {retrying ? "重试中…" : "重试"}
+              </Button>
+            </PopoverContent>
+          </Popover>
         ) : null}
 
         {trailing ? (

@@ -18,7 +18,25 @@ pub fn canonicalize_cwd(cwd: &str) -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(path)
     };
-    std::fs::canonicalize(&base).unwrap_or(base)
+    let canonical = std::fs::canonicalize(&base).unwrap_or(base);
+    strip_windows_verbatim_prefix(canonical)
+}
+
+/// `std::fs::canonicalize` on Windows yields `\\?\C:\...` which breaks some
+/// agent CLIs (e.g. pi) when used as process cwd. Prefer the familiar form.
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            // UNC: \\?\UNC\server\share → \\server\share
+            if let Some(unc) = rest.strip_prefix("UNC\\") {
+                return PathBuf::from(format!(r"\\{unc}"));
+            }
+            return PathBuf::from(rest);
+        }
+    }
+    path
 }
 
 /// Parse MCP server configs from API JSON (object values or array).
@@ -259,6 +277,24 @@ mod tests {
     fn canonicalize_relative_cwd() {
         let cwd = canonicalize_cwd(".");
         assert!(cwd.is_absolute());
+        let s = cwd.to_string_lossy();
+        assert!(
+            !s.starts_with(r"\\?\"),
+            "verbatim prefix should be stripped: {s}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_prefix_drive_and_unc() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\F:\Code\Rust\Qenex")),
+            PathBuf::from(r"F:\Code\Rust\Qenex")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\path")),
+            PathBuf::from(r"\\server\share\path")
+        );
     }
 
     #[test]

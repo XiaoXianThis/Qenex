@@ -1,9 +1,11 @@
 import path from "node:path";
+import fs from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const agentTestWorkspace = path.resolve(__dirname, "../../agent-test");
+fs.mkdirSync(agentTestWorkspace, { recursive: true });
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],

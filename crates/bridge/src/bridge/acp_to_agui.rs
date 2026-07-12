@@ -132,9 +132,12 @@ impl AcpToAguiBridge {
         self.close_open_reasoning();
         self.close_open_message();
         self.close_all_tool_calls();
-        if let Some(run_id) = self.run_id.take() {
+        // Keep `self.run_id` until after emit so persist uses the real id
+        // (poll resume keys events by the DB `run_id` column).
+        if let Some(run_id) = self.run_id.clone() {
             self.emit(AguiEvent::run_finished(run_id, self.task_id.clone()));
         }
+        self.run_id = None;
         self.event_tx = None;
         self.clear_stale_approval_ui();
     }
@@ -143,7 +146,7 @@ impl AcpToAguiBridge {
         self.close_open_reasoning();
         self.close_open_message();
         self.close_all_tool_calls();
-        if let Some(run_id) = self.run_id.take() {
+        if let Some(run_id) = self.run_id.clone() {
             self.emit(AguiEvent::run_error(
                 run_id,
                 self.task_id.clone(),
@@ -151,6 +154,7 @@ impl AcpToAguiBridge {
                 code,
             ));
         }
+        self.run_id = None;
         self.event_tx = None;
         self.clear_stale_approval_ui();
     }
@@ -777,9 +781,15 @@ impl AcpToAguiBridge {
             tracing::warn!("cannot emit — no active run");
         }
 
-        // Persist the event asynchronously if a store callback is registered
+        // Persist the event asynchronously if a store callback is registered.
+        // Prefer active run id; fall back to lifecycle event's own runId so
+        // RUN_FINISHED / RUN_ERROR never land with an empty DB column.
         if let Some(persist_fn) = &self.persist_callback {
-            let run_id = self.run_id.clone().unwrap_or_default();
+            let run_id = self
+                .run_id
+                .clone()
+                .or_else(|| event.run_id().map(str::to_string))
+                .unwrap_or_default();
             persist_fn(self.task_id.clone(), run_id, event);
         }
     }
@@ -1227,6 +1237,74 @@ mod tests {
             "content": { "text": "late" }
         }));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn finish_run_persists_terminal_event_with_run_id() {
+        use std::sync::{Arc, Mutex};
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut bridge = AcpToAguiBridge::new(
+            "task-1",
+            ToolPolicyEngine::new(None),
+            PermissionRegistry::new(),
+        );
+        let persisted: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = persisted.clone();
+        bridge.set_persist_callback(move |_task_id, run_id, event| {
+            captured
+                .lock()
+                .unwrap()
+                .push((run_id, event.event_type().as_str().to_string()));
+        });
+        bridge.start_run("run-1", tx);
+        let _ = rx.try_recv().unwrap(); // RUN_STARTED
+
+        bridge.finish_run();
+        let finished = rx.try_recv().unwrap();
+        assert_eq!(finished.event_type(), AguiEventType::RunFinished);
+        assert_eq!(finished.run_id(), Some("run-1"));
+
+        let rows = persisted.lock().unwrap().clone();
+        assert!(
+            rows.iter()
+                .any(|(run_id, ty)| run_id == "run-1" && ty == "RUN_FINISHED"),
+            "RUN_FINISHED must persist under the active run id, got {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(run_id, _)| !run_id.is_empty()),
+            "no event should persist with an empty run_id, got {rows:?}"
+        );
+    }
+
+    #[test]
+    fn error_run_persists_terminal_event_with_run_id() {
+        use std::sync::{Arc, Mutex};
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut bridge = AcpToAguiBridge::new(
+            "task-1",
+            ToolPolicyEngine::new(None),
+            PermissionRegistry::new(),
+        );
+        let persisted: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = persisted.clone();
+        bridge.set_persist_callback(move |_task_id, run_id, event| {
+            captured
+                .lock()
+                .unwrap()
+                .push((run_id, event.event_type().as_str().to_string()));
+        });
+        bridge.start_run("run-err", tx);
+        let _ = rx.try_recv().unwrap();
+
+        bridge.error_run("boom", Some("x".into()));
+        let rows = persisted.lock().unwrap().clone();
+        assert!(
+            rows.iter()
+                .any(|(run_id, ty)| run_id == "run-err" && ty == "RUN_ERROR"),
+            "RUN_ERROR must persist under the active run id, got {rows:?}"
+        );
     }
 
     #[tokio::test]

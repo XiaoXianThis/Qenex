@@ -154,12 +154,13 @@ export const ThreadScrollToBottom: FC = () => {
 };
 
 export const ThreadWelcome: FC = () => {
-  const { agentId } = useSessionConfig();
+  const { config, agentId, retryAfterAuth } = useSessionConfig();
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const agent = getAgentPreset(agentId);
   const fullText = `和 ${agent.name} 一起构建想象`;
   const [typedText, setTypedText] = useState("");
   const [done, setDone] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     setTypedText("");
@@ -182,6 +183,47 @@ export const ThreadWelcome: FC = () => {
       if (intervalId) clearInterval(intervalId);
     };
   }, [fullText]);
+
+  if (config.error && !config.authChallenge) {
+    return (
+      <div
+        key={activeTabId ?? agentId}
+        className="aui-thread-welcome flex max-w-lg flex-col items-center justify-center gap-4 px-4"
+      >
+        <AgentIcon
+          agentId={agent.id}
+          className="aui-thread-welcome-icon size-24 opacity-20 select-none"
+          draggable={false}
+        />
+        <div className="space-y-2 text-center">
+          <p className="text-destructive text-sm font-medium">
+            {agent.name} 启动失败
+          </p>
+          <pre className="border-destructive/20 bg-destructive/5 text-muted-foreground max-h-40 overflow-auto rounded-md border p-3 text-left text-[11px] leading-relaxed break-words whitespace-pre-wrap">
+            {config.error}
+          </pre>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
+          disabled={retrying || config.loading}
+          onClick={() => {
+            setRetrying(true);
+            void retryAfterAuth()
+              .catch(() => {
+                // bootstrap already wrote config.error
+              })
+              .finally(() => setRetrying(false));
+          }}
+        >
+          <RotateCcwIcon className="size-3.5" />
+          {retrying ? "重试中…" : "重试启动"}
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div

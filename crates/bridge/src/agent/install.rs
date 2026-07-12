@@ -95,7 +95,7 @@ pub fn rebuild_managed_package_command(
             bin.to_string_lossy().into_owned(),
         ];
         cmd.extend(args.iter().cloned());
-        crate::agent::command::augment_codex_env(&cmd)
+        crate::agent::command::augment_host_env(&cmd)
     } else {
         crate::agent::command::prefer_node_entry(
             &std::iter::once(bin.to_string_lossy().into_owned())
@@ -441,7 +441,7 @@ async fn install_npx(
             bin.to_string_lossy().into_owned(),
         ];
         cmd.extend(pkg.args.iter().cloned());
-        crate::agent::command::augment_codex_env(&cmd)
+        crate::agent::command::augment_host_env(&cmd)
     } else {
         crate::agent::command::prefer_node_entry(
             &std::iter::once(bin.to_string_lossy().into_owned())

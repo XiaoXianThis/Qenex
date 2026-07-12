@@ -1,7 +1,7 @@
 //! Agent subprocess connection via the official ACP Rust SDK.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -33,16 +33,58 @@ use super::session_init::{
 use crate::bridge::{shared_bridge, AcpToAguiBridge, PermissionRegistry, SharedBridge};
 use crate::policy::ToolPolicyEngine;
 
+/// Max time to wait for ACP initialize / session/new after spawning the process.
+const SPAWN_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Keep only the tail of agent stderr for error messages.
+const STDERR_TAIL_BYTES: usize = 8 * 1024;
+
+type SharedStderr = Arc<Mutex<String>>;
+
+fn append_stderr_line(buf: &SharedStderr, line: &str) {
+    let Ok(mut guard) = buf.lock() else {
+        return;
+    };
+    if !guard.is_empty() {
+        guard.push('\n');
+    }
+    guard.push_str(line);
+    if guard.len() > STDERR_TAIL_BYTES {
+        let keep_from = guard.len() - STDERR_TAIL_BYTES;
+        let trimmed = guard.split_off(keep_from);
+        *guard = trimmed;
+        // Avoid starting mid-line when possible.
+        if let Some(idx) = guard.find('\n') {
+            guard.replace_range(..=idx, "");
+        }
+    }
+}
+
+fn take_stderr(buf: &SharedStderr) -> String {
+    buf.lock()
+        .map(|g| g.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn format_spawn_failure(summary: &str, command: &str, stderr: &str) -> String {
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!("{summary}\ncommand: {command}")
+    } else {
+        format!("{summary}\ncommand: {command}\nstderr:\n{stderr}")
+    }
+}
+
 /// Wrapper around a spawned agent process that tracks the PID for cleanup
 struct SpawnedAgent {
     stdin: Box<dyn futures::AsyncWrite + Send + Unpin>,
     stdout: Box<dyn futures::AsyncRead + Send + Unpin>,
     stderr: Box<dyn futures::AsyncRead + Send + Unpin>,
     child_pid: u32,
+    stderr_buf: SharedStderr,
 }
 
 impl SpawnedAgent {
-    fn from_agent(agent: AcpAgent) -> Result<Self, SpawnError> {
+    fn from_agent(agent: AcpAgent, stderr_buf: SharedStderr) -> Result<Self, SpawnError> {
         let (stdin, stdout, stderr, mut child) = agent
             .spawn_process()
             .map_err(|e| SpawnError::Agent(e.to_string()))?;
@@ -59,6 +101,7 @@ impl SpawnedAgent {
             stdout: Box::new(stdout),
             stderr: Box::new(stderr),
             child_pid,
+            stderr_buf,
         })
     }
 }
@@ -76,24 +119,17 @@ impl agent_client_protocol::ConnectTo<agent_client_protocol::Client> for Spawned
         let child_stdin = self.stdin;
         let child_stdout = self.stdout;
         let child_stderr = self.stderr;
+        let stderr_buf = self.stderr_buf;
 
-        // Create a channel to collect stderr for error reporting
-        let (stderr_tx, _stderr_rx) = futures::channel::oneshot::channel::<String>();
-
-        // Read stderr concurrently
+        // Read stderr concurrently into the shared buffer (surfaced on spawn failure).
         let stderr_future = async move {
             let stderr_reader = BufReader::new(child_stderr);
             let mut stderr_lines = stderr_reader.lines();
-            let mut collected = String::new();
             while let Some(line_result) = stderr_lines.next().await {
                 if let Ok(line) = line_result {
-                    if !collected.is_empty() {
-                        collected.push('\n');
-                    }
-                    collected.push_str(&line);
+                    append_stderr_line(&stderr_buf, &line);
                 }
             }
-            let _ = stderr_tx.send(collected);
         };
 
         // Convert stdio to line streams
@@ -142,6 +178,8 @@ pub enum SpawnError {
     AuthRequired(AuthRequiredPayload),
     #[error("agent task ended unexpectedly")]
     TaskEnded,
+    #[error("{0}")]
+    Timeout(String),
 }
 
 #[derive(Debug, Clone)]
@@ -237,38 +275,111 @@ impl AgentConnection {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AgentCommand>(32);
         let (ready_tx, ready_rx) = oneshot::channel::<Result<AgentInitResult, SpawnError>>();
         let (pid_tx, pid_rx) = oneshot::channel::<u32>();
+        let stderr_buf: SharedStderr = Arc::new(Mutex::new(String::new()));
 
         let bridge_bg = bridge.clone();
         // Prefer `bun/node dist/index.js` over fragile Windows `.cmd` shims for
         // managed package installs; then wrap remaining non-exe scripts with cmd.exe.
         let agent_args = resolve_agent_command(&prefer_node_entry(command));
-        if which::which(&agent_args[0]).is_err() && !Path::new(&agent_args[0]).is_file() {
+        let probe_bin = agent_args
+            .iter()
+            .find(|part| !crate::agent::command::is_env_assignment(part))
+            .map(String::as_str)
+            .unwrap_or_else(|| agent_args.first().map(String::as_str).unwrap_or(""));
+        if which::which(probe_bin).is_err() && !Path::new(probe_bin).is_file() {
             return Err(SpawnError::Agent(format!(
-                "agent binary not found on PATH: {} (install it or set a full path in agentCommand)",
-                agent_args[0]
+                "agent binary not found on PATH: {probe_bin} (install it or set a full path in agentCommand)"
             )));
         }
 
+        let command_display = agent_args.join(" ");
         tracing::info!(
             command = ?agent_args,
             "spawning ACP agent"
         );
 
+        let stderr_for_task = stderr_buf.clone();
         let join_handle = tokio::spawn(async move {
-            run_agent_connection(agent_args, init, bridge_bg, cmd_rx, ready_tx, pid_tx).await
+            run_agent_connection(
+                agent_args,
+                init,
+                bridge_bg,
+                cmd_rx,
+                ready_tx,
+                pid_tx,
+                stderr_for_task,
+            )
+            .await
         });
 
-        let init_result = ready_rx
-            .await
-            .map_err(|_| {
-                // Task exited before initialize completed — usually a spawn/crash.
-                SpawnError::Agent(
-                    "agent task ended unexpectedly (process exited before ACP initialize; check agent logs / auth)"
-                        .into(),
-                )
-            })??;
+        let deadline = tokio::time::Instant::now() + SPAWN_INIT_TIMEOUT;
 
-        let child_pid = pid_rx.await.ok();
+        // PID is sent immediately after process spawn; wait for it first so we can
+        // kill the tree on initialize timeout.
+        let child_pid = match tokio::time::timeout_at(deadline, pid_rx).await {
+            Ok(Ok(pid)) => Some(pid),
+            Ok(Err(_)) => {
+                // Task died before reporting a PID — usually spawn/crash.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let stderr = take_stderr(&stderr_buf);
+                return Err(SpawnError::Agent(format_spawn_failure(
+                    "agent task ended unexpectedly (process exited before ACP initialize; check agent logs / auth)",
+                    &command_display,
+                    &stderr,
+                )));
+            }
+            Err(_) => {
+                join_handle.abort();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let stderr = take_stderr(&stderr_buf);
+                return Err(SpawnError::Timeout(format_spawn_failure(
+                    &format!(
+                        "agent spawn timed out after {}s waiting for process start",
+                        SPAWN_INIT_TIMEOUT.as_secs()
+                    ),
+                    &command_display,
+                    &stderr,
+                )));
+            }
+        };
+
+        let init_result = match tokio::time::timeout_at(deadline, ready_rx).await {
+            Ok(Ok(result)) => result?,
+            Ok(Err(_)) => {
+                // Channel closed: process exited before initialize completed.
+                if let Some(pid) = child_pid {
+                    crate::agent::process::kill_process_tree(pid);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let stderr = take_stderr(&stderr_buf);
+                return Err(SpawnError::Agent(format_spawn_failure(
+                    "agent task ended unexpectedly (process exited before ACP initialize; check agent logs / auth)",
+                    &command_display,
+                    &stderr,
+                )));
+            }
+            Err(_) => {
+                if let Some(pid) = child_pid {
+                    tracing::warn!(
+                        pid,
+                        timeout_secs = SPAWN_INIT_TIMEOUT.as_secs(),
+                        "ACP initialize timed out; killing agent process tree"
+                    );
+                    crate::agent::process::kill_process_tree(pid);
+                }
+                join_handle.abort();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let stderr = take_stderr(&stderr_buf);
+                return Err(SpawnError::Timeout(format_spawn_failure(
+                    &format!(
+                        "agent spawn timed out after {}s waiting for ACP initialize",
+                        SPAWN_INIT_TIMEOUT.as_secs()
+                    ),
+                    &command_display,
+                    &stderr,
+                )));
+            }
+        };
 
         Ok((
             Self {
@@ -604,11 +715,12 @@ async fn run_agent_connection(
     mut cmd_rx: mpsc::Receiver<AgentCommand>,
     ready_tx: oneshot::Sender<Result<AgentInitResult, SpawnError>>,
     pid_tx: oneshot::Sender<u32>,
+    stderr_buf: SharedStderr,
 ) -> Result<(), agent_client_protocol::Error> {
     let agent = AcpAgent::from_args(command.iter().map(|s| s.as_str()))
         .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
 
-    let spawned = SpawnedAgent::from_agent(agent)
+    let spawned = SpawnedAgent::from_agent(agent, stderr_buf)
         .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
 
     let child_pid = spawned.child_pid;
@@ -776,19 +888,43 @@ async fn run_agent_connection(
                     return Ok(());
                 };
                 tracing::info!(method_id = %method_id, "ACP authenticate");
-                match connection
-                    .send_request(AuthenticateRequest::new(method_id.clone()))
-                    .block_task()
-                    .await
+                // Some agents (e.g. Cursor when logged out) hang on authenticate
+                // instead of returning an error — bound the wait so spawn can surface auth UI.
+                const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
+                match tokio::time::timeout(
+                    AUTH_TIMEOUT,
+                    connection
+                        .send_request(AuthenticateRequest::new(method_id.clone()))
+                        .block_task(),
+                )
+                .await
                 {
-                    Ok(_) => {
+                    Ok(Ok(_)) => {
                         tracing::info!(method_id = %method_id, "ACP authenticate succeeded");
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let detail = e.to_string();
                         tracing::warn!(error = %detail, "ACP authenticate failed");
                         let _ = ready_tx.send(Err(SpawnError::AuthRequired(
                             AuthRequiredPayload::new(detail, methods, agent_name.clone()),
+                        )));
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            method_id = %method_id,
+                            timeout_secs = AUTH_TIMEOUT.as_secs(),
+                            "ACP authenticate timed out"
+                        );
+                        let _ = ready_tx.send(Err(SpawnError::AuthRequired(
+                            AuthRequiredPayload::new(
+                                format!(
+                                    "Authentication timed out after {}s (method: {method_id}). Run the agent's login command (e.g. `agent login`) and retry.",
+                                    AUTH_TIMEOUT.as_secs()
+                                ),
+                                methods,
+                                agent_name.clone(),
+                            ),
                         )));
                         return Ok(());
                     }
@@ -901,4 +1037,37 @@ async fn run_agent_connection(
             Ok(())
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_spawn_failure_includes_stderr_when_present() {
+        let msg = format_spawn_failure(
+            "agent task ended unexpectedly",
+            "cursor-agent acp",
+            "No version directories found",
+        );
+        assert!(msg.contains("command: cursor-agent acp"));
+        assert!(msg.contains("stderr:\nNo version directories found"));
+    }
+
+    #[test]
+    fn format_spawn_failure_omits_empty_stderr() {
+        let msg = format_spawn_failure("timed out", "opencode acp", "  \n ");
+        assert_eq!(msg, "timed out\ncommand: opencode acp");
+        assert!(!msg.contains("stderr"));
+    }
+
+    #[test]
+    fn append_stderr_line_keeps_tail() {
+        let buf: SharedStderr = Arc::new(Mutex::new(String::new()));
+        append_stderr_line(&buf, &"a".repeat(STDERR_TAIL_BYTES + 50));
+        append_stderr_line(&buf, "tail-line");
+        let text = take_stderr(&buf);
+        assert!(text.ends_with("tail-line"));
+        assert!(text.len() <= STDERR_TAIL_BYTES + 20);
+    }
 }

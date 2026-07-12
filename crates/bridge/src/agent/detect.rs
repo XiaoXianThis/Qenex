@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::agent::command::{
-    augment_codex_env, find_system_codex_executable, prefer_node_entry, resolve_agent_command,
+    augment_host_env, find_system_codex_executable, prefer_node_entry,
+    resolve_agent_command,
 };
 use crate::agent::install::{self, rebuild_managed_package_command, InstalledAgent};
 use crate::agent::paths::agents_dir;
@@ -253,7 +254,7 @@ fn path_adapter_command(profile: &AdapterProfile) -> Option<Vec<String>> {
         if let Some(path) = which_bin(name) {
             let cmd = prefer_node_entry(&[path.to_string_lossy().into_owned()]);
             if command_is_launchable(&cmd) {
-                return Some(augment_codex_env(&cmd));
+                return Some(augment_host_env(&cmd));
             }
         }
     }
@@ -284,7 +285,11 @@ pub fn command_is_launchable(command: &[String]) -> bool {
         return false;
     }
     let resolved = resolve_agent_command(&prefer_node_entry(command));
-    let first = &resolved[0];
+    let first = resolved
+        .iter()
+        .find(|part| !crate::agent::command::is_env_assignment(part))
+        .map(String::as_str)
+        .unwrap_or_else(|| resolved[0].as_str());
     which::which(first).is_ok() || Path::new(first).is_file()
 }
 
@@ -318,7 +323,7 @@ fn managed_from_disk(agent_id: &str, package: &str, args: &[String]) -> Option<V
         }
         if command_is_launchable(&rec.command) {
             // Cached command still points at a live binary (e.g. native binary install).
-            return Some(augment_codex_env(&rec.command));
+            return Some(augment_host_env(&rec.command));
         }
     }
 
@@ -467,7 +472,7 @@ pub fn resolve_known_agent(agent_id: &str) -> Result<Vec<String>, String> {
     // Unknown id: try managed record + PATH token == id
     if let Some(rec) = install::get_installed(&id) {
         if command_is_launchable(&rec.command) {
-            return Ok(augment_codex_env(&rec.command));
+            return Ok(augment_host_env(&rec.command));
         }
         if let Some(cmd) = managed_from_disk(&id, "", &[]) {
             return Ok(cmd);

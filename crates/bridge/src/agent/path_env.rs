@@ -65,6 +65,14 @@ pub fn augmented_path() -> String {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             push(&format!("{local}\\Programs\\cursor\\resources\\app\\bin"));
             push(&format!("{local}\\OpenAI\\Codex\\bin"));
+            push(&format!("{local}\\cursor-agent"));
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            push(&format!("{appdata}\\npm"));
+        }
+        // WinGet / user-local tools often land here.
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            push(&format!("{local}\\Microsoft\\WinGet\\Links"));
         }
     }
 
