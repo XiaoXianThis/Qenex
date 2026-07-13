@@ -179,7 +179,7 @@ ACP Agent                opencode · kiro · claude · codex …
 | `crates/bridge` | ACP → AG-UI 桥接服务 |
 | `acp-to-agui/` | 上游 Python 参考实现 |
 
-更多：[`crates/bridge/README.md`](crates/bridge/README.md) · [`CHANGELOG.md`](CHANGELOG.md)
+更多：[`crates/bridge/README.md`](crates/bridge/README.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`ROADMAP.md`](ROADMAP.md)
 
 ## 常用命令
 
