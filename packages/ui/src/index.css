@@ -376,10 +376,16 @@ body:has([data-puck-entry]) [data-puck-overlay-portal]:focus-within {
   outline-offset: 2px;
 }
 
-/* Puck 布局编辑：消息区 pointer-events 不继承，需显式禁用整棵子树 */
+/* Puck 布局编辑：消息区内容不可交互；「编辑样式」按钮单独放开 */
 [data-layout-editing] [data-slot="aui_thread-messages"],
 [data-layout-editing] [data-slot="aui_thread-messages"] * {
   pointer-events: none !important;
+  user-select: none !important;
+}
+
+[data-layout-editing] [data-layout-messages-style-edit],
+[data-layout-editing] [data-layout-messages-style-edit] * {
+  pointer-events: auto !important;
   user-select: none !important;
 }
 

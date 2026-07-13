@@ -2,14 +2,23 @@
 
 import { ThreadWelcome } from "@/components/assistant-ui/thread";
 import { ThreadMessagesArea, ThreadMessagesEditPreview } from "@/layout/puck/panels";
-import { cn, selectComposerInTopBand, selectTabBarPosition, useLayoutStore } from "@qenex/core";
+import {
+  cn,
+  getPanelDefinition,
+  resolveStyleComponentTarget,
+  selectComposerInTopBand,
+  selectTabBarPosition,
+  styleActions,
+  useLayoutStore,
+} from "@qenex/core";
 import type { SlotComponent } from "@puckeditor/core";
 import {
   AuiIf,
   type AssistantState,
   ThreadPrimitive,
 } from "@assistant-ui/react";
-import { useEffect, type FC } from "react";
+import { PaintbrushVertical } from "lucide-react";
+import { useEffect, type FC, type SyntheticEvent } from "react";
 import {
   LAYOUT_ROOT_BOTTOM_LABEL,
   LAYOUT_ROOT_TOP_LABEL,
@@ -17,10 +26,34 @@ import {
   type LayoutPuckRoot,
 } from "@/layout/puck/config";
 import { LayoutContainerSlot } from "@/layout/puck/LayoutContainerSlot";
+import { LayoutEditLabel } from "@/layout/puck/LayoutEditLabel";
 
 const isNewChatView = (s: AssistantState) =>
   s.thread.messages.length === 0 &&
   (!s.thread.isLoading || s.threads.isLoading);
+
+const MessagesStyleEditButton: FC = () => {
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+
+  return (
+    <button
+      type="button"
+      data-layout-messages-style-edit=""
+      className="pointer-events-auto absolute top-0 right-0 z-30 inline-flex cursor-pointer items-center gap-1 rounded-bl bg-primary/90 px-1.5 py-0.5 text-[10px] leading-none font-medium text-primary-foreground shadow-sm hover:bg-primary"
+      aria-label="编辑消息区样式"
+      onClick={(e) => {
+        stop(e);
+        const target = resolveStyleComponentTarget("messages");
+        if (target) styleActions.openComponentStyleEdit(target);
+      }}
+      onPointerDown={stop}
+      onMouseDown={stop}
+    >
+      <PaintbrushVertical size={12} aria-hidden />
+      编辑样式
+    </button>
+  );
+};
 
 type ActiveThreadLayoutProps = {
   top: SlotComponent;
@@ -112,17 +145,23 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
         <div
           data-layout-panel="messages"
           data-slot="aui_thread-messages"
-          inert={layoutEditing ? true : undefined}
           className={cn(
             "relative page-padding-x-scroll page-padding-t flex min-h-full flex-col",
             layoutEditing &&
-              "pointer-events-none select-none overflow-hidden opacity-40 [&_*]:pointer-events-none",
+              "min-h-8 overflow-hidden border-[1px] border-dashed border-primary/40",
           )}
         >
           {layoutEditing ? (
-            <div className="mx-auto w-full max-w-(--thread-max-width)">
-              <ThreadMessagesEditPreview />
-            </div>
+            <>
+              <LayoutEditLabel label={getPanelDefinition("messages").label} />
+              <MessagesStyleEditButton />
+              <div
+                inert
+                className="pointer-events-none select-none mx-auto w-full max-w-(--thread-max-width) [&_*]:pointer-events-none"
+              >
+                <ThreadMessagesEditPreview />
+              </div>
+            </>
           ) : (
             <>
               <AuiIf condition={isNewChatView}>

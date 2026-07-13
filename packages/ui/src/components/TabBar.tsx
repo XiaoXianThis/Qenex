@@ -246,6 +246,16 @@ export function TabBar({ position = "top" }: TabBarProps) {
             onClick={() => {
               switchTab(tab.id);
             }}
+            onMouseDown={(e) => {
+              // 中键默认会触发自动滚动，需在 mousedown 阶段拦截
+              if (e.button === 1) e.preventDefault();
+            }}
+            onAuxClick={(e) => {
+              if (e.button !== 1) return;
+              e.preventDefault();
+              e.stopPropagation();
+              closeTab(tab.id);
+            }}
           >
             {tab.agentLoading ? (
               <Loader2

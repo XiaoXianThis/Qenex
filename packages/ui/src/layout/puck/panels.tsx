@@ -32,7 +32,8 @@ function messagePreviewText(
     .trim();
 }
 
-/** 编辑模式下的轻量消息预览，避免完整 MessagePrimitive 树因历史数据缺字段而报错。 */
+/** 编辑模式下的轻量消息预览，避免完整 MessagePrimitive 树因历史数据缺字段而报错。
+ * 挂点 / class 与真实 UserMessage / AssistantMessage 对齐，便于预览组件级 CSS。 */
 export function ThreadMessagesEditPreview() {
   const messages = useAuiState((s) => s.thread.messages);
 
@@ -45,23 +46,43 @@ export function ThreadMessagesEditPreview() {
   }
 
   return (
-    <div className="mb-14 flex flex-col gap-y-4">
+    <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-4 text-sm">
       {messages.map((message) => {
         const preview = messagePreviewText(message.content);
-        const roleLabel = message.role === "user" ? "用户" : "助手";
+        const body = preview || "（非文本消息）";
+
+        if (message.role === "user") {
+          return (
+            <div
+              key={message.id}
+              data-slot="aui_user-message-root"
+              data-role="user"
+              className="grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 [&:where(>*)]:col-start-2"
+            >
+              <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+                <div className="aui-user-message-content bg-card text-card-foreground rounded-xl px-4 py-2 wrap-break-word">
+                  <span className="line-clamp-3 whitespace-pre-wrap">
+                    {body}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div
             key={message.id}
-            className="border-[1px] border-dashed border-muted-foreground/30 bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+            data-slot="aui_assistant-message-root"
+            data-role="assistant"
+            className="relative"
           >
-            <span className="font-medium text-foreground/80">{roleLabel}</span>
-            {preview ? (
-              <span className="mt-1 block line-clamp-3 whitespace-pre-wrap">
-                {preview}
-              </span>
-            ) : (
-              <span className="mt-1 block italic opacity-70">（非文本消息）</span>
-            )}
+            <div
+              data-slot="aui_assistant-message-content"
+              className="text-foreground px-2 leading-relaxed wrap-break-word"
+            >
+              <span className="line-clamp-3 whitespace-pre-wrap">{body}</span>
+            </div>
           </div>
         );
       })}

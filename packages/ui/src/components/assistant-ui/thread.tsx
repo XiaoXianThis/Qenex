@@ -116,7 +116,7 @@ export const ThreadMessages: FC = () => {
   return (
     <div
       data-slot="aui_message-group"
-      className="mb-14 flex flex-col gap-y-6 empty:hidden"
+      className="mb-14 flex flex-col gap-y-6 text-sm empty:hidden"
     >
       <ThreadPrimitive.Messages>
         {() => <ThreadMessage />}
