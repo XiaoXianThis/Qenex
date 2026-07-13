@@ -8,9 +8,7 @@ import {
   ThreadScrollToBottom,
   ThreadSuggestions,
 } from "@/components/assistant-ui/thread";
-import { WidgetPlaceholder } from "@/layout/panels/WidgetPlaceholder";
 import { ApprovalPanel } from "@/layout/panels/ApprovalPanel";
-import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import type { PanelId } from "@qenex/core";
 import { AuiIf, useAuiState, type AssistantState } from "@assistant-ui/react";
 import type { PanelRenderContext } from "@/layout/puck/types";
@@ -110,11 +108,12 @@ export function renderPanel(
         </AuiIf>
       );
     case "tokenStats":
-      return <WidgetPlaceholder panelId="tokenStats" />;
+      return null;
     case "undoRedo":
-      return <ChangesPanel />;
+      // Always rendered above the composer (Cursor-like); avoid duplicates.
+      return null;
     case "checklist":
-      return <WidgetPlaceholder panelId="checklist" />;
+      return null;
     case "approval":
       return <ApprovalPanel />;
     default:

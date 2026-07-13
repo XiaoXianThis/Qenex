@@ -702,6 +702,8 @@ export type RewindTaskResponse = {
   deletedEvents: number;
   deletedTurns: number;
   binding: GitSessionBinding | null;
+  /** False when ACP session could not be reset after rewind. */
+  agentReset?: boolean;
 };
 
 /** Rewind conversation (+ git) to before a user message / run. */
@@ -716,6 +718,49 @@ export async function rewindTask(
       userMessageIndex: opts.userMessageIndex,
     }),
   });
+}
+
+export type WorkspaceFileItem = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number | null;
+};
+
+export async function listWorkspaceFiles(opts: {
+  base: string;
+  path?: string;
+}): Promise<WorkspaceFileItem[]> {
+  const params = new URLSearchParams({
+    base: opts.base,
+    path: opts.path ?? ".",
+  });
+  const res = await fetchJson<{ items: WorkspaceFileItem[]; path: string }>(
+    `/api/files?${params.toString()}`,
+  );
+  return (res.items ?? []).map((item) => ({
+    name: item.name,
+    path: item.path,
+    isDirectory: Boolean(
+      (item as { isDirectory?: boolean; is_directory?: boolean }).isDirectory ??
+        (item as { is_directory?: boolean }).is_directory,
+    ),
+    size: item.size,
+  }));
+}
+
+export async function executeTaskCommand(
+  taskId: string,
+  command: string,
+  args?: unknown,
+): Promise<{ success: boolean; command: string }> {
+  return fetchJson<{ success: boolean; command: string }>(
+    `/v2/tasks/${taskId}/command`,
+    {
+      method: "POST",
+      body: JSON.stringify({ command, args }),
+    },
+  );
 }
 
 export function hasSelectableOptions(options: SessionOption[]): boolean {

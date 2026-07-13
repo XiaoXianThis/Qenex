@@ -89,6 +89,8 @@ pub struct RewindTaskResult {
     pub deleted_events: u64,
     pub deleted_turns: u64,
     pub binding: Option<GitSessionBinding>,
+    /// False when ACP session reset failed (history/git still rewound).
+    pub agent_reset: bool,
 }
 
 /// Session configuration exposed to the frontend.
@@ -624,14 +626,18 @@ impl SessionManager {
             .delete_events_from_id(task_id, from_event_id)
             .await?;
 
-        // Best-effort: drop ACP session so the agent does not retain deleted turns.
-        if let Err(e) = self.reset_agent_session_fresh(task_id).await {
-            tracing::warn!(
-                task_id,
-                error = %e,
-                "rewind truncated history but failed to reset agent session"
-            );
-        }
+        // Prefer a fresh ACP session so the agent does not retain deleted turns.
+        let agent_reset = match self.reset_agent_session_fresh(task_id).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    task_id,
+                    error = %e,
+                    "rewind truncated history but failed to reset agent session"
+                );
+                false
+            }
+        };
 
         Ok(RewindTaskResult {
             run_id: resolved_run_id,
@@ -639,6 +645,7 @@ impl SessionManager {
             deleted_events,
             deleted_turns,
             binding: if binding.enabled { Some(binding) } else { None },
+            agent_reset,
         })
     }
 

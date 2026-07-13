@@ -131,6 +131,37 @@ function capitalizeEnglishLabel(name: string): string {
   return first.toUpperCase() + name.slice(1);
 }
 
+/** 模式展示名：常见 Cursor / Claude 语义用中文，其余英文首字母大写 */
+function formatModeLabel(name: string): string {
+  const key = name.trim().toLowerCase().replace(/[_-]+/g, " ");
+  const map: Record<string, string> = {
+    agent: "Agent",
+    ask: "Ask",
+    plan: "Plan",
+    chat: "Ask",
+    code: "Agent",
+    build: "Agent",
+    act: "执行",
+    default: "默认",
+    manual: "手动",
+    auto: "自动",
+    yolo: "YOLO",
+    acceptedits: "接受编辑",
+    "accept edits": "接受编辑",
+    dontask: "勿询问",
+    "dont ask": "勿询问",
+    bypasspermissions: "绕过权限",
+    "bypass permissions": "绕过权限",
+    "full access": "完全访问",
+    "read only": "只读",
+    readonly: "只读",
+  };
+  if (map[key]) return map[key];
+  const compact = key.replace(/\s+/g, "");
+  if (map[compact]) return map[compact];
+  return capitalizeEnglishLabel(name);
+}
+
 /** 「供应商/型号」→ 只保留型号；无斜杠则原样返回 */
 function modelTriggerLabel(name: string): string {
   const slash = name.lastIndexOf("/");
@@ -508,7 +539,7 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
                   contentClassName="min-w-[10rem]"
                   itemClassName="py-1.5 text-xs"
                   resolveOptionIcon={resolveModeIcon}
-                  formatLabel={capitalizeEnglishLabel}
+                  formatLabel={formatModeLabel}
                   onChange={(modeId) => {
                     void changeMode(modeId);
                   }}

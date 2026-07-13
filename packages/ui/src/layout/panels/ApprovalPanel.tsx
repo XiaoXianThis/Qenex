@@ -1,7 +1,11 @@
 "use client";
 
 import {
+  approvalOptionFullLabel,
+  approvalOptionId,
+  displayApprovalOptionLabel,
   getPendingApproval,
+  isApprovalAllowKind,
   sendApproval,
   useTabsStore,
   useTaskApproval,
@@ -23,71 +27,19 @@ export type ApprovalOption = {
 export type { ApprovalState };
 
 export function optionId(option: ApprovalOption): string {
-  return option.optionId ?? option.id ?? "allow_once";
+  return approvalOptionId(option);
 }
 
 export function optionLabel(option: ApprovalOption): string {
-  return option.name ?? option.label ?? optionId(option);
+  return approvalOptionFullLabel(option);
 }
 
-const KIND_SHORT_LABEL: Record<string, string> = {
-  allow_once: "允许一次",
-  "allow-once": "允许一次",
-  allow_always: "始终允许",
-  "allow-always": "始终允许",
-  reject_once: "拒绝",
-  "reject-once": "拒绝",
-  reject_always: "始终拒绝",
-  "reject-always": "始终拒绝",
-};
-
-function normalizeKind(kind: string | undefined): string | undefined {
-  return kind?.replace(/-/g, "_");
-}
-
-function looksLikeEmbeddedCommand(text: string): boolean {
-  return (
-    text.length > 28 ||
-    /(?:curl|bash|zsh|cmd|powershell|npm|npx|bun|git\s|https?:\/\/|%\{|\\\\|\/[\w.-]+)/i.test(
-      text,
-    )
-  );
-}
-
-/** Compact label — never put the full shell command on the button. */
 export function displayOptionLabel(option: ApprovalOption): string {
-  const full = optionLabel(option).trim();
-  const kindKey = option.kind;
-  const kindShort =
-    (kindKey ? KIND_SHORT_LABEL[kindKey] : undefined) ??
-    (kindKey ? KIND_SHORT_LABEL[normalizeKind(kindKey) ?? ""] : undefined);
-
-  if (kindShort && looksLikeEmbeddedCommand(full)) {
-    return kindShort;
-  }
-
-  // English Claude / Cursor style: "Yes, and don't ask again for `…`"
-  if (/^yes\b/i.test(full) && /don'?t ask|always|permanently/i.test(full)) {
-    return kindShort ?? "始终允许";
-  }
-  if (/^yes\b/i.test(full) && full.length > 16) {
-    return kindShort ?? "允许一次";
-  }
-  if (/^(no|reject|deny)\b/i.test(full) && full.length > 16) {
-    return kindShort ?? "拒绝";
-  }
-  if (/^always\s+allow\b/i.test(full)) {
-    return kindShort ?? "始终允许";
-  }
-
-  if (full.length <= 24) return full;
-  if (kindShort) return kindShort;
-  return `${full.slice(0, 22)}…`;
+  return displayApprovalOptionLabel(option);
 }
 
 export function isAllowKind(kind: string | undefined): boolean {
-  const k = normalizeKind(kind);
-  return k === "allow_once" || k === "allow_always";
+  return isApprovalAllowKind(kind);
 }
 
 type ApprovalPanelBodyProps = {
@@ -114,7 +66,6 @@ export const ApprovalPanelBody: FC<ApprovalPanelBodyProps> = ({
       setError(null);
       try {
         await sendApproval(threadId, approval.callId, approved, selectedOptionId);
-        // Refresh may miss STATE_DELTA (no live SSE); re-hydrate from Bridge.
         const next = await getPendingApproval(threadId);
         approvalActions.set(threadId, next);
       } catch (err) {
@@ -206,7 +157,7 @@ export const ApprovalPanelBody: FC<ApprovalPanelBodyProps> = ({
               className="h-8 max-w-[10rem] min-w-0 shrink overflow-hidden rounded-full"
               onClick={() => void respond(true, "allow_once")}
             >
-              允许
+              允许一次
             </Button>
           </>
         )}
@@ -222,20 +173,8 @@ export const ApprovalPanel: FC = () => {
   const threadId = activeTab?.taskId;
   const approval = useTaskApproval(threadId);
 
-  const pending = approval?.pending === true && !!approval.callId;
-
-  if (!threadId) {
-    return (
-      <div className="text-muted-foreground px-3 py-2 text-sm">
-        打开会话后可处理工具审批
-      </div>
-    );
-  }
-
-  if (!pending || !approval) {
-    return (
-      <div className="text-muted-foreground px-3 py-2 text-sm">暂无待审批请求</div>
-    );
+  if (!threadId || !approval?.pending || !approval.callId) {
+    return null;
   }
 
   return <ApprovalPanelBody threadId={threadId} approval={approval} />;

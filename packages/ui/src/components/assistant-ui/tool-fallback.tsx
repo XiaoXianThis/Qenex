@@ -342,10 +342,10 @@ const APPROVED_RESULT = "Approved by user";
 const DENIED_RESULT = "User denied tool execution";
 
 const APPROVAL_OPTION_DEFAULT_LABELS: Record<string, string> = {
-  "allow-once": "Allow",
-  "allow-always": "Always allow",
-  "reject-once": "Deny",
-  "reject-always": "Always deny",
+  "allow-once": "允许一次",
+  "allow-always": "不再询问",
+  "reject-once": "拒绝",
+  "reject-always": "始终拒绝",
 };
 
 const isAllowKind = (kind: string) =>
@@ -515,7 +515,7 @@ function ToolFallbackApproval({
             onClick={() => respond(false)}
             disabled={submitted}
           >
-            Deny
+            拒绝
           </Button>
         )}
       </div>
@@ -537,7 +537,7 @@ function ToolFallbackApproval({
         onClick={() => respond(true)}
         disabled={submitted}
       >
-        Allow
+        允许一次
       </Button>
       <Button
         size="sm"
@@ -546,7 +546,7 @@ function ToolFallbackApproval({
         onClick={() => respond(false)}
         disabled={submitted}
       >
-        Deny
+        拒绝
       </Button>
     </div>
   );

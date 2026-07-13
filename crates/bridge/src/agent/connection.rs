@@ -33,10 +33,24 @@ use super::session_init::{
 use crate::bridge::{shared_bridge, AcpToAguiBridge, PermissionRegistry, SharedBridge};
 use crate::policy::ToolPolicyEngine;
 
-/// Max time to wait for ACP initialize / session/new after spawning the process.
-const SPAWN_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Max time to wait for ACP initialize / authenticate / session/new after spawn.
+/// Must cover browser OAuth (`auth_timeout_for`); fast agents still return early via ready_tx.
+const SPAWN_INIT_TIMEOUT: Duration = Duration::from_secs(210);
+/// Default ACP authenticate bound — agents that hang when logged out (e.g. Cursor).
+const AUTH_TIMEOUT_DEFAULT: Duration = Duration::from_secs(15);
+/// Browser / OAuth authenticate — user may need to finish a login page.
+const AUTH_TIMEOUT_BROWSER: Duration = Duration::from_secs(180);
 /// Keep only the tail of agent stderr for error messages.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
+
+fn auth_timeout_for(method_id: &str) -> Duration {
+    let lower = method_id.to_ascii_lowercase();
+    if lower.contains("browser") || lower.contains("oauth") || lower.contains("device") {
+        AUTH_TIMEOUT_BROWSER
+    } else {
+        AUTH_TIMEOUT_DEFAULT
+    }
+}
 
 type SharedStderr = Arc<Mutex<String>>;
 
@@ -888,11 +902,11 @@ async fn run_agent_connection(
                     return Ok(());
                 };
                 tracing::info!(method_id = %method_id, "ACP authenticate");
-                // Some agents (e.g. Cursor when logged out) hang on authenticate
-                // instead of returning an error — bound the wait so spawn can surface auth UI.
-                const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
+                // Bound authenticate: Cursor can hang when logged out; browser OAuth
+                // (e.g. Devin `devin-browser`) needs a much longer window for the user.
+                let auth_timeout = auth_timeout_for(&method_id);
                 match tokio::time::timeout(
-                    AUTH_TIMEOUT,
+                    auth_timeout,
                     connection
                         .send_request(AuthenticateRequest::new(method_id.clone()))
                         .block_task(),
@@ -913,14 +927,14 @@ async fn run_agent_connection(
                     Err(_) => {
                         tracing::warn!(
                             method_id = %method_id,
-                            timeout_secs = AUTH_TIMEOUT.as_secs(),
+                            timeout_secs = auth_timeout.as_secs(),
                             "ACP authenticate timed out"
                         );
                         let _ = ready_tx.send(Err(SpawnError::AuthRequired(
                             AuthRequiredPayload::new(
                                 format!(
-                                    "Authentication timed out after {}s (method: {method_id}). Run the agent's login command (e.g. `agent login`) and retry.",
-                                    AUTH_TIMEOUT.as_secs()
+                                    "Authentication timed out after {}s (method: {method_id}). Finish browser/CLI login if prompted, then retry.",
+                                    auth_timeout.as_secs()
                                 ),
                                 methods,
                                 agent_name.clone(),
@@ -1069,5 +1083,15 @@ mod tests {
         let text = take_stderr(&buf);
         assert!(text.ends_with("tail-line"));
         assert!(text.len() <= STDERR_TAIL_BYTES + 20);
+    }
+
+    #[test]
+    fn auth_timeout_longer_for_browser_oauth() {
+        assert_eq!(
+            auth_timeout_for("devin-browser"),
+            AUTH_TIMEOUT_BROWSER
+        );
+        assert_eq!(auth_timeout_for("cursor_login"), AUTH_TIMEOUT_DEFAULT);
+        assert_eq!(auth_timeout_for("qoder-oauth"), AUTH_TIMEOUT_BROWSER);
     }
 }

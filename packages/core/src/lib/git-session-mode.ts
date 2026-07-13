@@ -13,23 +13,24 @@ export const GIT_SESSION_MODE_OPTIONS: {
 }[] = [
   {
     value: "snapshot",
-    label: "影子快照（推荐）",
-    description: "在项目目录改文件；版本记在外部影子 git，不污染分支。",
+    label: "检查点（推荐）",
+    description:
+      "像 Cursor：在项目里改文件，用外部检查点记录版本，不污染你的分支。",
   },
   {
     value: "worktree",
     label: "独立沙箱",
-    description: "Agent 在独立 worktree 中工作；主目录不被改动，路径为沙箱。",
+    description: "Agent 在隔离目录工作；主项目不被直接改动（高级）。",
   },
   {
     value: "inplace",
-    label: "原地旁支",
-    description: "在项目内检出 qenex/* 旁支；IDE 可见改动，可能切换当前分支。",
+    label: "旁支模式",
+    description: "在仓库里切到会话旁支；IDE 可见改动，可能切换当前分支（高级）。",
   },
   {
     value: "off",
     label: "关闭",
-    description: "不启用会话级文件版本 / Changes 面板。",
+    description: "不启用检查点 / 还原 / 保留。",
   },
 ];
 

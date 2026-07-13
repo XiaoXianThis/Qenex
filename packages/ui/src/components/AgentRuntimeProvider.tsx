@@ -6,6 +6,8 @@ import {
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { ApprovalBridge } from "@/components/approvalBridge";
+import { ChangesRefreshBridge } from "@/components/ChangesRefreshBridge";
+import { ModeSyncBridge } from "@/components/ModeSyncBridge";
 import { TabTitleBridge } from "@/components/TabTitleBridge";
 import { ToolProgressBridge } from "@/components/ToolProgressBridge";
 import {
@@ -110,6 +112,8 @@ function AgentRuntimeProviderInner({
         tabId={session.tabId}
         threadId={session.threadId}
       />
+      <ChangesRefreshBridge agent={agent} threadId={session.threadId} />
+      <ModeSyncBridge agent={agent} />
       <ToolProgressBridge agent={agent} />
       <ApprovalBridge threadId={session.threadId} agent={agent} />
       {children}

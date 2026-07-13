@@ -25,12 +25,15 @@ import { Button } from "@/components/ui/button";
 import { AgentIcon } from "@/components/AgentIcon";
 import {
   cn,
+  changesActions,
   getAgentPreset,
   rewindTask,
   useLayoutStore,
   useSessionConfig,
   useTabsStore,
 } from "@qenex/core";
+import { ComposerAutocomplete } from "@/components/assistant-ui/composer-autocomplete";
+import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -281,44 +284,49 @@ export const ThreadComposer: FC = () => {
   const layoutEditing = useLayoutStore((s) => s.editMode);
 
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
-        >
-          <div className="flex min-h-10 flex-col gap-1">
-            <ComposerAttachments />
-            <ComposerPrimitive.Input
-              placeholder="Send a message..."
-              className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
-              rows={1}
-              autoFocus={!layoutEditing}
-              enterKeyHint="send"
-              aria-label="Message input"
-            />
+    <div className="flex w-full flex-col gap-2">
+      <ChangesPanel />
+      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+        <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
+          <div
+            data-slot="aui_composer-shell"
+            className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          >
+            <div className="flex min-h-8 flex-col gap-1">
+              <ComposerAttachments />
+              <ComposerAutocomplete>
+                <ComposerPrimitive.Input
+                  placeholder="发消息… 输入 @ 引用文件"
+                  className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
+                  rows={1}
+                  autoFocus={!layoutEditing}
+                  enterKeyHint="send"
+                  aria-label="Message input"
+                />
+              </ComposerAutocomplete>
+            </div>
+            <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
+              {showSessionConfig && !layoutEditing ? (
+                <SessionConfigBar
+                  className="px-0"
+                  trailing={
+                    <>
+                      <ComposerAddAttachment />
+                      <ComposerSendActions />
+                    </>
+                  }
+                />
+              ) : (
+                <div className="ms-auto flex items-center gap-2">
+                  <ComposerAddAttachment />
+                  <ComposerSendActions />
+                </div>
+              )}
+            </div>
           </div>
-          <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
-            {showSessionConfig && !layoutEditing ? (
-              <SessionConfigBar
-                className="px-0"
-                trailing={
-                  <>
-                    <ComposerAddAttachment />
-                    <ComposerSendActions />
-                  </>
-                }
-              />
-            ) : (
-              <div className="ms-auto flex items-center gap-2">
-                <ComposerAddAttachment />
-                <ComposerSendActions />
-              </div>
-            )}
-          </div>
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
-    </ComposerPrimitive.Root>
+        </ComposerPrimitive.AttachmentDropzone>
+      </ComposerPrimitive.Root>
+    </div>
   );
 };
 
@@ -588,7 +596,7 @@ const UserActionBar: FC = () => {
     if (!taskId || busy) return;
     if (
       !window.confirm(
-        "撤销到这条消息发送前？之后的对话与文件改动都会丢弃。",
+        "撤销到这条消息发送前？之后的对话与文件改动都会回到该检查点。",
       )
     ) {
       return;
@@ -616,7 +624,7 @@ const UserActionBar: FC = () => {
 
     setBusy(true);
     try {
-      await rewindTask(taskId, { userMessageIndex });
+      const result = await rewindTask(taskId, { userMessageIndex });
       const kept = exported.messages.slice(0, idx);
       const remapped = kept.map((item, i) => ({
         message: item.message,
@@ -628,6 +636,12 @@ const UserActionBar: FC = () => {
       });
       if (restoreText) {
         threadRuntime.composer.setText(restoreText);
+      }
+      changesActions.bumpAfterRun(taskId);
+      if (result.agentReset === false) {
+        window.alert(
+          "已还原对话与文件，但 Agent 会话重置失败，它可能仍记得已删除内容。请新建 Tab 再试。",
+        );
       }
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e));
@@ -643,7 +657,7 @@ const UserActionBar: FC = () => {
       className="aui-user-action-bar-root flex flex-col items-end gap-0.5"
     >
       <TooltipIconButton
-        tooltip="撤销"
+        tooltip="还原到此消息前"
         className="aui-user-action-undo"
         disabled={busy || !taskId}
         onClick={() => void handleUndo()}
@@ -685,7 +699,7 @@ const EditComposer: FC = () => {
     >
       <ComposerPrimitive.Root className="aui-edit-composer-root border-border/60 dark:border-muted-foreground/15 ms-auto flex w-full max-w-[85%] flex-col rounded-(--composer-radius) border bg-(--composer-bg)">
         <ComposerPrimitive.Input
-          className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
+          className="aui-edit-composer-input text-foreground min-h-12 w-full resize-none bg-transparent px-4 pt-2 pb-1 text-sm outline-none"
           autoFocus
         />
         <EditComposerFooter />
@@ -720,6 +734,7 @@ const EditComposerFooter: FC = () => {
     try {
       if (taskId && userMessageIndex >= 0) {
         await rewindTask(taskId, { userMessageIndex });
+        changesActions.bumpAfterRun(taskId);
       }
       composerRuntime.send();
     } catch (e) {

@@ -857,7 +857,7 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                   className="text-sm font-medium"
                   htmlFor="git-session-mode"
                 >
-                  Git 会话模式
+                  Git 检查点模式
                 </label>
                 <select
                   id="git-session-mode"

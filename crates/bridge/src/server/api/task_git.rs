@@ -55,6 +55,7 @@ pub struct RewindTaskResponse {
     pub deleted_events: u64,
     pub deleted_turns: u64,
     pub binding: Option<GitSessionBinding>,
+    pub agent_reset: bool,
 }
 
 pub async fn get_task_git(
@@ -161,5 +162,6 @@ pub async fn post_task_rewind(
         deleted_events: result.deleted_events,
         deleted_turns: result.deleted_turns,
         binding: result.binding,
+        agent_reset: result.agent_reset,
     }))
 }
