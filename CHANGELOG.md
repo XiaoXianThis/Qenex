@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-07-13 - Windows Agent Launch, Spawn Diagnostics, Approval UX
+
+### Added
+
+#### 🪟 Windows agent command resolution
+- **Cursor Agent direct launch**: Bypass the broken Windows CLI launcher that rejects timestamped version folders; run newest `%LOCALAPPDATA%\cursor-agent\versions\*\node.exe` + `index.js` instead
+- **npm shim → real exe**: Resolve `bun.cmd` / similar global shims to the adjacent `node_modules\<name>\bin\<name>.exe`
+- **Env-prefix aware resolve**: Commands like `FOO=bar agent …` keep leading env assignments while resolving the binary
+- **Pi host binary injection**: `augment_pi_env` / `augment_host_env` set `PI_ACP_PI_COMMAND` to the real `pi` / `pi.exe` (bun installs) for `pi-acp` on Windows
+
+#### 🩺 Spawn failure diagnostics
+- Capture agent **stderr tail** during spawn and surface it in spawn failure messages
+- Bound ACP initialize / auth wait so hung agents (e.g. Cursor logged out) fail with a clear error instead of hanging forever
+- Format spawn failures with command + stderr for UI retry
+
+#### 💬 Approval & session UI
+- **ApprovalPanel**: Shorter option labels (kind-aware), cleaner Claude/Cursor-style “don’t ask again” wording
+- **SessionConfigBar**: Show spawn/config errors with expand + **Retry** after auth/bootstrap failure
+- **Thread**: Better display for embedded approval / command-looking options
+
+#### 🧾 AG-UI persistence polish
+- Persist `RUN_FINISHED` / `RUN_ERROR` with a real `run_id` (prefer active run, fall back to lifecycle event’s own id) so resume polling keys correctly
+
+### Changed
+
+- Session cwd: strip Windows verbatim `\\?\` / `\\?\UNC\` prefixes before passing cwd to agents (fixes Pi and similar CLIs)
+- `detect` / `path_env` / `session_init` aligned with the richer command resolution path
+- Web Vite config: minor proxy/dev tweak for local bridge
+
+### Files Modified
+- `crates/bridge/src/agent/command.rs` — Cursor direct resolve, npm shim, env prefix, Pi/Codex host env
+- `crates/bridge/src/agent/connection.rs` — stderr capture, spawn timeout / failure formatting
+- `crates/bridge/src/agent/session_init.rs` — verbatim path strip for cwd
+- `crates/bridge/src/agent/detect.rs`, `path_env.rs`, `install.rs`
+- `crates/bridge/src/agui/events.rs`, `bridge/acp_to_agui.rs` — run_id on terminal events
+- `packages/ui/src/layout/panels/ApprovalPanel.tsx`
+- `packages/ui/src/components/SessionConfigBar.tsx`
+- `packages/ui/src/components/assistant-ui/thread.tsx`
+- `packages/ui/src/components/ui/button.tsx`
+- `apps/web/vite.config.ts`
+
+### Breaking Changes
+None.
+
 ## 2026-07-07 - Session Persistence and Process Management
 
 ### Added
