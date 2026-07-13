@@ -18,11 +18,14 @@ import {
   cn,
   ensureAgentReadyWithProgress,
   fetchAgentRegistry,
+  GIT_SESSION_MODE_OPTIONS,
+  getPreferredGitSessionMode,
   legacyIdsForRegistry,
   mergeAgentsConfig,
   parseOverlayJson,
   probeAgent,
   selectActiveThemeCss,
+  setPreferredGitSessionMode,
   STYLE_THEME_PRESETS,
   tabsActions,
   uninstallAgent,
@@ -31,6 +34,7 @@ import {
   useTabsStore,
   type AgentPreset,
   type AgentsJsonMode,
+  type GitSessionMode,
   type InstallProgressEvent,
   type RegistryAgentEntry,
 } from "@qenex/core";
@@ -137,6 +141,9 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     Record<string, InstallProgressState>
   >({});
   const [actionError, setActionError] = useState<string | null>(null);
+  const [gitSessionMode, setGitSessionMode] = useState<GitSessionMode>(() =>
+    getPreferredGitSessionMode(),
+  );
 
   const jsonEnabled = jsonMode !== "off";
 
@@ -845,6 +852,38 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
         {tab === "advanced" ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="git-session-mode"
+                >
+                  Git 会话模式
+                </label>
+                <select
+                  id="git-session-mode"
+                  className="border-border bg-background max-w-md rounded-md border px-2 py-1.5 text-sm"
+                  value={gitSessionMode}
+                  onChange={(e) => {
+                    const next = e.target.value as GitSessionMode;
+                    setGitSessionMode(next);
+                    setPreferredGitSessionMode(next);
+                  }}
+                >
+                  {GIT_SESSION_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-muted-foreground text-xs">
+                  {
+                    GIT_SESSION_MODE_OPTIONS.find(
+                      (o) => o.value === gitSessionMode,
+                    )?.description
+                  }{" "}
+                  仅影响之后新建的会话。
+                </p>
+              </div>
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"

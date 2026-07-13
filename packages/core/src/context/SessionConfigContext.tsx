@@ -17,6 +17,7 @@ import {
   setMode,
   setModel,
 } from "../lib/bridge-api.ts";
+import { getPreferredGitSessionMode } from "../lib/git-session-mode.ts";
 import { isAuthRequiredError } from "../lib/bridge-client.ts";
 import { agentsActions } from "../store/agents-store.ts";
 import { legacyIdsForRegistry } from "../config/agents.ts";
@@ -86,6 +87,7 @@ export function SessionConfigProvider({
         agentCommand:
           agentCommand && agentCommand.length > 0 ? agentCommand : undefined,
         resumeSessionId: resumeSessionIdRef.current,
+        gitSessionMode: getPreferredGitSessionMode(),
       });
 
     try {

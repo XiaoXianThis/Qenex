@@ -12,9 +12,10 @@ use crate::bridge::{shared_bridge, PermissionRegistry, SharedBridge};
 use crate::policy::ToolPolicyEngine;
 
 use super::demo::enqueue_demo_events;
+use super::git_mode::GitSessionMode;
 use super::git_session::{
-    self, checkout_agent_branch, disabled_binding, ensure_agent_branch, GitSessionBinding,
-    GitSessionStatus, GitTurnCommit,
+    self, agent_cwd_for_binding, disabled_binding, ensure_attached, ensure_for_mode,
+    remove_for_binding, GitSessionBinding, GitSessionStatus, GitTurnCommit,
 };
 use super::prompt::build_prompt_blocks;
 use super::store::{SessionStore, StoreError};
@@ -109,6 +110,7 @@ pub struct SessionManager {
     /// Per-task mutex to serialize concurrent ensure_task calls (e.g. React StrictMode).
     ensure_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     default_agent_command: Vec<String>,
+    default_git_session_mode: GitSessionMode,
     demo_mode: bool,
     demo_tasks: Arc<Mutex<HashSet<String>>>,
     demo_runs: Arc<Mutex<HashMap<String, RunState>>>,
@@ -120,12 +122,22 @@ impl SessionManager {
         agent_command: Option<Vec<String>>,
         demo_mode: bool,
     ) -> Self {
+        Self::with_git_mode(store, agent_command, demo_mode, GitSessionMode::Snapshot)
+    }
+
+    pub fn with_git_mode(
+        store: Arc<Mutex<SessionStore>>,
+        agent_command: Option<Vec<String>>,
+        demo_mode: bool,
+        default_git_session_mode: GitSessionMode,
+    ) -> Self {
         Self {
             store,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             ensure_locks: Arc::new(Mutex::new(HashMap::new())),
             default_agent_command: agent_command
                 .unwrap_or_else(|| vec!["kiro-cli".into(), "acp".into()]),
+            default_git_session_mode,
             demo_mode,
             demo_tasks: Arc::new(Mutex::new(HashSet::new())),
             demo_runs: Arc::new(Mutex::new(HashMap::new())),
@@ -147,7 +159,12 @@ impl SessionManager {
         mcp_servers: Option<Value>,
         agent_command: Option<Vec<String>>,
         agent_id: Option<String>,
+        git_session_mode: Option<&str>,
     ) -> Result<ActiveSession, ManagerError> {
+        let resolved_git_mode = GitSessionMode::parse_or_default(
+            git_session_mode.or(Some(self.default_git_session_mode.as_str())),
+        );
+
         if self.demo_mode {
             let agent_session_id = format!("stub-{}", &Uuid::new_v4().to_string()[..8]);
             self.demo_tasks.lock().await.insert(task_id.to_string());
@@ -162,7 +179,9 @@ impl SessionManager {
                     agent_id.as_deref(),
                 )
                 .await?;
-            self.bind_git_session(task_id, cwd).await;
+            let _ = self
+                .bind_git_session(task_id, cwd, resolved_git_mode)
+                .await;
             return Ok(ActiveSession {
                 task_id: task_id.to_string(),
                 agent_session_id,
@@ -191,20 +210,48 @@ impl SessionManager {
             }
         })
         .map_err(ManagerError::Agent)?;
+
+        // Persist task row first (FK for git_bindings), bind git strategy, then spawn.
+        let placeholder_session = format!("pending-{}", &Uuid::new_v4().to_string()[..8]);
+        self.store
+            .lock()
+            .await
+            .create(
+                task_id,
+                &placeholder_session,
+                cwd,
+                title,
+                agent_id.as_deref(),
+            )
+            .await?;
+        let git_binding = self
+            .bind_git_session(task_id, cwd, resolved_git_mode)
+            .await;
+        let agent_cwd = agent_cwd_for_binding(&git_binding, cwd);
+
         let permissions = PermissionRegistry::new();
         let bridge = shared_bridge(
             task_id,
-            ToolPolicyEngine::new(Some(cwd.to_string())),
+            ToolPolicyEngine::new(Some(agent_cwd.clone())),
             permissions.clone(),
         );
         {
             let mut b = bridge.lock().await;
-            b.set_cwd(cwd);
+            b.set_cwd(&agent_cwd);
         }
 
-        let init = SessionInitParams::from_api(cwd, resume_session_id, mcp_servers.as_ref());
+        let init =
+            SessionInitParams::from_api(&agent_cwd, resume_session_id, mcp_servers.as_ref());
         let (connection, init_result) =
-            AgentConnection::spawn(task_id, init, &command, Some(bridge.clone())).await?;
+            match AgentConnection::spawn(task_id, init, &command, Some(bridge.clone())).await {
+                Ok(v) => v,
+                Err(e) => {
+                    if git_binding.enabled {
+                        let _ = remove_for_binding(&git_binding).await;
+                    }
+                    return Err(e.into());
+                }
+            };
 
         // 串行落库：每个事件各自 tokio::spawn 会乱序写入，刷新重放时文本 delta 会错位
         let store = self.store.clone();
@@ -294,6 +341,7 @@ impl SessionManager {
             }
         }
 
+        // Public snapshot keeps user workspace cwd; agent process uses worktree.
         let snapshot = active_session_from_inner(task_id, cwd, &session_state);
 
         self.sessions
@@ -313,34 +361,44 @@ impl SessionManager {
             )
             .await?;
 
-        self.bind_git_session(task_id, cwd).await;
-
         Ok(snapshot)
     }
 
-    async fn bind_git_session(&self, task_id: &str, cwd: &str) {
-        // Rehydrate: reuse persisted binding so we never reset base_sha / tip history.
+    /// Bind (or rehydrate) a per-task git session for the given mode.
+    /// Existing bindings keep their locked mode; `requested` only applies to new binds.
+    async fn bind_git_session(
+        &self,
+        task_id: &str,
+        cwd: &str,
+        requested: GitSessionMode,
+    ) -> GitSessionBinding {
         {
             let store = self.store.lock().await;
-            if let Ok(Some(existing)) = store.get_git_binding(task_id).await {
+            if let Ok(Some(mut existing)) = store.get_git_binding(task_id).await {
                 drop(store);
                 if existing.enabled {
-                    if let Err(e) = checkout_agent_branch(&existing).await {
+                    if let Err(e) = ensure_attached(&mut existing).await {
                         tracing::warn!(
                             task_id,
                             error = %e,
-                            "failed to checkout existing git side-branch"
+                            "failed to attach git session; disabling"
                         );
+                        let disabled = disabled_binding(task_id, cwd);
+                        let _ = self.store.lock().await.upsert_git_binding(&disabled).await;
+                        return disabled;
+                    }
+                    if let Err(e) = self.store.lock().await.upsert_git_binding(&existing).await {
+                        tracing::warn!(task_id, error = %e, "failed to persist rehydrated git binding");
                     }
                 }
-                return;
+                return existing;
             }
         }
 
-        let binding = match ensure_agent_branch(std::path::Path::new(cwd), task_id).await {
+        let binding = match ensure_for_mode(std::path::Path::new(cwd), task_id, requested).await {
             Ok(b) => b,
             Err(e) => {
-                tracing::info!(task_id, cwd, error = %e, "git session disabled");
+                tracing::info!(task_id, cwd, mode = %requested, error = %e, "git session disabled");
                 disabled_binding(task_id, cwd)
             }
         };
@@ -349,10 +407,22 @@ impl SessionManager {
         } else if binding.enabled {
             tracing::info!(
                 task_id,
+                mode = %binding.mode,
                 branch = %binding.agent_branch,
+                worktree = ?binding.worktree_path,
+                shadow = ?binding.shadow_git_dir,
                 base = %binding.base_sha,
-                "git side-branch ready"
+                "git session ready"
             );
+        }
+        binding
+    }
+
+    async fn apply_agent_cwd_to_session(&self, task_id: &str, agent_cwd: &str) {
+        let sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(task_id) {
+            let mut bridge = session.bridge.lock().await;
+            bridge.set_cwd(agent_cwd);
         }
     }
 
@@ -441,9 +511,47 @@ impl SessionManager {
 
     pub async fn git_merge_base(&self, task_id: &str) -> Result<String, ManagerError> {
         let binding = self.get_git_binding(task_id).await?;
-        git_session::merge_to_base(&binding)
+        let merge_sha = git_session::merge_to_base(&binding)
             .await
-            .map_err(|e| ManagerError::Agent(e.to_string()))
+            .map_err(|e| ManagerError::Agent(e.to_string()))?;
+
+        // Tear down mode-specific state and recreate a fresh session sandbox/baseline.
+        if let Err(e) = remove_for_binding(&binding).await {
+            tracing::warn!(task_id, error = %e, "failed to remove git session after Keep");
+        }
+        let new_binding = match ensure_for_mode(
+            std::path::Path::new(&binding.cwd),
+            task_id,
+            binding.mode,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    task_id,
+                    error = %e,
+                    "failed to recreate git session after Keep; disabling"
+                );
+                disabled_binding(task_id, &binding.cwd)
+            }
+        };
+        let _ = self.store.lock().await.upsert_git_binding(&new_binding).await;
+        let agent_cwd = agent_cwd_for_binding(&new_binding, &binding.cwd);
+        self.apply_agent_cwd_to_session(task_id, &agent_cwd).await;
+
+        let turns = self.list_git_turns(task_id).await.unwrap_or_default();
+        let run_ids: Vec<String> = turns.into_iter().map(|t| t.run_id).collect();
+        if !run_ids.is_empty() {
+            let _ = self
+                .store
+                .lock()
+                .await
+                .delete_git_turns_for_runs(task_id, &run_ids)
+                .await;
+        }
+
+        Ok(merge_sha)
     }
 
     /// Rewind conversation (+ git side-branch) to before a user message / run.
@@ -583,6 +691,7 @@ impl SessionManager {
                 None,
                 None,
                 stored.agent_id.clone(),
+                None,
             )
             .await?;
         Ok(())
@@ -990,6 +1099,7 @@ impl SessionManager {
         mcp_servers: Option<Value>,
         agent_command: Option<Vec<String>>,
         agent_id: Option<String>,
+        git_session_mode: Option<&str>,
     ) -> Result<ActiveSession, ManagerError> {
         if self.has_session(task_id).await {
             let sessions = self.sessions.lock().await;
@@ -1050,6 +1160,7 @@ impl SessionManager {
             mcp_servers,
             agent_command,
             effective_agent_id,
+            git_session_mode,
         )
         .await
     }
@@ -1090,6 +1201,13 @@ impl SessionManager {
     }
 
     pub async fn destroy(&self, task_id: &str) -> Result<(), ManagerError> {
+        if let Ok(binding) = self.get_git_binding(task_id).await {
+            if binding.enabled {
+                if let Err(e) = remove_for_binding(&binding).await {
+                    tracing::warn!(task_id, error = %e, "failed to remove git session on destroy");
+                }
+            }
+        }
         let _ = self.stop(task_id).await?;
         Ok(())
     }
@@ -1129,6 +1247,7 @@ impl SessionManager {
             None,
             None,
             stored.agent_id.clone(),
+            None,
         )
         .await?;
 

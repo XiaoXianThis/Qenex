@@ -12,6 +12,7 @@ export * from "./lib/bridge-api.ts";
 export * from "./lib/bridge-history-adapter.ts";
 export * from "./lib/composer-attachments.ts";
 export * from "./lib/replay-agui-events.ts";
+export * from "./lib/git-session-mode.ts";
 export * from "./lib/session-config.ts";
 export * from "./lib/utils.ts";
 export * from "./store/agents-store.ts";

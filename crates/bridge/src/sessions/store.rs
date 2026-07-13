@@ -124,6 +124,33 @@ impl SessionStore {
         .execute(&pool)
         .await?;
 
+        // Best-effort migration for Scheme F worktree path.
+        let _ = sqlx::query("ALTER TABLE git_bindings ADD COLUMN worktree_path TEXT")
+            .execute(&pool)
+            .await;
+
+        // Scheme D + multi-mode.
+        let _ = sqlx::query("ALTER TABLE git_bindings ADD COLUMN mode TEXT")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE git_bindings ADD COLUMN shadow_git_dir TEXT")
+            .execute(&pool)
+            .await;
+
+        // Legacy rows: worktree_path set → worktree; else default snapshot.
+        let _ = sqlx::query(
+            r#"
+            UPDATE git_bindings
+            SET mode = CASE
+                WHEN worktree_path IS NOT NULL AND worktree_path != '' THEN 'worktree'
+                WHEN mode IS NULL OR mode = '' THEN 'snapshot'
+                ELSE mode
+            END
+            "#,
+        )
+        .execute(&pool)
+        .await;
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS git_turn_commits (
@@ -432,8 +459,8 @@ impl SessionStore {
             r#"
             INSERT INTO git_bindings (
                 task_id, cwd, repo_root, base_branch, base_sha, agent_branch,
-                tip_sha, enabled, pre_rewind_sha, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tip_sha, enabled, pre_rewind_sha, worktree_path, mode, shadow_git_dir, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 cwd = excluded.cwd,
                 repo_root = excluded.repo_root,
@@ -443,6 +470,9 @@ impl SessionStore {
                 tip_sha = excluded.tip_sha,
                 enabled = excluded.enabled,
                 pre_rewind_sha = excluded.pre_rewind_sha,
+                worktree_path = excluded.worktree_path,
+                mode = excluded.mode,
+                shadow_git_dir = excluded.shadow_git_dir,
                 updated_at = excluded.updated_at
             "#,
         )
@@ -455,6 +485,9 @@ impl SessionStore {
         .bind(&binding.tip_sha)
         .bind(if binding.enabled { 1 } else { 0 })
         .bind(&binding.pre_rewind_sha)
+        .bind(&binding.worktree_path)
+        .bind(binding.mode.as_str())
+        .bind(&binding.shadow_git_dir)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -469,7 +502,7 @@ impl SessionStore {
         let row = sqlx::query(
             r#"
             SELECT task_id, cwd, repo_root, base_branch, base_sha, agent_branch,
-                   tip_sha, enabled, pre_rewind_sha
+                   tip_sha, enabled, pre_rewind_sha, worktree_path, mode, shadow_git_dir
             FROM git_bindings WHERE task_id = ?
             "#,
         )
@@ -477,16 +510,33 @@ impl SessionStore {
         .fetch_optional(pool)
         .await?;
 
-        Ok(row.map(|r| super::git_session::GitSessionBinding {
-            task_id: r.get("task_id"),
-            cwd: r.get("cwd"),
-            repo_root: r.get("repo_root"),
-            base_branch: r.get("base_branch"),
-            base_sha: r.get("base_sha"),
-            agent_branch: r.get("agent_branch"),
-            tip_sha: r.get("tip_sha"),
-            enabled: r.get::<i64, _>("enabled") != 0,
-            pre_rewind_sha: r.get("pre_rewind_sha"),
+        Ok(row.map(|r| {
+            let mode_str: Option<String> = r.get("mode");
+            let worktree_path: Option<String> = r.get("worktree_path");
+            let mode = mode_str
+                .as_deref()
+                .and_then(super::git_mode::GitSessionMode::parse)
+                .unwrap_or_else(|| {
+                    if worktree_path.as_ref().is_some_and(|p| !p.is_empty()) {
+                        super::git_mode::GitSessionMode::Worktree
+                    } else {
+                        super::git_mode::GitSessionMode::Snapshot
+                    }
+                });
+            super::git_session::GitSessionBinding {
+                task_id: r.get("task_id"),
+                cwd: r.get("cwd"),
+                repo_root: r.get("repo_root"),
+                base_branch: r.get("base_branch"),
+                base_sha: r.get("base_sha"),
+                agent_branch: r.get("agent_branch"),
+                tip_sha: r.get("tip_sha"),
+                enabled: r.get::<i64, _>("enabled") != 0,
+                pre_rewind_sha: r.get("pre_rewind_sha"),
+                worktree_path,
+                shadow_git_dir: r.get("shadow_git_dir"),
+                mode,
+            }
         }))
     }
 

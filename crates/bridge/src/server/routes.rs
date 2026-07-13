@@ -243,6 +243,7 @@ async fn ag_ui_run(
                 None,
                 agent_command,
                 agent_id,
+                None,
             )
             .await
         {
@@ -304,6 +305,7 @@ async fn create_task(
             body.mcp_servers.clone(),
             body.agent_command.clone(),
             body.agent_id.clone(),
+            body.git_session_mode.as_deref(),
         )
         .await
         .map_err(manager_status)?;

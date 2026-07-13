@@ -119,7 +119,45 @@ export const ChangesPanel: FC = () => {
 
   const canUnrewind = Boolean(binding.preRewindSha);
   const canUndo = hasChanges;
-  const canKeep = Boolean(binding.baseBranch) && aheadOfBase > 0 && !dirty;
+  const mode = binding.mode ?? (binding.worktreePath ? "worktree" : "snapshot");
+  const canKeep =
+    mode === "snapshot"
+      ? aheadOfBase > 0 && !dirty
+      : Boolean(binding.baseBranch) && aheadOfBase > 0 && !dirty;
+
+  const modeBadge =
+    mode === "worktree"
+      ? "沙箱"
+      : mode === "inplace"
+        ? "旁支"
+        : mode === "snapshot"
+          ? "快照"
+          : null;
+
+  const undoConfirm =
+    mode === "worktree"
+      ? "撤销本会话全部文件改动？沙箱工作区将重置到会话开始时的状态（不影响项目主目录未提交改动）。"
+      : mode === "snapshot"
+        ? "撤销本会话全部文件改动？将把项目目录中的文件重置到会话开始时的状态（会改写磁盘上的文件）。"
+        : "撤销本会话全部文件改动？工作区将硬重置到会话开始时的提交。";
+
+  const keepTitle =
+    mode === "snapshot"
+      ? "将当前改动提交到项目仓库当前分支"
+      : mode === "worktree"
+        ? binding.baseBranch
+          ? `合并到 ${binding.baseBranch}（需项目工作区已在该分支且干净）`
+          : "无 base 分支"
+        : binding.baseBranch
+          ? `合并旁支到 ${binding.baseBranch}`
+          : "无 base 分支";
+
+  const keepConfirm =
+    mode === "snapshot"
+      ? "Keep：将当前工作区改动提交到项目仓库的当前分支？"
+      : mode === "worktree"
+        ? `Keep：将 ${binding.agentBranch} 合并到 ${binding.baseBranch}？\n\n请确认项目工作区当前已在「${binding.baseBranch}」且无未提交改动；合并不会自动切换分支。`
+        : `Keep：检出 ${binding.baseBranch} 并合并 ${binding.agentBranch}？`;
 
   return (
     <div className="border-border/60 bg-muted/10 flex flex-col overflow-hidden rounded-(--composer-radius) border text-sm">
@@ -141,6 +179,20 @@ export const ChangesPanel: FC = () => {
               ? "无文件改动"
               : `${fileCount} 个文件`}
           </span>
+          {modeBadge ? (
+            <span
+              className="text-muted-foreground max-w-[8rem] shrink-0 truncate text-xs"
+              title={
+                mode === "worktree" && binding.worktreePath
+                  ? `沙箱：${binding.worktreePath}\n项目：${binding.cwd || binding.repoRoot}`
+                  : mode === "snapshot" && binding.shadowGitDir
+                    ? `影子：${binding.shadowGitDir}`
+                    : `模式：${mode}`
+              }
+            >
+              {modeBadge}
+            </span>
+          ) : null}
           {dirty ? (
             <span className="text-muted-foreground shrink-0 text-xs">未提交</span>
           ) : null}
@@ -163,11 +215,7 @@ export const ChangesPanel: FC = () => {
             disabled={busy || !canUndo}
             className="hover:bg-accent cursor-pointer rounded-full px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
             onClick={() => {
-              if (
-                !window.confirm(
-                  "撤销本会话全部文件改动？工作区将重置到会话开始时的状态。",
-                )
-              ) {
+              if (!window.confirm(undoConfirm)) {
                 return;
               }
               void runAction(() => undoAllTaskGit(taskId));
@@ -179,17 +227,9 @@ export const ChangesPanel: FC = () => {
             type="button"
             disabled={busy || !canKeep}
             className="bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer rounded-full px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-            title={
-              binding.baseBranch
-                ? `合并到 ${binding.baseBranch}`
-                : "无 base 分支"
-            }
+            title={keepTitle}
             onClick={() => {
-              if (
-                !window.confirm(
-                  `Keep：将 ${binding.agentBranch} 合并到 ${binding.baseBranch}？`,
-                )
-              ) {
+              if (!window.confirm(keepConfirm)) {
                 return;
               }
               void runAction(() => mergeTaskGit(taskId));
@@ -201,7 +241,25 @@ export const ChangesPanel: FC = () => {
       </div>
 
       {error ? (
-        <div className="text-destructive px-3 pb-2 text-xs">{error}</div>
+        <div className="text-destructive px-3 pb-2 text-xs whitespace-pre-wrap">{error}</div>
+      ) : null}
+
+      {expanded && (binding.worktreePath || binding.shadowGitDir) ? (
+        <div className="text-muted-foreground border-border/50 space-y-0.5 border-t px-3 py-1.5 text-[11px]">
+          <div className="truncate" title={binding.cwd || binding.repoRoot}>
+            项目：{binding.cwd || binding.repoRoot}
+          </div>
+          {binding.worktreePath ? (
+            <div className="truncate" title={binding.worktreePath}>
+              沙箱：{binding.worktreePath}
+            </div>
+          ) : null}
+          {binding.shadowGitDir ? (
+            <div className="truncate" title={binding.shadowGitDir}>
+              影子：{binding.shadowGitDir}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {expanded ? (

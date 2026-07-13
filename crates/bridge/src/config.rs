@@ -23,6 +23,9 @@ pub struct BridgeConfigFile {
     pub demo_mode: bool,
     #[serde(default = "default_event_ttl_days")]
     pub event_ttl_days: u32,
+    /// Default git session mode: off | inplace | worktree | snapshot
+    #[serde(default = "default_git_session_mode")]
+    pub git_session_mode: String,
 }
 
 fn default_project_name() -> String {
@@ -49,6 +52,9 @@ fn default_cors_origins() -> Vec<String> {
 fn default_event_ttl_days() -> u32 {
     30
 }
+fn default_git_session_mode() -> String {
+    "snapshot".to_string()
+}
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
@@ -61,6 +67,7 @@ pub struct BridgeConfig {
     pub db_path: PathBuf,
     pub demo_mode: bool,
     pub event_ttl_days: u32,
+    pub git_session_mode: String,
 }
 
 impl Default for BridgeConfig {
@@ -81,6 +88,7 @@ impl Default for BridgeConfigFile {
             db_directory: String::new(),
             demo_mode: false,
             event_ttl_days: default_event_ttl_days(),
+            git_session_mode: default_git_session_mode(),
         }
     }
 }
@@ -105,6 +113,7 @@ impl BridgeConfig {
             db_path,
             demo_mode: file.demo_mode,
             event_ttl_days: file.event_ttl_days,
+            git_session_mode: file.git_session_mode,
         }
     }
 }

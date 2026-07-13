@@ -23,6 +23,8 @@ export type EnsureSessionRequest = {
   mode?: string;
   model?: string;
   resumeSessionId?: string;
+  /** off | inplace | worktree | snapshot — locked for this task at create. */
+  gitSessionMode?: string;
 };
 
 export type EnsureSessionResult = {
@@ -127,6 +129,7 @@ export async function ensureSession(
       mode: request.mode,
       model: request.model,
       resumeSessionId: request.resumeSessionId,
+      gitSessionMode: request.gitSessionMode,
     }),
   });
   return {
@@ -592,7 +595,9 @@ export async function uninstallAgent(
   );
 }
 
-// --- Task-scoped git side-branch (Plan B) ---
+// --- Task-scoped git session (off / inplace / worktree / snapshot) ---
+
+export type { GitSessionMode } from "./git-session-mode.ts";
 
 export type GitSessionBinding = {
   taskId: string;
@@ -604,6 +609,11 @@ export type GitSessionBinding = {
   tipSha: string | null;
   enabled: boolean;
   preRewindSha: string | null;
+  /** Isolated agent worktree; set in worktree mode. */
+  worktreePath: string | null;
+  /** External shadow git dir; set in snapshot mode. */
+  shadowGitDir: string | null;
+  mode: import("./git-session-mode.ts").GitSessionMode;
 };
 
 export type GitChangedFile = {

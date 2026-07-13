@@ -23,10 +23,11 @@ pub async fn build_state(config: BridgeConfig) -> Result<AppState, crate::sessio
     let mut store = SessionStore::new(config.db_path.clone());
     store.initialize().await?;
     let store = Arc::new(Mutex::new(store));
-    let manager = Arc::new(SessionManager::new(
+    let manager = Arc::new(SessionManager::with_git_mode(
         store.clone(),
         Some(config.agent_command.clone()),
         config.demo_mode,
+        crate::sessions::GitSessionMode::parse_or_default(Some(&config.git_session_mode)),
     ));
 
     Ok(AppState {

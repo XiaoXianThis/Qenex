@@ -37,13 +37,43 @@ async fn git_binding_and_turns_roundtrip() {
         tip_sha: Some("bbb".into()),
         enabled: true,
         pre_rewind_sha: None,
+        worktree_path: Some("/tmp/qenex-wt/task-g".into()),
+        shadow_git_dir: None,
+        mode: acp_to_agui::sessions::GitSessionMode::Worktree,
     };
     store.upsert_git_binding(&binding).await.unwrap();
 
     let loaded = store.get_git_binding("task-g").await.unwrap().unwrap();
     assert_eq!(loaded.agent_branch, "qenex/task-g");
     assert_eq!(loaded.tip_sha.as_deref(), Some("bbb"));
+    assert_eq!(
+        loaded.worktree_path.as_deref(),
+        Some("/tmp/qenex-wt/task-g")
+    );
+    assert_eq!(loaded.mode, acp_to_agui::sessions::GitSessionMode::Worktree);
     assert!(loaded.enabled);
+
+    let snap = GitSessionBinding {
+        task_id: "task-g".into(),
+        cwd: "/tmp/repo".into(),
+        repo_root: "/tmp/repo".into(),
+        base_branch: Some("main".into()),
+        base_sha: "aaa".into(),
+        agent_branch: "qenex/task-g".into(),
+        tip_sha: Some("ccc".into()),
+        enabled: true,
+        pre_rewind_sha: None,
+        worktree_path: None,
+        shadow_git_dir: Some("/tmp/snap/task-g.git".into()),
+        mode: acp_to_agui::sessions::GitSessionMode::Snapshot,
+    };
+    store.upsert_git_binding(&snap).await.unwrap();
+    let loaded_snap = store.get_git_binding("task-g").await.unwrap().unwrap();
+    assert_eq!(
+        loaded_snap.shadow_git_dir.as_deref(),
+        Some("/tmp/snap/task-g.git")
+    );
+    assert_eq!(loaded_snap.mode, acp_to_agui::sessions::GitSessionMode::Snapshot);
 
     let turn = GitTurnCommit {
         task_id: "task-g".into(),

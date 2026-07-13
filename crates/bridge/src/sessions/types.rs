@@ -21,6 +21,9 @@ pub struct CreateTaskRequest {
     pub agent_command: Option<Vec<String>>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Git session strategy: off | inplace | worktree | snapshot
+    #[serde(default)]
+    pub git_session_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

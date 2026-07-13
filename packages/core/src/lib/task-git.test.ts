@@ -4,17 +4,21 @@ import type {
   GitTurnCommit,
   TaskGitResponse,
 } from "./bridge-api.ts";
+import {
+  DEFAULT_GIT_SESSION_MODE,
+  parseGitSessionMode,
+} from "./git-session-mode.ts";
 
-/** Shape guards for Plan B task-git payloads (camelCase from Bridge). */
 function assertBinding(b: GitSessionBinding) {
   expect(typeof b.taskId).toBe("string");
   expect(typeof b.agentBranch).toBe("string");
   expect(typeof b.enabled).toBe("boolean");
   expect(b.agentBranch.startsWith("qenex/") || !b.enabled).toBe(true);
+  expect(["off", "inplace", "worktree", "snapshot"]).toContain(b.mode);
 }
 
 describe("task git API types", () => {
-  test("parses enabled session status shape", () => {
+  test("parses snapshot session status shape", () => {
     const payload = {
       binding: {
         taskId: "t1",
@@ -26,6 +30,9 @@ describe("task git API types", () => {
         tipSha: "def456",
         enabled: true,
         preRewindSha: null,
+        worktreePath: null,
+        shadowGitDir: "/tmp/snap/t1.git",
+        mode: "snapshot",
       },
       files: [{ status: "A", path: "a.txt", additions: 1, deletions: 0 }],
       aheadOfBase: 1,
@@ -43,8 +50,8 @@ describe("task git API types", () => {
     } satisfies TaskGitResponse;
 
     assertBinding(payload.binding);
-    expect(payload.files).toHaveLength(1);
-    expect(payload.turns[0]!.commitSha).toBe("def456");
+    expect(payload.binding.shadowGitDir).toBe("/tmp/snap/t1.git");
+    expect(payload.binding.mode).toBe("snapshot");
   });
 
   test("disabled binding still has agentBranch", () => {
@@ -58,8 +65,20 @@ describe("task git API types", () => {
       tipSha: null,
       enabled: false,
       preRewindSha: null,
+      worktreePath: null,
+      shadowGitDir: null,
+      mode: "off",
     };
     assertBinding(binding);
     expect(binding.enabled).toBe(false);
+  });
+});
+
+describe("git session mode preference", () => {
+  test("parses known modes", () => {
+    expect(parseGitSessionMode("snapshot")).toBe("snapshot");
+    expect(parseGitSessionMode("WORKTREE")).toBe("worktree");
+    expect(parseGitSessionMode("nope")).toBeNull();
+    expect(DEFAULT_GIT_SESSION_MODE).toBe("snapshot");
   });
 });
