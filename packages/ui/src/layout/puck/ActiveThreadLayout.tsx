@@ -22,8 +22,8 @@ import {
 import { PaintbrushVertical } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
-  useState,
   type CSSProperties,
   type FC,
   type SyntheticEvent,
@@ -36,6 +36,8 @@ import {
 } from "@/layout/puck/config";
 import { LayoutContainerSlot } from "@/layout/puck/LayoutContainerSlot";
 import { LayoutEditLabel } from "@/layout/puck/LayoutEditLabel";
+
+const OVERLAY_INSET_VAR = "--thread-overlay-inset";
 
 const isNewChatView = (s: AssistantState) =>
   s.thread.messages.length === 0 &&
@@ -106,8 +108,8 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
   const composerOverlay =
     composerOverlayPref && flushBottomComposer && hasBottom && !layoutEditing;
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
-  const [overlayInset, setOverlayInset] = useState(0);
 
   useEffect(() => {
     if (!layoutEditing) return;
@@ -117,35 +119,57 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
     }
   }, [layoutEditing]);
 
-  useEffect(() => {
+  // Write footer height to a CSS var — avoid setState so overlay resize does not
+  // re-render the frosted footer (backdrop-blur thrash / checkpoint flicker).
+  useLayoutEffect(() => {
+    const root = rootRef.current;
     if (!composerOverlay) {
-      setOverlayInset(0);
+      root?.style.removeProperty(OVERLAY_INSET_VAR);
       return;
     }
     const el = footerRef.current;
-    if (!el) return;
+    if (!el || !root) return;
 
-    const sync = () => setOverlayInset(el.offsetHeight);
+    const sync = () => {
+      root.style.setProperty(OVERLAY_INSET_VAR, `${el.offsetHeight}px`);
+    };
     sync();
-    const ro = new ResizeObserver(sync);
+
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(sync);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      root.style.removeProperty(OVERLAY_INSET_VAR);
+    };
   }, [composerOverlay, hasBottom]);
 
   const messagesOverlayStyle: CSSProperties | undefined = composerOverlay
-    ? { paddingBottom: overlayInset }
+    ? { paddingBottom: `var(${OVERLAY_INSET_VAR}, 0px)` }
+    : undefined;
+
+  const viewportScrollStyle: CSSProperties | undefined = composerOverlay
+    ? { scrollPaddingBottom: `var(${OVERLAY_INSET_VAR}, 0px)` }
     : undefined;
 
   return (
-    <ThreadPrimitive.Root
-      className={cn(
-        // 上 / 中 / 下三层：上下 shrink-0 实占，中间 flex-1 滚动
-        // overlay 时下区绝对定位叠在滚动消息上
-        "aui-root aui-thread-root bg-background @container relative flex h-full min-h-0 flex-col overflow-hidden",
-        layoutEditing && "pointer-events-none",
-      )}
+    <div
+      ref={rootRef}
+      className="flex h-full min-h-0 flex-col overflow-hidden"
       data-composer-overlay={composerOverlay ? "" : undefined}
     >
+      <ThreadPrimitive.Root
+        className={cn(
+          // 上 / 中 / 下三层：上下 shrink-0 实占，中间 flex-1 滚动
+          // overlay 时下区绝对定位叠在滚动消息上
+          "aui-root aui-thread-root bg-background @container relative flex h-full min-h-0 flex-col overflow-hidden",
+          layoutEditing && "pointer-events-none",
+        )}
+      >
       {renderTop ? (
         <div
           className={cn(
@@ -185,11 +209,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
             ? "overflow-hidden pointer-events-none"
             : "overflow-y-scroll-stable",
         )}
-        style={
-          composerOverlay
-            ? ({ scrollPaddingBottom: overlayInset } as CSSProperties)
-            : undefined
-        }
+        style={viewportScrollStyle}
       >
         <div
           data-layout-panel="messages"
@@ -234,13 +254,13 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
           ref={footerRef}
           data-slot="aui_thread-viewport-footer"
           className={cn(
-            "aui-thread-viewport-footer flex flex-col gap-4 overflow-hidden",
+            "aui-thread-viewport-footer flex flex-col gap-4",
             layoutEditing
-              ? "relative z-30 shrink-0 bg-background pointer-events-auto"
+              ? "relative z-30 shrink-0 overflow-hidden bg-background pointer-events-auto"
               : composerOverlay
-                ? "absolute inset-x-0 bottom-0 z-20 rounded-t-(--composer-radius) bg-background/55 backdrop-blur-xl supports-backdrop-filter:bg-background/40"
+                ? "absolute inset-x-0 bottom-0 z-20"
                 : cn(
-                    "relative shrink-0 bg-background rounded-t-(--composer-radius)",
+                    "relative shrink-0 overflow-hidden bg-background rounded-t-(--composer-radius)",
                     !flushBottomComposer && "page-padding-b",
                   ),
           )}
@@ -257,6 +277,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
           </div>
         </div>
       ) : null}
-    </ThreadPrimitive.Root>
+      </ThreadPrimitive.Root>
+    </div>
   );
 };

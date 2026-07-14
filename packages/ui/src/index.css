@@ -2,6 +2,9 @@
 @import "tw-shimmer";
 @source "./**/*.{ts,tsx}";
 
+/* 跟随应用主题（document-theme 在 html 上切换 .dark），而非仅系统 prefers-color-scheme */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -59,10 +62,10 @@
   html,
   body,
   #root {
-    @apply h-full overflow-hidden;
+    @apply h-full overflow-hidden bg-background text-foreground;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply antialiased;
   }
   .page-padding {
     padding: var(--page-padding);
@@ -114,6 +117,16 @@
   [data-layout-page]:not([data-layout-editing])
     [data-layout-component="LayoutColumn"]:not(:has([data-layout-panel])) {
     display: none !important;
+  }
+
+  /**
+   * 毛玻璃叠层：scrollIntoView 对齐消息时避开底部栏。
+   */
+  [data-composer-overlay]
+    [data-slot="aui_user-message-root"],
+  [data-composer-overlay]
+    [data-slot="aui_assistant-message-root"] {
+    scroll-margin-bottom: var(--thread-overlay-inset, 0px);
   }
 }
 
@@ -348,6 +361,18 @@ body:has([data-puck-entry]) {
   --puck-color-azure-10: color-mix(in oklab, var(--primary) 12%, var(--background));
   --puck-color-azure-11: var(--muted);
   --puck-color-azure-12: color-mix(in oklab, var(--primary) 5%, var(--background));
+  /* 画布外框浅灰 → 主题底（勿改 --puck-color-white，ActionBar 文字会依赖它） */
+  --puck-color-grey-11: var(--background);
+  --puck-color-grey-12: var(--muted);
+}
+
+/* Puck Canvas：硬编码 white（iframe 样式未就绪时的露底） */
+[data-layout-editing] [class*="PuckCanvas-root"] {
+  background: var(--background) !important;
+}
+[data-layout-editing] iframe#preview-frame {
+  background: var(--background);
+  color-scheme: inherit;
 }
 
 /* Puck 布局编辑：hover 时 outline 改主题色实线 */

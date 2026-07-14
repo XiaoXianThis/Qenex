@@ -9,8 +9,8 @@ export const UI_PREFS_KEY = "agent-center-ui-prefs";
 
 export type UiPrefsState = {
   /**
-   * When true (and composer is in the bottom band), messages scroll under a
-   * frosted composer footer instead of stopping above a solid bar.
+   * When true: messages scroll under frosted chrome (bottom composer band and/or
+   * top TabBar) instead of stopping at a solid bar.
    */
   composerOverlay: boolean;
 };

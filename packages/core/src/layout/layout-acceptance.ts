@@ -143,9 +143,57 @@ assert(
   "classic approval → bottom",
 );
 assert(
+  findPanelZone(LAYOUT_PRESETS.classic.puckData, "undoRedo") === "bottom",
+  "classic undoRedo → bottom",
+);
+assert(
   LAYOUT_PRESETS.classic.panels.approval.visible === false,
   "classic approval hidden by default",
 );
+assert(
+  LAYOUT_PRESETS.classic.panels.undoRedo.visible === true,
+  "classic undoRedo visible by default",
+);
+
+{
+  const bottom = (LAYOUT_PRESETS.classic.puckData.root.props as {
+    bottom: import("@puckeditor/core").ComponentData[];
+  }).bottom;
+  const checkpointCol = bottom.find(
+    (n) =>
+      n.type === "LayoutColumn" &&
+      n.props?.id === "LayoutColumn-checkpoint",
+  );
+  assert(
+    Boolean(checkpointCol),
+    "classic has checkpoint column",
+  );
+  const checkpointChildren = checkpointCol?.props?.children as
+    | import("@puckeditor/core").ComponentData[]
+    | undefined;
+  assert(
+    Array.isArray(checkpointChildren) &&
+      checkpointChildren.length === 2 &&
+      checkpointChildren[0]?.type === "Approval" &&
+      checkpointChildren[1]?.type === "UndoRedo",
+    "classic checkpoint column has approval then undoRedo",
+  );
+  assert(
+    bottom.some((n) => n.type === "Composer"),
+    "classic composer is a direct bottom child (not wrapped in a column)",
+  );
+  assert(
+    !bottom.some(
+      (n) =>
+        n.type === "LayoutColumn" &&
+        Array.isArray(n.props?.children) &&
+        (n.props.children as import("@puckeditor/core").ComponentData[]).some(
+          (c) => c.type === "Composer",
+        ),
+    ),
+    "classic composer is not inside a LayoutColumn",
+  );
+}
 assert(
   findPanelZone(LAYOUT_PRESETS.tabsBottom.puckData, "tabBar") === "bottom",
   "tabsBottom tabBar → bottom",

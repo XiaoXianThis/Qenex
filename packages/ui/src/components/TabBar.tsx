@@ -214,7 +214,7 @@ export function TabBar({ position = "top" }: TabBarProps) {
   };
 
   return (
-    <div className="flex min-w-0 items-center overflow-hidden bg-muted text-foreground py-1.5">
+    <div className="flex min-w-0 items-center bg-muted py-1.5 text-foreground dark:bg-transparent">
       {!editMode ? (
         <div className="flex shrink-0 items-center pl-2">
           <button

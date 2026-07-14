@@ -2,12 +2,16 @@ import { defaultAllPanelMeta } from "./panel-registry.ts";
 import {
   buildPuckData,
   columnOfPanels,
+  createLayoutColumn,
   createLayoutRow,
   panelToComponentData,
   resetPuckIdCounter,
   rowOfPanelColumns,
 } from "./puck-data.ts";
 import type { DraggablePanelId, LayoutPersistedState, LayoutPresetId } from "./types.ts";
+
+/** Stable id for classic checkpoint column — targeted by default custom CSS. */
+export const CLASSIC_CHECKPOINT_COLUMN_ID = "LayoutColumn-checkpoint";
 
 function buildState(
   preset: Exclude<LayoutPresetId, "custom">,
@@ -24,16 +28,18 @@ function buildState(
 
 function classicPuckData() {
   resetPuckIdCounter();
+  const checkpointColumn = createLayoutColumn(
+    [
+      panelToComponentData("approval"),
+      panelToComponentData("undoRedo"),
+    ],
+    CLASSIC_CHECKPOINT_COLUMN_ID,
+  );
   return buildPuckData({
     top: [columnOfPanels(["tabBar"])],
     bottom: [
-      columnOfPanels([
-        "followupSuggestions",
-        "scrollToBottom",
-        "approval",
-        "composer",
-        "welcomeSuggestions",
-      ]),
+      checkpointColumn,
+      panelToComponentData("composer"),
     ],
   });
 }
@@ -41,7 +47,7 @@ function classicPuckData() {
 function composerTopPuckData() {
   resetPuckIdCounter();
   return buildPuckData({
-    top: [columnOfPanels(["tabBar", "composer"])],
+    top: [columnOfPanels(["tabBar", "undoRedo", "composer"])],
     bottom: [
       columnOfPanels([
         "followupSuggestions",
@@ -63,6 +69,7 @@ function tabsBottomPuckData() {
         "followupSuggestions",
         "scrollToBottom",
         "approval",
+        "undoRedo",
         "composer",
         "welcomeSuggestions",
       ]),
@@ -74,7 +81,7 @@ function minimalPuckData() {
   resetPuckIdCounter();
   return buildPuckData({
     top: [columnOfPanels(["tabBar"])],
-    bottom: [columnOfPanels(["approval", "composer"])],
+    bottom: [columnOfPanels(["approval", "undoRedo", "composer"])],
   });
 }
 
@@ -94,14 +101,20 @@ function workspacePuckData() {
   });
 }
 
-const APPROVAL_HIDDEN = {
+const COMPOSER_BAND = {
   approval: { visible: false, widthScope: "viewport" as const },
+  undoRedo: { visible: true, widthScope: "content" as const },
 };
 
 export const CLASSIC_LAYOUT: LayoutPersistedState = buildState(
   "classic",
   classicPuckData(),
-  APPROVAL_HIDDEN,
+  {
+    ...COMPOSER_BAND,
+    followupSuggestions: { visible: false, widthScope: "content" },
+    scrollToBottom: { visible: false, widthScope: "content" },
+    welcomeSuggestions: { visible: false, widthScope: "content" },
+  },
 );
 
 export const LAYOUT_PRESETS: Record<
@@ -112,12 +125,12 @@ export const LAYOUT_PRESETS: Record<
   composerTop: buildState(
     "composerTop",
     composerTopPuckData(),
-    APPROVAL_HIDDEN,
+    COMPOSER_BAND,
   ),
   tabsBottom: buildState(
     "tabsBottom",
     tabsBottomPuckData(),
-    APPROVAL_HIDDEN,
+    COMPOSER_BAND,
   ),
   minimal: buildState(
     "minimal",
@@ -128,7 +141,7 @@ export const LAYOUT_PRESETS: Record<
       welcomeSuggestions: { visible: false, widthScope: "content" },
       sessionConfigBar: { visible: false, widthScope: "content" },
       tokenStats: { visible: false, widthScope: "viewport" },
-      undoRedo: { visible: false, widthScope: "viewport" },
+      undoRedo: { visible: true, widthScope: "content" },
       checklist: { visible: false, widthScope: "viewport" },
       approval: { visible: false, widthScope: "viewport" },
     },
@@ -140,6 +153,7 @@ export const LAYOUT_PRESETS: Record<
       approval: { visible: false, widthScope: "viewport" },
       scrollToBottom: { visible: false, widthScope: "content" },
       welcomeSuggestions: { visible: false, widthScope: "content" },
+      undoRedo: { visible: true, widthScope: "viewport" },
     },
   ),
 };

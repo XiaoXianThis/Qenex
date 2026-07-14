@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-07-15 - v0.2.1 Mermaid, Boot Theme, Composer Layout
+
+### Added
+
+#### 📊 Mermaid diagrams
+- Chat markdown renders `mermaid` fenced blocks via `beautiful-mermaid` (SVG + zoom / fullscreen)
+
+#### 🎨 Boot theme (no flash)
+- Persist `qenex:boot-theme` and apply it in host `index.html` before JS hydrate
+- Shared `document-theme.ts` drives document-level theme injection (replaces ad-hoc injector paths)
+
+#### 🧩 Classic composer band
+- Classic preset: checkpoint column (`Approval` + `UndoRedo`) above a direct `Composer` (not wrapped in a column)
+- Layout presets expose `UndoRedo` by default; migration updates older classic layouts
+
+### Changed
+
+- **ApprovalPanel**: compact collapsible chrome; shorter option labels「允许」/「总是」
+- **ChangesPanel** / thread / Puck layout: composer-overlay alignment and panel packing polish
+- ThemeStyleInjector delegates to document-theme helpers
+
+### Fixed
+
+- Layout acceptance covers classic checkpoint column + composer placement invariants
+
+### Breaking Changes
+None.
+
 ## 2026-07-14 - v0.2.0 Host Theme, Chat UX, Preferences
 
 ### Added

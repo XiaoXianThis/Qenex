@@ -97,17 +97,26 @@ describe("layoutNodeHasVisiblePanel", () => {
     ).toBe(false);
   });
 
-  test("inert panels (tokenStats/undoRedo/checklist) never count", () => {
+  test("inert panels (tokenStats/checklist) never count", () => {
     const tree = row("LayoutRow-1", [
       column("LayoutColumn-1", [panel("TokenStats", "TokenStats-1")]),
-      column("LayoutColumn-2", [panel("UndoRedo", "UndoRedo-1")]),
+      column("LayoutColumn-2", [panel("Checklist", "Checklist-1")]),
     ]);
     expect(
       layoutNodeHasVisiblePanel(
         tree,
-        panels({ tokenStats: true, undoRedo: true }),
+        panels({ tokenStats: true, checklist: true }),
       ),
     ).toBe(false);
+  });
+
+  test("undoRedo counts when visible", () => {
+    expect(
+      layoutNodeHasVisiblePanel(
+        panel("UndoRedo", "UndoRedo-1"),
+        panels({ undoRedo: true }),
+      ),
+    ).toBe(true);
   });
 
   test("nodes helper", () => {

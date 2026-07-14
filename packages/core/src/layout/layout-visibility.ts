@@ -13,7 +13,6 @@ function isContainerType(type: string): boolean {
  */
 const LAYOUT_INERT_PANEL_IDS = new Set<PanelId>([
   "tokenStats",
-  "undoRedo",
   "checklist",
 ]);
 

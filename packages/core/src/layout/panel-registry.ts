@@ -88,11 +88,11 @@ const defs: PanelDefinition[] = [
   {
     id: "undoRedo",
     kind: "widget",
-    defaultWidthScope: "viewport",
+    defaultWidthScope: "content",
     label: "检查点",
     hideable: true,
     draggable: true,
-    resizableWidthScope: ["viewport", "content"],
+    resizableWidthScope: ["content", "viewport"],
   },
   {
     id: "checklist",

@@ -7,6 +7,7 @@ import type { LayoutMetadata, PanelRenderContext } from "@/layout/puck/types";
 import {
   cn,
   containerAtMaxChildDepth,
+  CLASSIC_CHECKPOINT_COLUMN_ID,
   getPanelDefinition,
   layoutContainerShouldRender,
   panelIdFromPuckType,
@@ -36,9 +37,9 @@ export const LAYOUT_SLOT_ALLOW = [
 
 /** Base layout on Puck slot / Children (no edit-only spacing). */
 const LAYOUT_ROW_SLOT_BASE =
-  "flex w-full [&>*]:min-w-0 [&>*]:flex-1";
+  "flex w-full gap-2 [&>*]:min-w-0 [&>*]:flex-1";
 
-const LAYOUT_COLUMN_SLOT_BASE = "flex w-full flex-col";
+const LAYOUT_COLUMN_SLOT_BASE = "flex w-full flex-col gap-2";
 
 const LAYOUT_ROOT_SLOT_BASE = "flex w-full flex-col gap-2";
 
@@ -160,7 +161,10 @@ const LayoutColumnView: FC<LayoutContainerRenderProps> = ({
       componentType="LayoutColumn"
       instanceId={id}
       editing={editing}
-      className={layoutContainerSlotClass("column", editing)}
+      className={cn(
+        layoutContainerSlotClass("column", editing),
+        id === CLASSIC_CHECKPOINT_COLUMN_ID && "px-[0.75rem]",
+      )}
     >
       {Children}
     </LayoutContainerSlot>

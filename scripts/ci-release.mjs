@@ -39,7 +39,7 @@ function resolveVersion() {
   if (ref.startsWith("v")) {
     return ref.slice(1);
   }
-  return "0.2.0";
+  return "0.2.1";
 }
 
 function run(command, options = {}) {
@@ -195,7 +195,7 @@ function main() {
 
   console.log("\nRelease artifacts:");
   console.log(artifacts);
-  console.log(`\nDone â†’ ${distArtifactsDir}`);
+  console.log(`\nDone â†?${distArtifactsDir}`);
 }
 
 main();

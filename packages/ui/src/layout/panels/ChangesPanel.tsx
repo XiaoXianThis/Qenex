@@ -18,7 +18,16 @@ import {
   FileDiff,
   RotateCw,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FC } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FC,
+} from "react";
+
+/** Survive remounts so overlay re-renders do not flash an empty panel. */
+const statusCache = new Map<string, TaskGitResponse>();
 
 function fileStatusLabel(status: string): string {
   switch (status.charAt(0).toUpperCase()) {
@@ -73,37 +82,55 @@ export const ChangesPanel: FC = () => {
   const taskId = activeTab?.taskId;
   const refreshNonce = useChangesRefreshNonce(taskId);
 
-  const [data, setData] = useState<TaskGitResponse | null>(null);
+  const [data, setData] = useState<TaskGitResponse | null>(() =>
+    taskId ? (statusCache.get(taskId) ?? null) : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!taskId) {
       setData(null);
       return;
     }
+    const seq = ++fetchSeqRef.current;
     setError(null);
     try {
       const next = await getTaskGit(taskId);
+      if (seq !== fetchSeqRef.current) return;
+      statusCache.set(taskId, next);
       setData(next);
     } catch (e) {
+      if (seq !== fetchSeqRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
-      setData(null);
+      // Keep previous / cached data to avoid hide/show flicker.
     }
+  }, [taskId]);
+
+  // Reset before refresh (declaration order): switching tabs must not leave a
+  // fetch mid-flight that gets invalidated with nothing scheduled after.
+  useEffect(() => {
+    fetchSeqRef.current += 1;
+    setData(taskId ? (statusCache.get(taskId) ?? null) : null);
+    setError(null);
+    setSelectedFile(null);
+    setDiff(null);
+    setExpanded(false);
   }, [taskId]);
 
   useEffect(() => {
     void refresh();
   }, [refresh, refreshNonce]);
 
-  useEffect(() => {
-    setSelectedFile(null);
-    setDiff(null);
-    setExpanded(false);
-  }, [taskId]);
+  const view = data ?? (taskId ? statusCache.get(taskId) : undefined) ?? null;
+  const files = view?.files ?? [];
+  const aheadOfBase = view?.aheadOfBase ?? 0;
+  const dirty = Boolean(view?.dirty);
+  const hasChanges = files.length > 0 || dirty || aheadOfBase > 0;
 
   const loadDiff = async (file: string) => {
     if (!taskId) return;
@@ -135,16 +162,14 @@ export const ChangesPanel: FC = () => {
     }
   };
 
-  if (!taskId || !data?.binding.enabled) {
+  // Always show while binding is enabled — collapsing on empty status makes the
+  // composer-overlay footer height churn.
+  if (!taskId || !view?.binding.enabled) {
     return null;
   }
 
-  const { binding, files, aheadOfBase, dirty } = data;
+  const { binding } = view;
   const fileCount = files.length;
-  const hasChanges = fileCount > 0 || dirty || aheadOfBase > 0;
-  if (!hasChanges && !binding.preRewindSha) {
-    return null;
-  }
 
   const canUnrewind = Boolean(binding.preRewindSha);
   const canUndo = hasChanges;
@@ -160,7 +185,7 @@ export const ChangesPanel: FC = () => {
   const keepConfirm = "保留这些改动到项目仓库？";
 
   return (
-    <div className="border-border/60 bg-muted/10 flex flex-col overflow-hidden rounded-(--composer-radius) border text-sm">
+    <div className="border-border/60 bg-muted/10 [[data-composer-overlay]_&]:bg-background/55 [[data-composer-overlay]_&]:supports-backdrop-filter:bg-background/40 flex flex-col overflow-hidden rounded-(--composer-radius) border text-sm [[data-composer-overlay]_&]:backdrop-blur-xl">
       <div className="flex items-center gap-2 px-2 py-1.5">
         <button
           type="button"
@@ -174,7 +199,7 @@ export const ChangesPanel: FC = () => {
             <ChevronRight className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
           )}
           <FileDiff className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 truncate font-medium">
+          <span className="min-w-0 truncate text-xs font-medium">
             {fileCount === 0
               ? "检查点 · 无文件改动"
               : `检查点 · ${fileCount} 个文件`}
@@ -238,7 +263,9 @@ export const ChangesPanel: FC = () => {
       </div>
 
       {error ? (
-        <div className="text-destructive px-3 pb-2 text-xs whitespace-pre-wrap">{error}</div>
+        <div className="text-destructive px-3 pb-2 text-xs whitespace-pre-wrap">
+          {error}
+        </div>
       ) : null}
 
       {expanded ? (

@@ -55,6 +55,72 @@ type PuckDispatch = (action: {
 
 const usePuck = createUsePuck();
 
+function paintIframeDocumentTheme(doc: Document) {
+  const rootStyles = getComputedStyle(document.documentElement);
+  const background = rootStyles.getPropertyValue("--background").trim();
+  const foreground = rootStyles.getPropertyValue("--foreground").trim();
+  const colorScheme = document.documentElement.style.colorScheme ||
+    rootStyles.colorScheme;
+
+  if (background) {
+    doc.documentElement.style.backgroundColor = background;
+    doc.body.style.backgroundColor = background;
+  }
+  if (foreground) {
+    doc.documentElement.style.color = foreground;
+    doc.body.style.color = foreground;
+  }
+  if (colorScheme === "light" || colorScheme === "dark") {
+    doc.documentElement.style.colorScheme = colorScheme;
+    doc.documentElement.dataset.colorScheme = colorScheme;
+    doc.documentElement.classList.toggle("dark", colorScheme === "dark");
+  }
+}
+
+/** iframe srcDoc 默认白底；样式镜像完成前先涂上宿主主题色，避免进编辑闪白 */
+function PuckIframeThemeBridge() {
+  useEffect(() => {
+    let cancelled = false;
+    let iframe: HTMLIFrameElement | null = null;
+
+    const paint = () => {
+      if (cancelled) return;
+      iframe = document.querySelector("iframe#preview-frame");
+      const doc = iframe?.contentDocument;
+      if (!doc?.body) return;
+      paintIframeDocumentTheme(doc);
+    };
+
+    const onLoad = () => paint();
+
+    paint();
+    const poll = window.setInterval(paint, 32);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 2500);
+
+    const attach = () => {
+      iframe = document.querySelector("iframe#preview-frame");
+      iframe?.addEventListener("load", onLoad);
+    };
+    attach();
+    const attachPoll = window.setInterval(attach, 50);
+    const stopAttach = window.setTimeout(
+      () => window.clearInterval(attachPoll),
+      2500,
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
+      window.clearInterval(attachPoll);
+      window.clearTimeout(stopAttach);
+      iframe?.removeEventListener("load", onLoad);
+    };
+  }, []);
+
+  return null;
+}
+
 function PuckDispatchBridge({
   dispatchRef,
 }: {
@@ -71,7 +137,7 @@ const ComponentDrawer: FC = () => {
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r-[0.5px] border-border",
+        "bg-background flex h-full shrink-0 flex-col border-r-[0.5px] border-border",
         LAYOUT_EDIT_SIDEBAR_CLASS,
         LAYOUT_EDIT_PANEL_WIDTH_CLASS,
       )}
@@ -232,7 +298,10 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
         <Render config={puckConfig} data={renderPuckData} metadata={metadata} />
       </div>
       {editMode ? (
-        <div className="h-dvh min-h-0 overflow-hidden" data-layout-editing="">
+        <div
+          className="bg-background h-dvh min-h-0 overflow-hidden"
+          data-layout-editing=""
+        >
           <Puck
             key={`puck-edit-${preset}`}
             config={puckConfig}
@@ -286,9 +355,10 @@ export const PuckLayoutRenderer: FC<PuckLayoutRendererProps> = ({ metadata }) =>
             }}
           >
             <PuckDispatchBridge dispatchRef={puckDispatchRef} />
-            <div className="flex h-dvh min-h-0 min-w-0 overflow-hidden">
+            <PuckIframeThemeBridge />
+            <div className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-background">
               <ComponentDrawer />
-              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+              <div className="bg-background min-h-0 min-w-0 flex-1 overflow-hidden">
                 <Puck.Preview />
               </div>
             </div>

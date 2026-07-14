@@ -903,7 +903,7 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                   <span>无需审批，自动允许</span>
                 </label>
                 <p className="text-muted-foreground text-xs">
-                  开启后所有 Agent 的工具权限请求将自动放行（优先选「不再询问」选项），不再弹出审批面板。
+                  开启后所有 Agent 的工具权限请求将自动放行（优先选「总是」选项），不再弹出审批面板。
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">
@@ -916,7 +916,7 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                       uiPrefsActions.setComposerOverlay(e.target.checked)
                     }
                   />
-                  <span>输入框毛玻璃叠层</span>
+                  <span>毛玻璃叠层</span>
                 </label>
                 <p className="text-muted-foreground text-xs">
                   开启后消息可滚到输入框后方，底部栏半透明并启用 backdrop blur（输入框在顶部布局时无效）。

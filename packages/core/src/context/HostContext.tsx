@@ -42,9 +42,12 @@ import {
   hydrateUiPrefsStore,
   startUiPrefsPersist,
 } from "../store/ui-prefs-store.ts";
+import { applyDocumentThemeStyles } from "../style/document-theme.ts";
 import {
   hydrateStyleStore,
   startStylePersist,
+  styleActions,
+  styleStore,
 } from "../store/style-store.ts";
 import {
   hydrateTabsStore,
@@ -52,6 +55,15 @@ import {
   tabsActions,
   tabsStore,
 } from "../store/tabs-store.ts";
+
+function applyPersistedDocumentTheme() {
+  applyDocumentThemeStyles({
+    themeCss: styleStore.themeCss,
+    customCss: styleStore.customCss,
+    themeSource: styleStore.themeSource,
+    hostThemeKind: styleStore.hostThemeKind,
+  });
+}
 
 const HostContext = createContext<QenexHost | null>(null);
 
@@ -84,6 +96,21 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
 
     void (async () => {
       try {
+        // 先 hydrate 主题并立刻写入 DOM，让 Loading 页背景跟随已保存主题
+        await hydrateStyleStore();
+        applyPersistedDocumentTheme();
+        if (styleStore.themeSource === "followHost") {
+          try {
+            const snapshot = await host.getHostTheme?.();
+            if (snapshot) {
+              styleActions.applyHostTheme(snapshot);
+              applyPersistedDocumentTheme();
+            }
+          } catch {
+            // 宿主主题稍后由 HostThemeSync 补齐
+          }
+        }
+
         // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
         await hydrateAgentsStore();
         // Best-effort: merge PATH/vendor-ready agents into presets.
@@ -96,7 +123,6 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
         await Promise.all([
           hydrateTabsStore(),
           hydrateLayoutStore(),
-          hydrateStyleStore(),
           hydrateModelThoughtPrefsStore(),
           hydrateModelConfigCacheStore(),
           hydrateApprovalPrefsStore(),

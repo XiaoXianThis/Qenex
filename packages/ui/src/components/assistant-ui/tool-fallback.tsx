@@ -501,7 +501,7 @@ function ToolFallbackApproval({
         onClick={() => respond(true)}
         disabled={submitted}
       >
-        允许一次
+        允许
       </Button>
       <Button
         size="sm"

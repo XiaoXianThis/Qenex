@@ -158,6 +158,26 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
     return tabSessions.find((s) => s.tabId === activeTabId);
   }, [activeTabId, tabSessions]);
 
+  const threadBody =
+    activeSession || isEditing ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <ActiveThreadLayout
+          key={activeSession?.tabId ?? "edit-preview"}
+          top={Top}
+          bottom={Bottom}
+          puckDataBottom={bottomNodes}
+          editMode={editMode}
+          isEditing={isEditing}
+          topZoneClass={topZoneClass}
+          renderTop={false}
+        />
+      </div>
+    ) : (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {idleCenter}
+      </div>
+    );
+
   const page = (
     <div
       className="flex h-dvh flex-col overflow-hidden"
@@ -165,24 +185,7 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
       data-layout-editing={isEditing ? "" : undefined}
     >
       {stableTop}
-      {activeSession || isEditing ? (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ActiveThreadLayout
-            key={activeSession?.tabId ?? "edit-preview"}
-            top={Top}
-            bottom={Bottom}
-            puckDataBottom={bottomNodes}
-            editMode={editMode}
-            isEditing={isEditing}
-            topZoneClass={topZoneClass}
-            renderTop={false}
-          />
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {idleCenter}
-        </div>
-      )}
+      {threadBody}
     </div>
   );
 

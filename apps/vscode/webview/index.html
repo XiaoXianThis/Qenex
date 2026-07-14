@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Qenex</title>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem("qenex:boot-theme");
+          if (!raw) return;
+          var t = JSON.parse(raw);
+          if (!t || !t.background) return;
+          var s = document.documentElement.style;
+          s.backgroundColor = t.background;
+          if (t.foreground) s.color = t.foreground;
+          if (t.colorScheme) s.colorScheme = t.colorScheme;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

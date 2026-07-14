@@ -28,7 +28,6 @@ import {
   useTabsStore,
 } from "@qenex/core";
 import { ComposerAutocomplete } from "@/components/assistant-ui/composer-autocomplete";
-import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -276,49 +275,46 @@ export const ThreadComposer: FC = () => {
   const layoutEditing = useLayoutStore((s) => s.editMode);
 
   return (
-    <div className="flex w-full flex-col gap-2">
-      <ChangesPanel />
-      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-        <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
-          <div
-            data-slot="aui_composer-shell"
-            className="border-foreground/25 data-[dragging=true]:border-ring focus-within:border-foreground/25 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border-[0.25px] bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [[data-composer-overlay]_&]:backdrop-blur-xl"
-          >
-            <div className="flex min-h-8 flex-col gap-1">
-              <ComposerAttachments />
-              <ComposerAutocomplete>
-                <ComposerPrimitive.Input
-                  placeholder="发消息… 输入 @ 引用文件"
-                  className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
-                  rows={1}
-                  autoFocus={!layoutEditing}
-                  enterKeyHint="send"
-                  aria-label="Message input"
-                />
-              </ComposerAutocomplete>
-            </div>
-            <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
-              {showSessionConfig && !layoutEditing ? (
-                <SessionConfigBar
-                  className="px-0"
-                  trailing={
-                    <>
-                      <ComposerAddAttachment />
-                      <ComposerSendActions />
-                    </>
-                  }
-                />
-              ) : (
-                <div className="ms-auto flex items-center gap-2">
-                  <ComposerAddAttachment />
-                  <ComposerSendActions />
-                </div>
-              )}
-            </div>
+    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+      <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
+        <div
+          data-slot="aui_composer-shell"
+          className="border-foreground/25 data-[dragging=true]:border-ring focus-within:border-foreground/25 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border-[0.25px] bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [[data-composer-overlay]_&]:bg-background/55 [[data-composer-overlay]_&]:backdrop-blur-xl [[data-composer-overlay]_&]:supports-backdrop-filter:bg-background/40"
+        >
+          <div className="flex min-h-8 flex-col gap-1">
+            <ComposerAttachments />
+            <ComposerAutocomplete>
+              <ComposerPrimitive.Input
+                placeholder="发消息… 输入 @ 引用文件"
+                className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
+                rows={1}
+                autoFocus={!layoutEditing}
+                enterKeyHint="send"
+                aria-label="Message input"
+              />
+            </ComposerAutocomplete>
           </div>
-        </ComposerPrimitive.AttachmentDropzone>
-      </ComposerPrimitive.Root>
-    </div>
+          <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
+            {showSessionConfig && !layoutEditing ? (
+              <SessionConfigBar
+                className="px-0"
+                trailing={
+                  <>
+                    <ComposerAddAttachment />
+                    <ComposerSendActions />
+                  </>
+                }
+              />
+            ) : (
+              <div className="ms-auto flex items-center gap-2">
+                <ComposerAddAttachment />
+                <ComposerSendActions />
+              </div>
+            )}
+          </div>
+        </div>
+      </ComposerPrimitive.AttachmentDropzone>
+    </ComposerPrimitive.Root>
   );
 };
 

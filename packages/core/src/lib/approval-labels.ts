@@ -9,10 +9,10 @@ export type ApprovalOptionLike = {
 };
 
 const KIND_SHORT_LABEL: Record<string, string> = {
-  allow_once: "允许一次",
-  "allow-once": "允许一次",
-  allow_always: "不再询问",
-  "allow-always": "不再询问",
+  allow_once: "允许",
+  "allow-once": "允许",
+  allow_always: "总是",
+  "allow-always": "总是",
   reject_once: "拒绝",
   "reject-once": "拒绝",
   reject_always: "始终拒绝",
@@ -52,22 +52,22 @@ export function displayApprovalOptionLabel(option: ApprovalOptionLike): string {
 
   // Kind is the ACP source of truth — agents vary wildly on English `name`
   // ("Allow always" vs "Always allow" vs "Yes, and don't ask again").
-  // Prefer kind so allow_always never shows as「允许一次」。
+  // Prefer kind so allow_always never shows as「允许」。
   if (kindShort) {
     return kindShort;
   }
 
   if (looksLikeEmbeddedCommand(full)) {
-    if (/don'?t ask|always|permanently/i.test(full)) return "不再询问";
+    if (/don'?t ask|always|permanently/i.test(full)) return "总是";
     if (/^(no|reject|deny)\b/i.test(full)) return "拒绝";
-    return "允许一次";
+    return "允许";
   }
 
   if (/^yes\b/i.test(full) && /don'?t ask|always|permanently/i.test(full)) {
-    return "不再询问";
+    return "总是";
   }
   if (/^yes\b/i.test(full) && full.length > 16) {
-    return "允许一次";
+    return "允许";
   }
   if (/^(no|reject|deny)\b/i.test(full) && full.length > 16) {
     return "拒绝";
@@ -77,10 +77,10 @@ export function displayApprovalOptionLabel(option: ApprovalOptionLike): string {
     /^allow\s+always\b/i.test(full) ||
     /don'?t ask again/i.test(full)
   ) {
-    return "不再询问";
+    return "总是";
   }
   if (/^allow\b/i.test(full) && full.length <= 12) {
-    return "允许一次";
+    return "允许";
   }
   if (/^deny\b|^reject\b/i.test(full) && full.length <= 12) {
     return "拒绝";

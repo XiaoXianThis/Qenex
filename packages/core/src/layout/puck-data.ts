@@ -40,11 +40,12 @@ export function panelsToComponentData(
 
 export function createLayoutColumn(
   children: ComponentData[],
+  id?: string,
 ): ComponentData {
   return {
     type: "LayoutColumn",
     props: {
-      id: nextId("LayoutColumn"),
+      id: id ?? nextId("LayoutColumn"),
       children,
     },
   };

@@ -34,6 +34,7 @@ export * from "./style/css-theme.ts";
 export * from "./style/panel-css.ts";
 export * from "./style/presets.ts";
 export * from "./style/host-theme.ts";
+export * from "./style/document-theme.ts";
 export * from "./layout/types.ts";
 export * from "./layout/presets.ts";
 export * from "./layout/panel-registry.ts";
