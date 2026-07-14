@@ -87,9 +87,11 @@ function ToolGroupTrigger({
   count,
   active = false,
   className,
-  label: _ignoredLabel,
   ...props
-}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
+}: Omit<
+  React.ComponentProps<typeof CollapsiblePartTrigger>,
+  "label" | "active"
+> & {
   count: number;
   active?: boolean;
 }) {

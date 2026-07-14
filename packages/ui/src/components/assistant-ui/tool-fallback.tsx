@@ -141,11 +141,11 @@ function ToolFallbackTrigger({
   toolName,
   status,
   className,
-  label: _ignoredLabel,
-  meta: _ignoredMeta,
-  active: _ignoredActive,
   ...props
-}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
+}: Omit<
+  React.ComponentProps<typeof CollapsiblePartTrigger>,
+  "label" | "meta" | "active"
+> & {
   toolName: string;
   status?: ToolCallMessagePartStatus;
 }) {
@@ -258,30 +258,6 @@ function ToolFallbackResult({
       {...props}
     >
       <ToolCallBody toolName="" result={result} />
-    </div>
-  );
-}
-
-function ToolFallbackProgress({
-  toolCallId: _toolCallId,
-  hasResult,
-  text,
-  className,
-  ...props
-}: React.ComponentProps<"div"> & {
-  toolCallId?: string;
-  hasResult: boolean;
-  text?: string | null;
-}) {
-  if (hasResult || !text) return null;
-
-  return (
-    <div
-      data-slot="tool-fallback-progress"
-      className={cn("aui-tool-fallback-progress", className)}
-      {...props}
-    >
-      <ToolCallBody toolName="" progressText={text} />
     </div>
   );
 }

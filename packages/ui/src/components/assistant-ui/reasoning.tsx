@@ -142,10 +142,11 @@ function ReasoningTrigger({
   active,
   duration,
   className,
-  label: _ignoredLabel,
-  meta: _ignoredMeta,
   ...props
-}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
+}: Omit<
+  React.ComponentProps<typeof CollapsiblePartTrigger>,
+  "label" | "meta" | "active"
+> & {
   active?: boolean;
   duration?: number;
 }) {

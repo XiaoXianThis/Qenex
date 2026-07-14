@@ -40,15 +40,6 @@ function tryParseJson(value: string): unknown {
   }
 }
 
-function toUserMessage(content: string): ThreadMessage {
-  const id = generateId();
-  return fromThreadMessageLike(
-    { id, role: "user", content },
-    id,
-    USER_STATUS,
-  );
-}
-
 function toAssistantMessage(
   content: readonly ThreadAssistantMessagePart[],
   status: MessageStatus = ASSISTANT_COMPLETE,

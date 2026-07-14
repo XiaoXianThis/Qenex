@@ -54,7 +54,7 @@ export function buildToolCallModel(
       : kind === "write"
         ? (pickContentPreview(args) ?? "")
             .split("\n")
-            .filter((_, i, arr) => !(arr.length === 1 && arr[0] === ""))
+            .filter((line, _, arr) => !(arr.length === 1 && line === ""))
             .map((text, i) => ({
               kind: "add" as const,
               text,
