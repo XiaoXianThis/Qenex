@@ -176,24 +176,24 @@ function modelTriggerLabel(name: string): string {
 type ModelOption = { id: string; name: string };
 type ThoughtOption = { id: string; name: string };
 
-type ThoughtSegmentBarProps = {
+type ThoughtLevelListProps = {
   levels: ThoughtOption[];
   value: string;
   disabled?: boolean;
   onChange: (value: string) => void;
 };
 
-function ThoughtSegmentBar({
+function ThoughtLevelList({
   levels,
   value,
   disabled,
   onChange,
-}: ThoughtSegmentBarProps) {
+}: ThoughtLevelListProps) {
   return (
     <div
       role="radiogroup"
       aria-label="思考强度"
-      className="flex w-full min-w-[16rem] overflow-hidden rounded-md border border-border bg-muted/40 p-0.5"
+      className="flex w-full min-w-[10rem] flex-col"
     >
       {levels.map((level) => {
         const selected = level.id === value;
@@ -205,15 +205,18 @@ function ThoughtSegmentBar({
             aria-checked={selected}
             disabled={disabled}
             className={cn(
-              "min-w-0 flex-1 cursor-pointer truncate rounded-[5px] px-1.5 py-1.5 text-center text-[11px] outline-none",
+              "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none",
               "disabled:cursor-not-allowed disabled:opacity-50",
               selected
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
             )}
             onClick={() => onChange(level.id)}
           >
-            {level.name}
+            <span className="flex size-3.5 shrink-0 items-center justify-center">
+              {selected ? <CheckIcon className="size-3.5" /> : null}
+            </span>
+            <span className="min-w-0 truncate">{level.name}</span>
           </button>
         );
       })}
@@ -497,7 +500,7 @@ function ModelPicker({
                   type="button"
                   role="option"
                   aria-selected={selected}
-                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 pr-2 pl-2 text-left text-sm outline-none"
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 pr-2 pl-2 text-left text-xs outline-none"
                   onClick={() => {
                     onSelectModel(model.id);
                     setThoughtForModelId(null);
@@ -510,14 +513,14 @@ function ModelPicker({
                   <span className="flex min-w-0 flex-1 items-center gap-1">
                     <span className="min-w-0 truncate">{model.name}</span>
                     {thoughtLabel ? (
-                      <span className="shrink-0 text-xs text-muted-foreground/60">
+                      <span className="shrink-0 text-[11px] text-muted-foreground/60">
                         {thoughtLabel}
                       </span>
                     ) : null}
                     {modelFastOptions &&
                     modelFastOptions.length > 0 &&
                     isFastOptionEnabled(rowFastId) ? (
-                      <span className="shrink-0 text-xs text-muted-foreground/60">
+                      <span className="shrink-0 text-[11px] text-muted-foreground/60">
                         Fast
                       </span>
                     ) : null}
@@ -578,7 +581,7 @@ function ModelPicker({
                             {probeError}
                           </div>
                         ) : modelLevels.length > 0 ? (
-                          <ThoughtSegmentBar
+                          <ThoughtLevelList
                             levels={modelLevels}
                             value={rowThoughtId}
                             disabled={disabled}

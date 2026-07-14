@@ -19,6 +19,7 @@
 
 - **ApprovalPanel**: compact collapsible chrome; shorter option labels「允许」/「总是」
 - **ChangesPanel** / thread / Puck layout: composer-overlay alignment and panel packing polish
+- **SessionConfigBar**: thought level picker is a vertical checklist (not a segment bar)
 - ThemeStyleInjector delegates to document-theme helpers
 
 ### Fixed
