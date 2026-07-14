@@ -48,6 +48,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/tasks/{task_id}/messages", get(get_messages))
         .route("/v2/tasks/{task_id}/mode", post(set_mode))
         .route("/v2/tasks/{task_id}/model", post(set_model))
+        .route(
+            "/v2/tasks/{task_id}/probe-model-config",
+            post(probe_model_config),
+        )
+        .route(
+            "/v2/tasks/{task_id}/probe-models-config",
+            post(probe_models_config),
+        )
         .route("/v2/tasks/{task_id}/config", get(get_session_config))
         .route("/v2/tasks/{task_id}/config-option", post(set_config_option))
         .route("/v2/tasks/{task_id}/command", post(execute_command))
@@ -325,6 +333,9 @@ fn task_response_from_active(active: &crate::sessions::ActiveSession) -> CreateT
         thought_levels: active.thought_levels.clone(),
         thought_level_config_id: active.thought_level_config_id.clone(),
         current_thought_level_id: active.current_thought_level_id.clone(),
+        fast_options: active.fast_options.clone(),
+        fast_config_id: active.fast_config_id.clone(),
+        current_fast_id: active.current_fast_id.clone(),
         current_model_id: active.current_model_id.clone(),
     }
 }
@@ -707,6 +718,52 @@ async fn set_model(
     Ok(Json(json!({ "success": true, "modelId": body.model_id })))
 }
 
+fn probe_to_json(probe: &crate::sessions::manager::ModelConfigProbe) -> Value {
+    json!({
+        "modelId": probe.model_id,
+        "thoughtLevels": probe.thought_levels,
+        "thoughtLevelConfigId": probe.thought_level_config_id,
+        "currentThoughtLevelId": probe.current_thought_level_id,
+        "fastOptions": probe.fast_options,
+        "fastConfigId": probe.fast_config_id,
+        "currentFastId": probe.current_fast_id,
+    })
+}
+
+async fn probe_model_config(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<SetModelBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let probe = state
+        .session_manager
+        .probe_model_config(&task_id, &body.model_id)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(probe_to_json(&probe)))
+}
+
+#[derive(Deserialize)]
+struct ProbeModelsBody {
+    #[serde(rename = "modelIds")]
+    model_ids: Vec<String>,
+}
+
+async fn probe_models_config(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<ProbeModelsBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let probes = state
+        .session_manager
+        .probe_models_config(&task_id, &body.model_ids)
+        .await
+        .map_err(manager_status)?;
+    Ok(Json(json!({
+        "probes": probes.iter().map(probe_to_json).collect::<Vec<_>>(),
+    })))
+}
+
 async fn get_session_config(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
@@ -723,6 +780,9 @@ async fn get_session_config(
         thought_levels: config.thought_levels,
         thought_level_config_id: config.thought_level_config_id,
         current_thought_level_id: config.current_thought_level_id,
+        fast_options: config.fast_options,
+        fast_config_id: config.fast_config_id,
+        current_fast_id: config.current_fast_id,
         current_model_id: config.current_model_id,
     }))
 }
@@ -1123,6 +1183,7 @@ fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {
             (StatusCode::CONFLICT, Json(body))
         }
         ManagerError::NoSession(_) => (StatusCode::CONFLICT, Json(json!({ "detail": err.to_string() }))),
+        ManagerError::Busy(_) => (StatusCode::CONFLICT, Json(json!({ "detail": err.to_string() }))),
         ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => {
             (StatusCode::NOT_FOUND, Json(json!({ "detail": err.to_string() })))
         }

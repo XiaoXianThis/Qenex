@@ -36,11 +36,10 @@ export const DEFAULT_THEME: ThemeTokens = {
   sizes: {
     threadMaxWidth: "800px",
     composerPadding: "8px",
-    pagePadding: "0.75rem",
+    pagePadding: "1.25rem",
   },
   composer: {
-    background:
-      "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
+    background: "rgb(255 255 255 / 0.3)",
   },
 };
 
@@ -59,7 +58,8 @@ export const DEFAULT_CUSTOM_CSS = "";
 
 export function createDefaultStyleState(): StylePersistedState {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    themeSource: "preset",
     themeCss: DEFAULT_STYLE_CSS,
     customCss: DEFAULT_CUSTOM_CSS,
   };

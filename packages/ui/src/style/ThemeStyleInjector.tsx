@@ -3,8 +3,12 @@
 import {
   ALLOWED_STYLE_VARS,
   DEFAULT_STYLE_CSS,
+  STYLE_THEME_PRESETS,
+  colorSchemeFromHostThemeKind,
   selectActiveCustomCss,
   selectActiveThemeCss,
+  selectHostThemeKind,
+  selectThemeSource,
   useStyleStore,
 } from "@qenex/core";
 import { useLayoutEffect, type FC } from "react";
@@ -32,6 +36,21 @@ function clearLegacyStyleArtifacts() {
   document.getElementById("agent-center-style-user")?.remove();
 }
 
+/** 同步 color-scheme，供 Shiki `light-dark()` 双主题与系统控件跟随 */
+function syncColorScheme(
+  themeSource: "preset" | "followHost",
+  themeCss: string,
+  hostThemeKind: ReturnType<typeof selectHostThemeKind>,
+) {
+  if (themeSource === "followHost" && hostThemeKind) {
+    document.documentElement.style.colorScheme =
+      colorSchemeFromHostThemeKind(hostThemeKind);
+    return;
+  }
+  const isDark = themeCss.trim() === STYLE_THEME_PRESETS.dark.css.trim();
+  document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+}
+
 /**
  * 整段 CSS 注入（后写覆盖先写）：
  * 1) 默认层
@@ -41,13 +60,16 @@ function clearLegacyStyleArtifacts() {
 export const ThemeStyleInjector: FC = () => {
   const themeCss = useStyleStore(selectActiveThemeCss);
   const customCss = useStyleStore(selectActiveCustomCss);
+  const themeSource = useStyleStore(selectThemeSource);
+  const hostThemeKind = useStyleStore(selectHostThemeKind);
 
   useLayoutEffect(() => {
     clearLegacyStyleArtifacts();
     ensureStyleElement(DEFAULTS_STYLE_ID).textContent = DEFAULT_STYLE_CSS;
     ensureStyleElement(THEME_STYLE_ID).textContent = themeCss;
     ensureStyleElement(CUSTOM_STYLE_ID).textContent = customCss;
-  }, [themeCss, customCss]);
+    syncColorScheme(themeSource, themeCss, hostThemeKind);
+  }, [themeCss, customCss, themeSource, hostThemeKind]);
 
   return null;
 };

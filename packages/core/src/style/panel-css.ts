@@ -5,12 +5,23 @@ import {
 import { panelIdFromPuckType } from "../layout/puck-data.ts";
 import type { PanelId } from "../layout/types.ts";
 
+/** 组件样式作用域：类型（所有同类）或实例（仅此一个） */
+export type StyleComponentScope = "type" | "instance";
+
 /** 可单独编辑 CSS 的组件目标 */
 export type StyleComponentTarget = {
   id: string;
   label: string;
   /** 写入自定义 CSS 时使用的主选择器 */
   selector: string;
+  scope: StyleComponentScope;
+};
+
+/** 打开组件样式编辑时的会话（可在类型 / 实例间切换） */
+export type StyleComponentEditSession = {
+  typeTarget: StyleComponentTarget;
+  instanceTarget: StyleComponentTarget | null;
+  activeScope: StyleComponentScope;
 };
 
 const LAYOUT_COMPONENT_LABELS: Record<string, string> = {
@@ -19,6 +30,8 @@ const LAYOUT_COMPONENT_LABELS: Record<string, string> = {
   "root.top": "顶部",
   "root.bottom": "底部",
 };
+
+const INSTANCE_MARKER_PREFIX = "instance:";
 
 function markerStart(id: string): string {
   return `/* === agent-center:component ${id} === */`;
@@ -40,16 +53,48 @@ export function styleComponentSelector(id: string): string {
   return `[data-layout-component="${id}"]`;
 }
 
+/** 实例 → `[data-layout-instance]` */
+export function styleInstanceSelector(instanceId: string): string {
+  return `[data-layout-instance="${instanceId}"]`;
+}
+
+/** 实例标记块 id（避免与类型 id / PANEL_REGISTRY 冲突） */
+export function instanceMarkerId(instanceId: string): string {
+  return `${INSTANCE_MARKER_PREFIX}${instanceId}`;
+}
+
 function targetForPanelId(panelId: PanelId): StyleComponentTarget {
   return {
     id: panelId,
     label: getPanelDefinition(panelId).label,
     selector: styleComponentSelector(panelId),
+    scope: "type",
   };
 }
 
-/** 由 Puck selectedItem.type（TabBar / LayoutRow / root.top…）解析目标 */
-export function resolveStyleComponentTarget(
+function targetForLayoutType(typeId: string): StyleComponentTarget {
+  return {
+    id: typeId,
+    label: LAYOUT_COMPONENT_LABELS[typeId] ?? typeId,
+    selector: styleComponentSelector(typeId),
+    scope: "type",
+  };
+}
+
+function targetForInstance(
+  typeLabel: string,
+  instanceId: string,
+): StyleComponentTarget {
+  return {
+    id: instanceMarkerId(instanceId),
+    label: `${typeLabel} · ${instanceId}`,
+    selector: styleInstanceSelector(instanceId),
+    scope: "instance",
+  };
+}
+
+/** 解析类型级目标（不含实例） */
+function resolveTypeTarget(
   selectedType: string | null | undefined,
 ): StyleComponentTarget | null {
   if (!selectedType) return null;
@@ -62,14 +107,47 @@ export function resolveStyleComponentTarget(
   if (fromPuck) return targetForPanelId(fromPuck);
 
   if (selectedType in LAYOUT_COMPONENT_LABELS) {
-    return {
-      id: selectedType,
-      label: LAYOUT_COMPONENT_LABELS[selectedType]!,
-      selector: styleComponentSelector(selectedType),
-    };
+    return targetForLayoutType(selectedType);
   }
 
   return null;
+}
+
+/**
+ * 由 Puck selectedItem.type + props.id 解析类型 / 实例双目标。
+ * 有 instanceId 时默认可用实例作用域；否则仅类型。
+ */
+export function resolveStyleComponentTarget(
+  selectedType: string | null | undefined,
+  instanceId?: string | null,
+): StyleComponentEditSession | null {
+  const typeTarget = resolveTypeTarget(selectedType);
+  if (!typeTarget) return null;
+
+  const trimmedId =
+    typeof instanceId === "string" && instanceId.trim()
+      ? instanceId.trim()
+      : null;
+
+  const instanceTarget = trimmedId
+    ? targetForInstance(typeTarget.label, trimmedId)
+    : null;
+
+  return {
+    typeTarget,
+    instanceTarget,
+    activeScope: instanceTarget ? "instance" : "type",
+  };
+}
+
+/** 取会话中当前激活的目标 */
+export function activeStyleComponentTarget(
+  session: StyleComponentEditSession,
+): StyleComponentTarget {
+  if (session.activeScope === "instance" && session.instanceTarget) {
+    return session.instanceTarget;
+  }
+  return session.typeTarget;
 }
 
 export function defaultComponentCss(selector: string): string {

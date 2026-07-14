@@ -156,6 +156,23 @@ pub async fn post_task_rewind(
         )
         .await
         .map_err(manager_status)?;
+
+    // Cold-start the replacement agent in the background so the HTTP response
+    // returns after git/history rewind (typically <100ms).
+    if result.agent_reset {
+        let mgr = state.session_manager.clone();
+        let tid = task_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mgr.warm_agent_after_rewind(&tid).await {
+                tracing::warn!(
+                    task_id = %tid,
+                    error = %e,
+                    "background agent warm after rewind failed"
+                );
+            }
+        });
+    }
+
     Ok(Json(RewindTaskResponse {
         run_id: result.run_id,
         target_sha: result.target_sha,

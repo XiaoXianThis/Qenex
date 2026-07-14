@@ -2,33 +2,29 @@
 
 import {
   memo,
-  useCallback,
-  useRef,
-  useState,
   type FC,
   type PropsWithChildren,
 } from "react";
-import { ChevronDownIcon, LoaderIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { useScrollLock } from "@assistant-ui/react";
+import { CollapsiblePartTrigger } from "@/components/assistant-ui/collapsible-part-trigger";
+import { useAutoCollapsibleOpen } from "@/components/assistant-ui/use-auto-collapsible-open";
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@qenex/core";
 
 const ANIMATION_DURATION = 200;
 
-const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
+const toolGroupVariants = cva("aui-tool-group-root group/tool-group mb-1 w-full", {
   variants: {
     variant: {
-      outline: "rounded-lg border py-3",
+      outline: "rounded-lg border py-2",
       ghost: "",
-      muted: "border-muted-foreground/30 bg-muted/30 rounded-lg border py-3",
+      muted: "border-muted-foreground/30 bg-muted/30 rounded-lg border py-2",
     },
   },
-  defaultVariants: { variant: "outline" },
+  defaultVariants: { variant: "ghost" },
 });
 
 export type ToolGroupRootProps = Omit<
@@ -39,7 +35,11 @@ export type ToolGroupRootProps = Omit<
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
     defaultOpen?: boolean;
-  };
+  /**
+   * 组内 tool 仍在跑时仅用于 Trigger shimmer；默认不自动展开（贴 Cursor）。
+   */
+  autoOpen?: boolean;
+};
 
 function ToolGroupRoot({
   className,
@@ -47,32 +47,23 @@ function ToolGroupRoot({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
+  autoOpen = false,
   children,
   ...props
 }: ToolGroupRootProps) {
-  const collapsibleRef = useRef<HTMLDivElement>(null);
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
-
-  const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      lockScroll();
-      if (!isControlled) {
-        setUncontrolledOpen(open);
-      }
-      controlledOnOpenChange?.(open);
-    },
-    [lockScroll, isControlled, controlledOnOpenChange],
-  );
+  const { collapsibleRef, isOpen, handleOpenChange } = useAutoCollapsibleOpen({
+    autoOpen,
+    open: controlledOpen,
+    onOpenChange: controlledOnOpenChange,
+    defaultOpen,
+    animationDurationMs: ANIMATION_DURATION,
+  });
 
   return (
     <Collapsible
       ref={collapsibleRef}
       data-slot="tool-group-root"
-      data-variant={variant ?? "outline"}
+      data-variant={variant ?? "ghost"}
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
@@ -96,61 +87,24 @@ function ToolGroupTrigger({
   count,
   active = false,
   className,
+  label: _ignoredLabel,
   ...props
-}: React.ComponentProps<typeof CollapsibleTrigger> & {
+}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
   count: number;
   active?: boolean;
 }) {
-  const label = `${count} tool ${count === 1 ? "call" : "calls"}`;
+  const label = active
+    ? `Running ${count} tool ${count === 1 ? "call" : "calls"}`
+    : `${count} tool ${count === 1 ? "call" : "calls"}`;
 
   return (
-    <CollapsibleTrigger
+    <CollapsiblePartTrigger
       data-slot="tool-group-trigger"
-      className={cn(
-        "aui-tool-group-trigger group/trigger flex origin-left items-center gap-2 text-sm transition-[color,scale] active:scale-[0.98]",
-        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground group-data-[variant=ghost]/tool-group-root:py-1.5",
-        "group-data-[variant=outline]/tool-group-root:w-full group-data-[variant=outline]/tool-group-root:px-4",
-        "group-data-[variant=muted]/tool-group-root:w-full group-data-[variant=muted]/tool-group-root:px-4",
-        className,
-      )}
+      className={cn("aui-tool-group-trigger", className)}
+      label={label}
+      active={active}
       {...props}
-    >
-      {active && (
-        <LoaderIcon
-          data-slot="tool-group-trigger-loader"
-          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin [animation-duration:0.6s]"
-        />
-      )}
-      <span
-        data-slot="tool-group-trigger-label"
-        className={cn(
-          "aui-tool-group-trigger-label-wrapper relative inline-block text-start leading-none font-medium",
-          "group-data-[variant=ghost]/tool-group-root:font-normal",
-          "group-data-[variant=outline]/tool-group-root:grow",
-          "group-data-[variant=muted]/tool-group-root:grow",
-        )}
-      >
-        <span className="text-xs">{label}</span>
-        {active && (
-          <span
-            aria-hidden
-            data-slot="tool-group-trigger-shimmer"
-            className="aui-tool-group-trigger-shimmer shimmer pointer-events-none absolute inset-0 text-xs motion-reduce:animate-none"
-          >
-            {label}
-          </span>
-        )}
-      </span>
-      <ChevronDownIcon
-        data-slot="tool-group-trigger-chevron"
-        className={cn(
-          "aui-tool-group-trigger-chevron size-3 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "group-data-[state=closed]/trigger:-rotate-90",
-          "group-data-[state=open]/trigger:rotate-0",
-        )}
-      />
-    </CollapsibleTrigger>
+    />
   );
 }
 
@@ -177,16 +131,11 @@ function ToolGroupContent({
     >
       <div
         className={cn(
-          "mt-2 flex flex-col gap-2",
-          "group-data-[variant=ghost]/tool-group-root:mt-1 group-data-[variant=ghost]/tool-group-root:gap-1",
-          "group-data-[variant=outline]/tool-group-root:mt-3 group-data-[variant=outline]/tool-group-root:border-t group-data-[variant=outline]/tool-group-root:px-4 group-data-[variant=outline]/tool-group-root:pt-3",
-          "group-data-[variant=muted]/tool-group-root:mt-3 group-data-[variant=muted]/tool-group-root:border-t group-data-[variant=muted]/tool-group-root:px-4 group-data-[variant=muted]/tool-group-root:pt-3",
-          "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:blur-in-[2px] [&>*]:slide-in-from-top-1 [&>*]:duration-(--animation-duration) [&>*]:ease-[cubic-bezier(0.32,0.72,0,1)]",
+          "mt-1 flex flex-col gap-1",
+          "group-data-[variant=outline]/tool-group-root:mt-2 group-data-[variant=outline]/tool-group-root:border-t group-data-[variant=outline]/tool-group-root:px-3 group-data-[variant=outline]/tool-group-root:pt-2",
+          "group-data-[variant=muted]/tool-group-root:mt-2 group-data-[variant=muted]/tool-group-root:border-t group-data-[variant=muted]/tool-group-root:px-3 group-data-[variant=muted]/tool-group-root:pt-2",
+          "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:slide-in-from-top-1 [&>*]:duration-(--animation-duration) [&>*]:ease-[cubic-bezier(0.32,0.72,0,1)]",
           "[&>*]:motion-reduce:animate-none",
-          "[&>*:nth-child(2)]:[animation-delay:40ms]",
-          "[&>*:nth-child(3)]:[animation-delay:80ms]",
-          "[&>*:nth-child(4)]:[animation-delay:120ms]",
-          "[&>*:nth-child(n+5)]:[animation-delay:160ms]",
         )}
       >
         {children}

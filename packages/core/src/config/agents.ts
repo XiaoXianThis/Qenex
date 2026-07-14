@@ -110,6 +110,20 @@ export function resolveAgentBridgeId(agent: {
   return BUILTIN_TO_REGISTRY_ID[agent.id] ?? agent.id;
 }
 
+/**
+ * Cursor ACP only exposes per-model thought/fast via parameterized picker;
+ * other agents already return session-level configOptions over standard ACP.
+ */
+export function isCursorAgentId(agentId: string | null | undefined): boolean {
+  if (!agentId) return false;
+  const id = agentId.trim().toLowerCase();
+  return (
+    id === "cursor" ||
+    id === "cursor-agent" ||
+    BUILTIN_TO_REGISTRY_ID[id] === "cursor-agent"
+  );
+}
+
 /** Non-empty command means user/advanced override; empty lets Bridge detect. */
 export function agentCommandOverride(
   command: string[] | undefined,

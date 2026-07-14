@@ -1,4 +1,9 @@
-import type { QenexHost } from "@qenex/platform";
+import type {
+  HostThemeColors,
+  HostThemeKind,
+  HostThemeSnapshot,
+  QenexHost,
+} from "@qenex/platform";
 
 const storagePrefix = "qenex:";
 
@@ -26,6 +31,15 @@ type HostToWebviewMessage =
       type: "get-default-workspace-result";
       requestId: number;
       path: string | null;
+    }
+  | {
+      type: "host-theme-result";
+      requestId: number;
+      theme: HostThemeSnapshot;
+    }
+  | {
+      type: "theme-update";
+      theme: HostThemeSnapshot;
     };
 
 function resolveUrl(path: string, baseUrl: string): string {
@@ -47,24 +61,92 @@ const pendingRequests = new Map<
   { resolve: (value: unknown) => void; reject: (error: Error) => void }
 >();
 
-function getBridge(): QenexBridge {
-  const bridge = window.__qenexBridge;
-  if (!bridge) {
-    throw new Error("JetBrains bridge is not ready");
-  }
-  return bridge;
+let lastHostTheme: HostThemeSnapshot | null = null;
+const themeListeners = new Set<(theme: HostThemeSnapshot) => void>();
+
+function normalizeTheme(raw: HostThemeSnapshot): HostThemeSnapshot {
+  const kind: HostThemeKind =
+    raw.kind === "dark" ||
+    raw.kind === "highContrast" ||
+    raw.kind === "highContrastLight" ||
+    raw.kind === "light"
+      ? raw.kind
+      : "dark";
+  const colors: HostThemeColors =
+    raw.colors && typeof raw.colors === "object" ? raw.colors : {};
+  return { kind, colors };
 }
 
-function postMessageWithReply<T>(
+function emitHostTheme(raw: HostThemeSnapshot): HostThemeSnapshot {
+  const snapshot = normalizeTheme(raw);
+  lastHostTheme = snapshot;
+  for (const listener of themeListeners) {
+    listener(snapshot);
+  }
+  return snapshot;
+}
+
+function getBridge(): QenexBridge | undefined {
+  return window.__qenexBridge;
+}
+
+/** Kotlin injects `__qenexBridge` on CefLoadHandler.onLoadEnd — may race React hydrate. */
+function waitForBridge(timeoutMs = 15_000): Promise<QenexBridge> {
+  const existing = getBridge();
+  if (existing) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise<QenexBridge>((resolve, reject) => {
+    let settled = false;
+    const finish = (bridge: QenexBridge) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearInterval(pollId);
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("qenex-bridge-injected", onInjected);
+      resolve(bridge);
+    };
+
+    const onInjected = () => {
+      const bridge = getBridge();
+      if (bridge) {
+        finish(bridge);
+      }
+    };
+
+    window.addEventListener("qenex-bridge-injected", onInjected);
+    const pollId = window.setInterval(() => {
+      const bridge = getBridge();
+      if (bridge) {
+        finish(bridge);
+      }
+    }, 50);
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearInterval(pollId);
+      window.removeEventListener("qenex-bridge-injected", onInjected);
+      reject(new Error("JetBrains bridge is not ready"));
+    }, timeoutMs);
+  });
+}
+
+async function postMessageWithReply<T>(
   message: Record<string, unknown>,
 ): Promise<T> {
   const requestId = ++requestCounter;
+  const bridge = await waitForBridge();
   return new Promise<T>((resolve, reject) => {
     pendingRequests.set(requestId, {
       resolve: (value) => resolve(value as T),
       reject,
     });
-    getBridge().postMessage({ ...message, requestId });
+    bridge.postMessage({ ...message, requestId });
     window.setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         pendingRequests.delete(requestId);
@@ -115,6 +197,19 @@ function handleHostMessage(message: HostToWebviewMessage): void {
       pending.resolve(message.path);
       return;
     }
+    case "host-theme-result": {
+      const pending = pendingRequests.get(message.requestId);
+      if (!pending) {
+        return;
+      }
+      pendingRequests.delete(message.requestId);
+      pending.resolve(emitHostTheme(message.theme));
+      return;
+    }
+    case "theme-update": {
+      emitHostTheme(message.theme);
+      return;
+    }
     default:
       return;
   }
@@ -122,7 +217,10 @@ function handleHostMessage(message: HostToWebviewMessage): void {
 
 export function installJetbrainsMessageBridge(): void {
   window.addEventListener("message", (event) => {
-    const message = event.data as HostToWebviewMessage & { type?: string; message?: string };
+    const message = event.data as HostToWebviewMessage & {
+      type?: string;
+      message?: string;
+    };
     if (!message || typeof message !== "object" || !("type" in message)) {
       return;
     }
@@ -133,16 +231,13 @@ export function installJetbrainsMessageBridge(): void {
     handleHostMessage(message as HostToWebviewMessage);
   });
 
-  const notifyReady = () => {
-    if (window.__qenexBridge) {
-      window.__qenexBridge.postMessage({ type: "ready" });
-      return;
-    }
-    window.setTimeout(notifyReady, 50);
-  };
-
-  window.addEventListener("qenex-bridge-injected", notifyReady, { once: true });
-  notifyReady();
+  void waitForBridge()
+    .then((bridge) => {
+      bridge.postMessage({ type: "ready" });
+    })
+    .catch((error) => {
+      console.error("[qenex] failed to notify host ready:", error);
+    });
 }
 
 export function createJetbrainsHost(): QenexHost {
@@ -205,6 +300,26 @@ export function createJetbrainsHost(): QenexHost {
           key,
         });
       },
+    },
+
+    async getHostTheme() {
+      if (lastHostTheme) {
+        return lastHostTheme;
+      }
+      try {
+        return await postMessageWithReply<HostThemeSnapshot>({
+          type: "get-host-theme",
+        });
+      } catch {
+        return null;
+      }
+    },
+
+    onHostThemeChange(cb) {
+      themeListeners.add(cb);
+      return () => {
+        themeListeners.delete(cb);
+      };
     },
   };
 }

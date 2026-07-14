@@ -19,10 +19,13 @@ export type SessionConfig = {
   modes: SessionOption[];
   models: SessionOption[];
   thoughtLevels: SessionOption[];
+  fastOptions: SessionOption[];
   currentModeId: string | null;
   currentModelId: string | null;
   currentThoughtLevelId: string | null;
   thoughtLevelConfigId: string | null;
+  currentFastId: string | null;
+  fastConfigId: string | null;
   ready: boolean;
   loading: boolean;
   error: string | null;
@@ -34,10 +37,13 @@ export const EMPTY_SESSION_CONFIG: SessionConfig = {
   modes: [],
   models: [],
   thoughtLevels: [],
+  fastOptions: [],
   currentModeId: null,
   currentModelId: null,
   currentThoughtLevelId: null,
   thoughtLevelConfigId: null,
+  currentFastId: null,
+  fastConfigId: null,
   ready: false,
   loading: false,
   error: null,

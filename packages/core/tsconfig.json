@@ -1,5 +1,5 @@
 {
-  "extends": "@qenex/tsconfig/react.json",
+  "extends": "../tsconfig/react.json",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {

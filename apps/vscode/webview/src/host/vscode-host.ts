@@ -1,4 +1,5 @@
-import type { QenexHost } from "@qenex/platform";
+import type { HostThemeKind, HostThemeSnapshot, QenexHost } from "@qenex/platform";
+import { buildVscodeHostThemeSnapshot } from "./vscode-theme.ts";
 
 const storagePrefix = "qenex:";
 
@@ -23,6 +24,15 @@ type ExtensionToWebviewMessage =
       type: "pick-workspace-result";
       requestId: number;
       path: string | null;
+    }
+  | {
+      type: "host-theme-result";
+      requestId: number;
+      theme: { kind: HostThemeKind; colors?: HostThemeSnapshot["colors"] };
+    }
+  | {
+      type: "theme-update";
+      theme: { kind: HostThemeKind; colors?: HostThemeSnapshot["colors"] };
     };
 
 function resolveUrl(path: string, baseUrl: string): string {
@@ -43,6 +53,19 @@ const pendingRequests = new Map<
   number,
   { resolve: (value: unknown) => void; reject: (error: Error) => void }
 >();
+
+/** 扩展推送的 kind；颜色在 webview 内采样 */
+let lastHostThemeKind: HostThemeKind = "dark";
+const themeListeners = new Set<(theme: HostThemeSnapshot) => void>();
+
+function emitHostTheme(kind: HostThemeKind): HostThemeSnapshot {
+  lastHostThemeKind = kind;
+  const snapshot = buildVscodeHostThemeSnapshot(kind);
+  for (const listener of themeListeners) {
+    listener(snapshot);
+  }
+  return snapshot;
+}
 
 function postMessageWithReply<T>(
   api: VSCodeApi,
@@ -91,6 +114,20 @@ function handleExtensionMessage(message: ExtensionToWebviewMessage): void {
       }
       pendingRequests.delete(message.requestId);
       pending.resolve(message.path);
+      return;
+    }
+    case "host-theme-result": {
+      const pending = pendingRequests.get(message.requestId);
+      if (!pending) {
+        return;
+      }
+      pendingRequests.delete(message.requestId);
+      const snapshot = emitHostTheme(message.theme.kind);
+      pending.resolve(snapshot);
+      return;
+    }
+    case "theme-update": {
+      emitHostTheme(message.theme.kind);
       return;
     }
     default:
@@ -164,6 +201,24 @@ export function createVscodeHost(api: VSCodeApi): QenexHost {
           key,
         });
       },
+    },
+
+    async getHostTheme() {
+      try {
+        const theme = await postMessageWithReply<HostThemeSnapshot>(api, {
+          type: "get-host-theme",
+        });
+        return theme;
+      } catch {
+        return buildVscodeHostThemeSnapshot(lastHostThemeKind);
+      }
+    },
+
+    onHostThemeChange(cb) {
+      themeListeners.add(cb);
+      return () => {
+        themeListeners.delete(cb);
+      };
     },
   };
 }

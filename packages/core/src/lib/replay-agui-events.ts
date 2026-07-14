@@ -41,9 +41,10 @@ function tryParseJson(value: string): unknown {
 }
 
 function toUserMessage(content: string): ThreadMessage {
+  const id = generateId();
   return fromThreadMessageLike(
-    { id: generateId(), role: "user", content },
-    generateId(),
+    { id, role: "user", content },
+    id,
     USER_STATUS,
   );
 }
@@ -52,11 +53,41 @@ function toAssistantMessage(
   content: readonly ThreadAssistantMessagePart[],
   status: MessageStatus = ASSISTANT_COMPLETE,
 ): ThreadMessage {
+  const id = generateId();
   return fromThreadMessageLike(
-    { id: generateId(), role: "assistant", content, status },
-    generateId(),
-    ASSISTANT_COMPLETE,
+    { id, role: "assistant", content, status },
+    id,
+    status,
   );
+}
+
+/** Prefer persisted ids when unique; remint on collision (MessageRepository forbids duplicate ids). */
+function claimUniqueMessageId(
+  usedIds: Set<string>,
+  preferred?: string,
+): string {
+  if (preferred && preferred.length > 0 && !usedIds.has(preferred)) {
+    usedIds.add(preferred);
+    return preferred;
+  }
+  let id = generateId();
+  while (usedIds.has(id)) {
+    id = generateId();
+  }
+  usedIds.add(id);
+  return id;
+}
+
+function withUniqueMessageId(
+  message: ThreadMessage,
+  usedIds: Set<string>,
+): ThreadMessage {
+  if (!usedIds.has(message.id)) {
+    usedIds.add(message.id);
+    return message;
+  }
+  const id = claimUniqueMessageId(usedIds);
+  return { ...message, id };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -329,30 +360,32 @@ function extractUserMessage(
       typeof record.message.id === "string" && record.message.id.length > 0
         ? record.message.id
         : undefined;
+    const id = persistedId ?? generateId();
 
     return fromThreadMessageLike(
       {
-        id: persistedId ?? generateId(),
+        id,
         role: "user",
         // Image-only turns: empty content array (avoid blank text bubble)
         content: text.length > 0 ? text : [],
         ...(attachments.length > 0 ? { attachments } : {}),
         ...customMeta,
       },
-      generateId(),
+      id,
       USER_STATUS,
     );
   }
 
   if (typeof record.content === "string" && record.content.length > 0) {
+    const id = generateId();
     return fromThreadMessageLike(
       {
-        id: generateId(),
+        id,
         role: "user",
         content: record.content,
         ...customMeta,
       },
-      generateId(),
+      id,
       USER_STATUS,
     );
   }
@@ -769,21 +802,24 @@ export function replayAgUiEvents(
 ): ExportedMessageRepository {
   const messages: ExportedMessageRepository["messages"] = [];
   let parentId: string | null = null;
+  const usedIds = new Set<string>();
 
   for (const runEvents of splitIntoRuns(events)) {
     const runId = runEvents.find((e) => e.type === "RUN_STARTED")?.runId;
     const runIdStr = typeof runId === "string" ? runId : undefined;
 
     for (const event of runEvents) {
-      const userMessage = extractUserMessage(event, runIdStr);
-      if (!userMessage) continue;
+      const rawUser = extractUserMessage(event, runIdStr);
+      if (!rawUser) continue;
+      const userMessage = withUniqueMessageId(rawUser, usedIds);
 
       messages.push({ message: userMessage, parentId });
       parentId = userMessage.id;
     }
 
-    const assistantMessage = replayRunEvents(runEvents, options);
-    if (assistantMessage) {
+    const rawAssistant = replayRunEvents(runEvents, options);
+    if (rawAssistant) {
+      const assistantMessage = withUniqueMessageId(rawAssistant, usedIds);
       messages.push({ message: assistantMessage, parentId });
       parentId = assistantMessage.id;
     }

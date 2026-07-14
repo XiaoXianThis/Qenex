@@ -311,9 +311,10 @@ export function TabBar({ position = "top" }: TabBarProps) {
             {ensuring ? (
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
             ) : (
-              <span className="flex size-3.5 shrink-0 items-center justify-center rounded-[3px] bg-white/95 p-px">
+              <span className="flex size-3.5 shrink-0 items-center justify-center rounded-[3px]">
                 <AgentIcon
                   agentId={preferredAgentId}
+                  ink="contrast"
                   className="h-3 w-3"
                   aria-hidden
                 />
@@ -341,7 +342,7 @@ export function TabBar({ position = "top" }: TabBarProps) {
               className="w-auto min-w-[10rem] p-1"
               onOpenAutoFocus={(event) => event.preventDefault()}
             >
-              <div className="flex max-h-64 flex-col">
+              <div className="flex max-h-[60vh] flex-col">
                 <div className="flex shrink-0 items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm">
                   <span className="min-w-0 truncate">选项仅切换</span>
                   <button

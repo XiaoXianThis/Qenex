@@ -1,6 +1,7 @@
 package com.qenex
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.SystemInfo
@@ -88,10 +89,8 @@ class BridgeProcessManager {
 
     private fun doStart(pageOrigin: String?): String {
         val freePort = findFreePort()
-        val storageDir = Path.of(
-            System.getProperty("idea.system.path"),
-            "qenex",
-        )
+        // Prefer PathManager: idea.system.path may be unset on newer IDEs (e.g. WS 261).
+        val storageDir = Path.of(PathManager.getSystemPath(), "qenex")
         Files.createDirectories(storageDir)
 
         val runtimeConfig = storageDir.resolve("bridge.config.json")

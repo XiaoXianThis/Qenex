@@ -161,6 +161,7 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
   const page = (
     <div
       className="flex h-dvh flex-col overflow-hidden"
+      data-layout-page=""
       data-layout-editing={isEditing ? "" : undefined}
     >
       {stableTop}

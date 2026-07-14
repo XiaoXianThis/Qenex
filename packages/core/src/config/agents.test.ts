@@ -3,6 +3,7 @@ import {
   DEFAULT_AGENT_ID,
   DEFAULT_AGENT_PRESETS,
   DEFAULT_AGENTS_CONFIG,
+  isCursorAgentId,
   mergeAgentsConfig,
   migrateToPersistedDocument,
   parseOverlayJson,
@@ -279,5 +280,16 @@ describe("factory default", () => {
     expect(DEFAULT_AGENT_PRESETS).toHaveLength(1);
     expect(DEFAULT_AGENT_PRESETS[0]?.id).toBe("opencode");
     expect(DEFAULT_AGENTS_CONFIG.agents).toHaveLength(1);
+  });
+});
+
+describe("isCursorAgentId", () => {
+  test("matches cursor aliases only", () => {
+    expect(isCursorAgentId("cursor")).toBe(true);
+    expect(isCursorAgentId("cursor-agent")).toBe(true);
+    expect(isCursorAgentId("Cursor-Agent")).toBe(true);
+    expect(isCursorAgentId("opencode")).toBe(false);
+    expect(isCursorAgentId("claude-acp")).toBe(false);
+    expect(isCursorAgentId(null)).toBe(false);
   });
 });

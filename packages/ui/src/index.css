@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-shimmer";
 @source "./**/*.{ts,tsx}";
 
 @theme inline {
@@ -24,16 +25,12 @@
 
 :root {
   --radius: 0.625rem;
-  --page-padding: 0.75rem;
+  --page-padding: 1.25rem;
   --scrollbar-size: 6px;
   --thread-max-width: 800px;
   --composer-radius: 1rem;
   --composer-padding: 8px;
-  --composer-bg: color-mix(
-    in oklab,
-    var(--color-muted) 30%,
-    var(--color-background)
-  );
+  --composer-bg: rgb(255 255 255 / 0.3);
   --composer-shadow: none;
   --background: #f5f5f5;
   --foreground: oklch(0.141 0.005 285.823);
@@ -81,6 +78,11 @@
   .page-padding-x {
     padding-inline: var(--page-padding);
   }
+  /**
+   * 与右侧常显纵向滚动条配对：右 padding = page-padding - scrollbar，
+   * 使「内容到面板边缘」左右对称（滚动条占位算在右侧边距里）。
+   * 滚动容器需配合 .overflow-y-scroll-stable。
+   */
   .page-padding-x-scroll {
     padding-inline-start: var(--page-padding);
     padding-inline-end: max(
@@ -93,6 +95,25 @@
   }
   .page-padding-b {
     padding-bottom: var(--page-padding);
+  }
+  /** 输入框面板：贴消息区上沿，左右下留白（与 --composer-padding 无关） */
+  [data-layout-panel="composer"] {
+    padding: 0 0.75rem 0.75rem;
+  }
+  /** 纵向滚动条始终显示（即使内容不足一屏）；配合 .page-padding-x-scroll */
+  .overflow-y-scroll-stable {
+    overflow-y: scroll;
+  }
+  /**
+   * 非编辑态：行/列内没有任何已挂载面板时隐藏容器
+   *（含 renderPanel 恒为 null、或全部 visible:false 的情况）。
+   * 编辑态保留空容器以便拖放。
+   */
+  [data-layout-page]:not([data-layout-editing])
+    [data-layout-component="LayoutRow"]:not(:has([data-layout-panel])),
+  [data-layout-page]:not([data-layout-editing])
+    [data-layout-component="LayoutColumn"]:not(:has([data-layout-panel])) {
+    display: none !important;
   }
 }
 

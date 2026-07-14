@@ -1,110 +1,121 @@
 /** Bundled ACP Registry icons (primary), remote CDN fallback, then default. */
 /** Source: https://cdn.agentclientprotocol.com/registry/v1/latest/ */
 
-import agoragenticAcpIcon from "@/assets/agent-icons/registry/agoragentic-acp.svg?url";
-import ampAcpIcon from "@/assets/agent-icons/registry/amp-acp.svg?url";
-import auggieIcon from "@/assets/agent-icons/registry/auggie.svg?url";
-import autohandIcon from "@/assets/agent-icons/registry/autohand.svg?url";
-import claudeAcpIcon from "@/assets/agent-icons/registry/claude-acp.svg?url";
-import clineIcon from "@/assets/agent-icons/registry/cline.svg?url";
-import codebuddyCodeIcon from "@/assets/agent-icons/registry/codebuddy-code.svg?url";
-import codexAcpIcon from "@/assets/agent-icons/registry/codex-acp.svg?url";
-import cortexCodeIcon from "@/assets/agent-icons/registry/cortex-code.svg?url";
-import corustAgentIcon from "@/assets/agent-icons/registry/corust-agent.svg?url";
-import crowCliIcon from "@/assets/agent-icons/registry/crow-cli.svg?url";
-import cursorIcon from "@/assets/agent-icons/registry/cursor.svg?url";
-import deepagentsIcon from "@/assets/agent-icons/registry/deepagents.svg?url";
-import devinIcon from "@/assets/agent-icons/registry/devin.svg?url";
-import dimcodeIcon from "@/assets/agent-icons/registry/dimcode.svg?url";
-import diracIcon from "@/assets/agent-icons/registry/dirac.svg?url";
-import factoryDroidIcon from "@/assets/agent-icons/registry/factory-droid.svg?url";
-import fastAgentIcon from "@/assets/agent-icons/registry/fast-agent.svg?url";
-import geminiIcon from "@/assets/agent-icons/registry/gemini.svg?url";
-import githubCopilotCliIcon from "@/assets/agent-icons/registry/github-copilot-cli.svg?url";
-import glmAcpAgentIcon from "@/assets/agent-icons/registry/glm-acp-agent.svg?url";
-import gooseIcon from "@/assets/agent-icons/registry/goose.svg?url";
-import grokBuildIcon from "@/assets/agent-icons/registry/grok-build.svg?url";
-import harnIcon from "@/assets/agent-icons/registry/harn.svg?url";
-import junieIcon from "@/assets/agent-icons/registry/junie.svg?url";
-import kiloIcon from "@/assets/agent-icons/registry/kilo.svg?url";
-import kimiIcon from "@/assets/agent-icons/registry/kimi.svg?url";
-import minionCodeIcon from "@/assets/agent-icons/registry/minion-code.svg?url";
-import mistralVibeIcon from "@/assets/agent-icons/registry/mistral-vibe.svg?url";
-import novaIcon from "@/assets/agent-icons/registry/nova.svg?url";
-import opencodeIcon from "@/assets/agent-icons/registry/opencode.svg?url";
-import piAcpIcon from "@/assets/agent-icons/registry/pi-acp.svg?url";
-import poolsideIcon from "@/assets/agent-icons/registry/poolside.svg?url";
-import qoderIcon from "@/assets/agent-icons/registry/qoder.svg?url";
-import qwenCodeIcon from "@/assets/agent-icons/registry/qwen-code.svg?url";
-import sigitIcon from "@/assets/agent-icons/registry/sigit.svg?url";
-import stakpakIcon from "@/assets/agent-icons/registry/stakpak.svg?url";
-import vtcodeIcon from "@/assets/agent-icons/registry/vtcode.svg?url";
-import kiroIcon from "@/assets/agent-icons/kiro.svg?url";
-import aiderIcon from "@/assets/agent-icons/aider.png?url";
-import amrIcon from "@/assets/agent-icons/amr.svg?url";
-import antigravityIcon from "@/assets/agent-icons/antigravity.svg?url";
-import deepseekIcon from "@/assets/agent-icons/deepseek.svg?url";
-import hermesIcon from "@/assets/agent-icons/hermes.svg?url";
-import mimoIcon from "@/assets/agent-icons/mimo.svg?url";
-import reasonixIcon from "@/assets/agent-icons/reasonix.svg?url";
-import traeCliIcon from "@/assets/agent-icons/trae-cli.png?url";
-import vibeIcon from "@/assets/agent-icons/vibe.svg?url";
-import defaultAgentIcon from "@/assets/agent-icons/default.svg?url";
+import type { FC, SVGProps } from "react";
 
-export const DEFAULT_AGENT_ICON = defaultAgentIcon;
+import AgoragenticAcpIcon from "@/assets/agent-icons/registry/agoragentic-acp.svg?react";
+import AmpAcpIcon from "@/assets/agent-icons/registry/amp-acp.svg?react";
+import AuggieIcon from "@/assets/agent-icons/registry/auggie.svg?react";
+import AutohandIcon from "@/assets/agent-icons/registry/autohand.svg?react";
+import ClaudeAcpIcon from "@/assets/agent-icons/registry/claude-acp.svg?react";
+import ClineIcon from "@/assets/agent-icons/registry/cline.svg?react";
+import CodebuddyCodeIcon from "@/assets/agent-icons/registry/codebuddy-code.svg?react";
+import CodexAcpIcon from "@/assets/agent-icons/registry/codex-acp.svg?react";
+import CortexCodeIcon from "@/assets/agent-icons/registry/cortex-code.svg?react";
+import CorustAgentIcon from "@/assets/agent-icons/registry/corust-agent.svg?react";
+import CrowCliIcon from "@/assets/agent-icons/registry/crow-cli.svg?react";
+import CursorIcon from "@/assets/agent-icons/registry/cursor.svg?react";
+import DeepagentsIcon from "@/assets/agent-icons/registry/deepagents.svg?react";
+import DevinIcon from "@/assets/agent-icons/registry/devin.svg?react";
+import DimcodeIcon from "@/assets/agent-icons/registry/dimcode.svg?react";
+import DiracIcon from "@/assets/agent-icons/registry/dirac.svg?react";
+import FactoryDroidIcon from "@/assets/agent-icons/registry/factory-droid.svg?react";
+import FastAgentIcon from "@/assets/agent-icons/registry/fast-agent.svg?react";
+import GeminiIcon from "@/assets/agent-icons/registry/gemini.svg?react";
+import GithubCopilotCliIcon from "@/assets/agent-icons/registry/github-copilot-cli.svg?react";
+import GlmAcpAgentIcon from "@/assets/agent-icons/registry/glm-acp-agent.svg?react";
+import GooseIcon from "@/assets/agent-icons/registry/goose.svg?react";
+import GrokBuildIcon from "@/assets/agent-icons/registry/grok-build.svg?react";
+import HarnIcon from "@/assets/agent-icons/registry/harn.svg?react";
+import JunieIcon from "@/assets/agent-icons/registry/junie.svg?react";
+import KiloIcon from "@/assets/agent-icons/registry/kilo.svg?react";
+import KimiIcon from "@/assets/agent-icons/registry/kimi.svg?react";
+import MinionCodeIcon from "@/assets/agent-icons/registry/minion-code.svg?react";
+import MistralVibeIcon from "@/assets/agent-icons/registry/mistral-vibe.svg?react";
+import NovaIcon from "@/assets/agent-icons/registry/nova.svg?react";
+import OpencodeIcon from "@/assets/agent-icons/registry/opencode.svg?react";
+import PiAcpIcon from "@/assets/agent-icons/registry/pi-acp.svg?react";
+import PoolsideIcon from "@/assets/agent-icons/registry/poolside.svg?react";
+import QoderIcon from "@/assets/agent-icons/registry/qoder.svg?react";
+import QwenCodeIcon from "@/assets/agent-icons/registry/qwen-code.svg?react";
+import SigitIcon from "@/assets/agent-icons/registry/sigit.svg?react";
+import StakpakIcon from "@/assets/agent-icons/registry/stakpak.svg?react";
+import VtcodeIcon from "@/assets/agent-icons/registry/vtcode.svg?react";
+import KiroIcon from "@/assets/agent-icons/kiro.svg?react";
+import AmrIcon from "@/assets/agent-icons/amr.svg?react";
+import AntigravityIcon from "@/assets/agent-icons/antigravity.svg?react";
+import DeepseekIcon from "@/assets/agent-icons/deepseek.svg?react";
+import HermesIcon from "@/assets/agent-icons/hermes.svg?react";
+import MimoIcon from "@/assets/agent-icons/mimo.svg?react";
+import ReasonixIcon from "@/assets/agent-icons/reasonix.svg?react";
+import VibeIcon from "@/assets/agent-icons/vibe.svg?react";
+import DefaultAgentIcon from "@/assets/agent-icons/default.svg?react";
 
-/** Bundled icons keyed by registry / local id */
-export const AGENT_ICONS: Record<string, string> = {
-  "agoragentic-acp": agoragenticAcpIcon,
-  "amp-acp": ampAcpIcon,
-  auggie: auggieIcon,
-  autohand: autohandIcon,
-  "claude-acp": claudeAcpIcon,
-  cline: clineIcon,
-  "codebuddy-code": codebuddyCodeIcon,
-  "codex-acp": codexAcpIcon,
-  "cortex-code": cortexCodeIcon,
-  "corust-agent": corustAgentIcon,
-  "crow-cli": crowCliIcon,
-  cursor: cursorIcon,
-  deepagents: deepagentsIcon,
-  devin: devinIcon,
-  dimcode: dimcodeIcon,
-  dirac: diracIcon,
-  "factory-droid": factoryDroidIcon,
-  "fast-agent": fastAgentIcon,
-  gemini: geminiIcon,
-  "github-copilot-cli": githubCopilotCliIcon,
-  "glm-acp-agent": glmAcpAgentIcon,
-  goose: gooseIcon,
-  "grok-build": grokBuildIcon,
-  harn: harnIcon,
-  junie: junieIcon,
-  kilo: kiloIcon,
-  kimi: kimiIcon,
-  "minion-code": minionCodeIcon,
-  "mistral-vibe": mistralVibeIcon,
-  nova: novaIcon,
-  opencode: opencodeIcon,
-  "pi-acp": piAcpIcon,
-  poolside: poolsideIcon,
-  qoder: qoderIcon,
-  "qwen-code": qwenCodeIcon,
-  sigit: sigitIcon,
-  stakpak: stakpakIcon,
-  vtcode: vtcodeIcon,
-  // Local extras (not in current Registry snapshot)
-  kiro: kiroIcon,
-  aider: aiderIcon,
-  amr: amrIcon,
-  antigravity: antigravityIcon,
-  deepseek: deepseekIcon,
-  hermes: hermesIcon,
-  mimo: mimoIcon,
-  reasonix: reasonixIcon,
-  "trae-cli": traeCliIcon,
-  vibe: vibeIcon,
+import aiderIconUrl from "@/assets/agent-icons/aider.png?url";
+import traeCliIconUrl from "@/assets/agent-icons/trae-cli.png?url";
+
+export type AgentSvgIcon = FC<SVGProps<SVGSVGElement>>;
+
+export const DEFAULT_AGENT_ICON: AgentSvgIcon = DefaultAgentIcon;
+
+/** Bundled SVG icons as React components (currentColor / text-foreground) */
+export const AGENT_ICON_COMPONENTS: Record<string, AgentSvgIcon> = {
+  "agoragentic-acp": AgoragenticAcpIcon,
+  "amp-acp": AmpAcpIcon,
+  auggie: AuggieIcon,
+  autohand: AutohandIcon,
+  "claude-acp": ClaudeAcpIcon,
+  cline: ClineIcon,
+  "codebuddy-code": CodebuddyCodeIcon,
+  "codex-acp": CodexAcpIcon,
+  "cortex-code": CortexCodeIcon,
+  "corust-agent": CorustAgentIcon,
+  "crow-cli": CrowCliIcon,
+  cursor: CursorIcon,
+  deepagents: DeepagentsIcon,
+  devin: DevinIcon,
+  dimcode: DimcodeIcon,
+  dirac: DiracIcon,
+  "factory-droid": FactoryDroidIcon,
+  "fast-agent": FastAgentIcon,
+  gemini: GeminiIcon,
+  "github-copilot-cli": GithubCopilotCliIcon,
+  "glm-acp-agent": GlmAcpAgentIcon,
+  goose: GooseIcon,
+  "grok-build": GrokBuildIcon,
+  harn: HarnIcon,
+  junie: JunieIcon,
+  kilo: KiloIcon,
+  kimi: KimiIcon,
+  "minion-code": MinionCodeIcon,
+  "mistral-vibe": MistralVibeIcon,
+  nova: NovaIcon,
+  opencode: OpencodeIcon,
+  "pi-acp": PiAcpIcon,
+  poolside: PoolsideIcon,
+  qoder: QoderIcon,
+  "qwen-code": QwenCodeIcon,
+  sigit: SigitIcon,
+  stakpak: StakpakIcon,
+  vtcode: VtcodeIcon,
+  kiro: KiroIcon,
+  amr: AmrIcon,
+  antigravity: AntigravityIcon,
+  deepseek: DeepseekIcon,
+  hermes: HermesIcon,
+  mimo: MimoIcon,
+  reasonix: ReasonixIcon,
+  vibe: VibeIcon,
 };
+
+/** Bundled raster icons (cannot follow currentColor) */
+export const AGENT_ICON_IMAGES: Record<string, string> = {
+  aider: aiderIconUrl,
+  "trae-cli": traeCliIconUrl,
+};
+
+/** @deprecated 使用 AGENT_ICON_COMPONENTS；保留别名以免外部误用 */
+export const AGENT_ICONS = AGENT_ICON_IMAGES;
 
 /** Builtin / legacy id → registry icon id */
 const AGENT_ICON_ALIASES: Record<string, string> = {
@@ -120,17 +131,31 @@ const AGENT_ICON_ALIASES: Record<string, string> = {
 const REGISTRY_ICON_CDN =
   "https://cdn.agentclientprotocol.com/registry/v1/latest";
 
-function resolveLocalIcon(agentId: string): string | undefined {
+function resolveIconKey(agentId: string): string | undefined {
   const id = agentId.trim();
   if (!id) return undefined;
   const aliased = AGENT_ICON_ALIASES[id] ?? id;
-  if (AGENT_ICONS[aliased]) return AGENT_ICONS[aliased];
-  if (AGENT_ICONS[id]) return AGENT_ICONS[id];
-  const base = id.replace(/-acp$/, "");
-  if (AGENT_ICONS[base]) return AGENT_ICONS[base];
-  const withAcp = `${base}-acp`;
-  if (AGENT_ICONS[withAcp]) return AGENT_ICONS[withAcp];
+  const candidates = [aliased, id, id.replace(/-acp$/, ""), `${id.replace(/-acp$/, "")}-acp`];
+  for (const key of candidates) {
+    if (AGENT_ICON_COMPONENTS[key] || AGENT_ICON_IMAGES[key]) return key;
+  }
   return undefined;
+}
+
+export function resolveLocalIconComponent(
+  agentId: string,
+): AgentSvgIcon | undefined {
+  const key = resolveIconKey(agentId);
+  if (!key) return undefined;
+  return AGENT_ICON_COMPONENTS[key];
+}
+
+export function resolveLocalIconImageUrl(
+  agentId: string,
+): string | undefined {
+  const key = resolveIconKey(agentId);
+  if (!key) return undefined;
+  return AGENT_ICON_IMAGES[key];
 }
 
 /** Official Registry CDN URL for an agent id (may 404 for unknown ids). */
@@ -141,24 +166,23 @@ export function registryCdnIconUrl(agentId: string): string | undefined {
 }
 
 /**
- * Resolve agent icon URL.
- * Priority: bundled local → explicit remote → Registry CDN → default.
+ * Resolve agent icon URL (raster / remote only).
+ * Prefer resolveLocalIconComponent for bundled SVGs.
  */
 export function getAgentPresetIconUrl(
   agentId: string,
   remoteIcon?: string | null,
 ): string {
-  const local = resolveLocalIcon(agentId);
-  if (local) return local;
+  const localImage = resolveLocalIconImageUrl(agentId);
+  if (localImage) return localImage;
   if (remoteIcon && /^https?:\/\//i.test(remoteIcon)) {
     return remoteIcon;
   }
-  return registryCdnIconUrl(agentId) ?? DEFAULT_AGENT_ICON;
+  return registryCdnIconUrl(agentId) ?? "";
 }
 
 /**
- * Candidate URLs in fallback order for runtime onError chaining.
- * Always ends with DEFAULT_AGENT_ICON.
+ * Remote / raster fallback URLs when no local SVG component exists.
  */
 export function getAgentIconCandidates(
   agentId: string,
@@ -171,12 +195,11 @@ export function getAgentIconCandidates(
     seen.add(url);
     out.push(url);
   };
-  push(resolveLocalIcon(agentId));
+  push(resolveLocalIconImageUrl(agentId));
   if (remoteIcon && /^https?:\/\//i.test(remoteIcon)) {
     push(remoteIcon);
   }
   push(registryCdnIconUrl(agentId));
-  push(DEFAULT_AGENT_ICON);
   return out;
 }
 

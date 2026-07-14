@@ -8,7 +8,10 @@ pub mod prompt;
 pub mod store;
 pub mod types;
 
-pub use manager::{ActiveSession, ManagerError, RewindTaskResult, SessionConfigSnapshot, SessionManager};
+pub use manager::{
+    ActiveSession, ManagerError, ModelConfigProbe, RewindTaskResult, SessionConfigSnapshot,
+    SessionManager,
+};
 pub use store::{SessionStore, StoreError};
 pub use types::*;
 pub use git_mode::GitSessionMode;

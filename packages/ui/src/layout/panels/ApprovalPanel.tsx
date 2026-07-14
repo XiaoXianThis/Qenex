@@ -7,6 +7,7 @@ import {
   getPendingApproval,
   isApprovalAllowKind,
   sendApproval,
+  useApprovalPrefsStore,
   useTabsStore,
   useTaskApproval,
   approvalActions,
@@ -172,8 +173,9 @@ export const ApprovalPanel: FC = () => {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const threadId = activeTab?.taskId;
   const approval = useTaskApproval(threadId);
+  const autoAllow = useApprovalPrefsStore((s) => s.autoAllow);
 
-  if (!threadId || !approval?.pending || !approval.callId) {
+  if (autoAllow || !threadId || !approval?.pending || !approval.callId) {
     return null;
   }
 

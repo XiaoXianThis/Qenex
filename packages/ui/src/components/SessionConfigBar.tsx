@@ -21,8 +21,11 @@ import {
   useModelThoughtPrefsStore,
   modelThoughtPrefsActions,
   hasSelectableOptions,
+  isFastOptionEnabled,
+  oppositeFastOptionId,
   cn,
 } from "@qenex/core";
+import { Switch } from "@/components/ui/switch";
 
 type ConfigSelectProps = {
   ariaLabel: string;
@@ -224,9 +227,20 @@ type ModelPickerProps = {
   currentModelId: string | null;
   thoughtLevels: ThoughtOption[];
   currentThoughtLevelId: string | null;
+  thoughtLevelsByModel: Record<string, ThoughtOption[]>;
+  fastOptions: ThoughtOption[];
+  currentFastId: string | null;
+  fastOptionsByModel: Record<string, ThoughtOption[]>;
+  /** Cursor-only silent set_model probes; other agents use session ACP config. */
+  usesPerModelConfigProbe: boolean;
+  ensureModelConfigForModel: (modelId: string) => Promise<{
+    thoughtLevels: ThoughtOption[];
+    fastOptions: ThoughtOption[];
+  }>;
   disabled?: boolean;
   onSelectModel: (modelId: string) => void;
   onSelectThoughtLevel: (value: string) => void;
+  onSelectFast: (value: string) => void;
 };
 
 function ModelPicker({
@@ -235,16 +249,29 @@ function ModelPicker({
   currentModelId,
   thoughtLevels,
   currentThoughtLevelId,
+  thoughtLevelsByModel,
+  fastOptions,
+  currentFastId,
+  fastOptionsByModel,
+  usesPerModelConfigProbe,
+  ensureModelConfigForModel,
   disabled,
   onSelectModel,
   onSelectThoughtLevel,
+  onSelectFast,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [thoughtForModelId, setThoughtForModelId] = useState<string | null>(
     null,
   );
+  const [probingModelId, setProbingModelId] = useState<string | null>(null);
+  const [probeErrorByModel, setProbeErrorByModel] = useState<
+    Record<string, string>
+  >({});
   const prefsByAgent = useModelThoughtPrefsStore((s) => s.byAgent);
+  const fastPrefsByAgent = useModelThoughtPrefsStore((s) => s.fastByAgent);
   const agentPrefs = prefsByAgent[agentId] ?? {};
+  const agentFastPrefs = fastPrefsByAgent[agentId] ?? {};
 
   if (models.length === 0) {
     return null;
@@ -253,32 +280,138 @@ function ModelPicker({
   const selectedModel =
     models.find((model) => model.id === currentModelId) ?? models[0];
   const triggerLabel = modelTriggerLabel(selectedModel?.name ?? "");
-  // Agent may omit thought_level for models that don't support it.
-  const showThoughtEdit = thoughtLevels.length > 0;
+  const anyCachedThought = Object.values(thoughtLevelsByModel).some(
+    (levels) => levels.length > 0,
+  );
+  const anyCachedFast = Object.values(fastOptionsByModel).some(
+    (options) => options.length > 0,
+  );
+  const showEdit =
+    thoughtLevels.length > 0 ||
+    fastOptions.length > 0 ||
+    (usesPerModelConfigProbe &&
+      (anyCachedThought || anyCachedFast));
   const selectedThoughtId =
     currentThoughtLevelId ??
     (selectedModel ? agentPrefs[selectedModel.id] : undefined) ??
     thoughtLevels[0]?.id ??
     "";
-  const selectedThoughtLabel = showThoughtEdit
-    ? (thoughtLevels.find((level) => level.id === selectedThoughtId)?.name ??
-      null)
-    : null;
+  const selectedThoughtLabel =
+    thoughtLevels.find((level) => level.id === selectedThoughtId)?.name ??
+    null;
+  const currentFastEnabled = isFastOptionEnabled(currentFastId);
 
-  const thoughtIdForModel = (modelId: string): string => {
+  const levelsForModel = (modelId: string): ThoughtOption[] | null => {
+    // Standard ACP: session-level options apply to the live config snapshot.
+    if (!usesPerModelConfigProbe) {
+      return thoughtLevels;
+    }
+    if (modelId === selectedModel?.id) {
+      return thoughtLevels;
+    }
+    if (Object.prototype.hasOwnProperty.call(thoughtLevelsByModel, modelId)) {
+      return thoughtLevelsByModel[modelId] ?? [];
+    }
+    return null;
+  };
+
+  const fastForModel = (modelId: string): ThoughtOption[] | null => {
+    if (!usesPerModelConfigProbe) {
+      return fastOptions;
+    }
+    if (modelId === selectedModel?.id) {
+      return fastOptions;
+    }
+    if (Object.prototype.hasOwnProperty.call(fastOptionsByModel, modelId)) {
+      return fastOptionsByModel[modelId] ?? [];
+    }
+    return null;
+  };
+
+  const thoughtIdForModel = (
+    modelId: string,
+    levels: ThoughtOption[],
+  ): string => {
     if (modelId === selectedModel?.id) {
       return selectedThoughtId;
     }
-    return agentPrefs[modelId] ?? thoughtLevels[0]?.id ?? "";
+    const preferred = agentPrefs[modelId];
+    if (preferred && levels.some((level) => level.id === preferred)) {
+      return preferred;
+    }
+    return levels[0]?.id ?? "";
   };
 
   const thoughtLabelForModel = (modelId: string): string | null => {
-    const preferredId = thoughtIdForModel(modelId);
+    const levels = levelsForModel(modelId);
+    if (!levels || levels.length === 0) return null;
+    const preferredId = thoughtIdForModel(modelId, levels);
     if (!preferredId) return null;
-    return (
-      thoughtLevels.find((level) => level.id === preferredId)?.name ??
-      preferredId
-    );
+    return levels.find((level) => level.id === preferredId)?.name ?? preferredId;
+  };
+
+  const fastIdForModel = (
+    modelId: string,
+    options: ThoughtOption[],
+  ): string => {
+    if (modelId === selectedModel?.id) {
+      return currentFastId ?? options[0]?.id ?? "";
+    }
+    const preferred = agentFastPrefs[modelId];
+    if (preferred && options.some((option) => option.id === preferred)) {
+      return preferred;
+    }
+    return options[0]?.id ?? "";
+  };
+
+  const setFastEnabledForModel = (
+    modelId: string,
+    options: ThoughtOption[],
+    enabled: boolean,
+  ) => {
+    const currentId = fastIdForModel(modelId, options);
+    const nextId =
+      options.find((option) => isFastOptionEnabled(option.id) === enabled)
+        ?.id ?? oppositeFastOptionId(options, currentId);
+    if (!nextId || nextId === currentId) {
+      return;
+    }
+    if (modelId === selectedModel?.id) {
+      onSelectFast(nextId);
+    } else {
+      modelThoughtPrefsActions.setFast(agentId, modelId, nextId);
+    }
+  };
+
+  const openModelEdit = (modelId: string) => {
+    setThoughtForModelId(modelId);
+    setProbeErrorByModel((current) => {
+      if (!current[modelId]) return current;
+      const next = { ...current };
+      delete next[modelId];
+      return next;
+    });
+    // Non-Cursor: session ACP config is enough — no silent set_model.
+    if (!usesPerModelConfigProbe) {
+      return;
+    }
+    // Cached (memory or persist-seeded): show immediately, no spinner.
+    if (levelsForModel(modelId) !== null && fastForModel(modelId) !== null) {
+      return;
+    }
+    setProbingModelId(modelId);
+    void ensureModelConfigForModel(modelId)
+      .catch((error) => {
+        const message =
+          error instanceof Error ? error.message : "获取模型配置失败";
+        setProbeErrorByModel((current) => ({
+          ...current,
+          [modelId]: message,
+        }));
+      })
+      .finally(() => {
+        setProbingModelId((current) => (current === modelId ? null : current));
+      });
   };
 
   return (
@@ -286,7 +419,10 @@ function ModelPicker({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setThoughtForModelId(null);
+        if (!next) {
+          setThoughtForModelId(null);
+          setProbingModelId(null);
+        }
       }}
     >
       <PopoverTrigger asChild>
@@ -304,6 +440,9 @@ function ModelPicker({
             <span className="shrink-0 text-muted-foreground/60">
               {selectedThoughtLabel}
             </span>
+          ) : null}
+          {fastOptions.length > 0 && currentFastEnabled ? (
+            <span className="shrink-0 text-muted-foreground/60">Fast</span>
           ) : null}
           <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
         </button>
@@ -330,8 +469,24 @@ function ModelPicker({
           {models.map((model) => {
             const selected = model.id === selectedModel?.id;
             const thoughtOpen = thoughtForModelId === model.id;
+            const modelLevels = levelsForModel(model.id);
+            const modelFastOptions = fastForModel(model.id);
             const thoughtLabel = thoughtLabelForModel(model.id);
-            const rowThoughtId = thoughtIdForModel(model.id);
+            const rowThoughtId =
+              modelLevels && modelLevels.length > 0
+                ? thoughtIdForModel(model.id, modelLevels)
+                : "";
+            const rowFastId =
+              modelFastOptions && modelFastOptions.length > 0
+                ? fastIdForModel(model.id, modelFastOptions)
+                : "";
+            const probing = probingModelId === model.id;
+            const probeError = probeErrorByModel[model.id];
+            const showModelFast =
+              !probing &&
+              !probeError &&
+              modelFastOptions !== null &&
+              modelFastOptions.length > 0;
 
             return (
               <div
@@ -359,20 +514,31 @@ function ModelPicker({
                         {thoughtLabel}
                       </span>
                     ) : null}
+                    {modelFastOptions &&
+                    modelFastOptions.length > 0 &&
+                    isFastOptionEnabled(rowFastId) ? (
+                      <span className="shrink-0 text-xs text-muted-foreground/60">
+                        Fast
+                      </span>
+                    ) : null}
                   </span>
                 </button>
 
-                {showThoughtEdit ? (
+                {showEdit ? (
                   <Popover
                     open={thoughtOpen}
                     onOpenChange={(next) => {
-                      setThoughtForModelId(next ? model.id : null);
+                      if (next) {
+                        openModelEdit(model.id);
+                      } else if (thoughtForModelId === model.id) {
+                        setThoughtForModelId(null);
+                      }
                     }}
                   >
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        aria-label={`设置 ${model.name} 思考强度`}
+                        aria-label={`设置 ${model.name}`}
                         className={cn(
                           "mr-1 shrink-0 cursor-pointer px-1.5 py-0.5 text-xs text-muted-foreground outline-none",
                           "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
@@ -393,30 +559,68 @@ function ModelPicker({
                       side="right"
                       align="start"
                       sideOffset={6}
-                      className="w-auto p-2"
+                      className="w-auto min-w-[12rem] space-y-2 p-2"
                       onOpenAutoFocus={(event) => event.preventDefault()}
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
-                      <div className="mb-1.5 px-0.5 text-[11px] text-muted-foreground">
-                        思考强度
+                      <div className="space-y-1.5">
+                        <div className="px-0.5 text-[11px] text-muted-foreground">
+                          思考强度
+                        </div>
+                        {probing ||
+                        modelLevels === null ||
+                        modelFastOptions === null ? (
+                          <div className="text-muted-foreground px-0.5 py-1.5 text-[11px]">
+                            正在获取该模型配置…
+                          </div>
+                        ) : probeError ? (
+                          <div className="text-destructive px-0.5 py-1.5 text-[11px]">
+                            {probeError}
+                          </div>
+                        ) : modelLevels.length > 0 ? (
+                          <ThoughtSegmentBar
+                            levels={modelLevels}
+                            value={rowThoughtId}
+                            disabled={disabled}
+                            onChange={(value) => {
+                              if (model.id === selectedModel?.id) {
+                                onSelectThoughtLevel(value);
+                              } else {
+                                modelThoughtPrefsActions.set(
+                                  agentId,
+                                  model.id,
+                                  value,
+                                );
+                              }
+                              setThoughtForModelId(null);
+                            }}
+                          />
+                        ) : (
+                          <div className="text-muted-foreground px-0.5 py-1.5 text-[11px]">
+                            该模型不支持思考强度
+                          </div>
+                        )}
                       </div>
-                      <ThoughtSegmentBar
-                        levels={thoughtLevels}
-                        value={rowThoughtId}
-                        disabled={disabled}
-                        onChange={(value) => {
-                          if (model.id === selectedModel?.id) {
-                            onSelectThoughtLevel(value);
-                          } else {
-                            modelThoughtPrefsActions.set(
-                              agentId,
-                              model.id,
-                              value,
-                            );
-                          }
-                          setThoughtForModelId(null);
-                        }}
-                      />
+
+                      {showModelFast ? (
+                        <div className="border-border flex items-center justify-between gap-3 border-t px-0.5 pt-2">
+                          <span className="text-[11px] text-muted-foreground">
+                            Fast
+                          </span>
+                          <Switch
+                            checked={isFastOptionEnabled(rowFastId)}
+                            disabled={disabled}
+                            aria-label="Fast 模式"
+                            onCheckedChange={(checked) => {
+                              setFastEnabledForModel(
+                                model.id,
+                                modelFastOptions,
+                                checked,
+                              );
+                            }}
+                          />
+                        </div>
+                      ) : null}
                     </PopoverContent>
                   </Popover>
                 ) : null}
@@ -451,9 +655,14 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
   const {
     config,
     agentId,
+    usesPerModelConfigProbe,
+    thoughtLevelsByModel,
+    fastOptionsByModel,
+    ensureModelConfigForModel,
     changeMode,
     changeModel,
     changeThoughtLevel,
+    changeFast,
     retryAfterAuth,
   } = useSessionConfig();
   const [authOpen, setAuthOpen] = useState(false);
@@ -476,7 +685,8 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
     config.ready &&
     (config.modes.length > 0 ||
       config.models.length > 0 ||
-      config.thoughtLevels.length > 0);
+      config.thoughtLevels.length > 0 ||
+      config.fastOptions.length > 0);
   const showSkeleton =
     !showControls &&
     !config.error &&
@@ -553,12 +763,21 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
                   currentModelId={config.currentModelId}
                   thoughtLevels={config.thoughtLevels}
                   currentThoughtLevelId={config.currentThoughtLevelId}
+                  thoughtLevelsByModel={thoughtLevelsByModel}
+                  fastOptions={config.fastOptions}
+                  currentFastId={config.currentFastId}
+                  fastOptionsByModel={fastOptionsByModel}
+                  usesPerModelConfigProbe={usesPerModelConfigProbe}
+                  ensureModelConfigForModel={ensureModelConfigForModel}
                   disabled={config.loading}
                   onSelectModel={(modelId) => {
                     void changeModel(modelId);
                   }}
                   onSelectThoughtLevel={(value) => {
                     void changeThoughtLevel(value);
+                  }}
+                  onSelectFast={(value) => {
+                    void changeFast(value);
                   }}
                 />
               ) : null}

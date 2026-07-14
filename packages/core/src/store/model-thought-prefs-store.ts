@@ -10,6 +10,8 @@ export const MODEL_THOUGHT_PREFS_KEY = "agent-center-model-thought-prefs";
 export type ModelThoughtPrefsState = {
   /** agentId → modelId → thoughtLevelId */
   byAgent: Record<string, Record<string, string>>;
+  /** agentId → modelId → fast option id */
+  fastByAgent: Record<string, Record<string, string>>;
   /** agentId → last selected modelId */
   preferredModelByAgent: Record<string, string>;
   /** agentId → last selected modeId */
@@ -18,6 +20,7 @@ export type ModelThoughtPrefsState = {
 
 export const modelThoughtPrefsStore = proxy<ModelThoughtPrefsState>({
   byAgent: {},
+  fastByAgent: {},
   preferredModelByAgent: {},
   preferredModeByAgent: {},
 });
@@ -34,6 +37,21 @@ export const modelThoughtPrefsActions = {
       [agentId]: {
         ...current,
         [modelId]: thoughtLevelId,
+      },
+    };
+  },
+
+  getFast(agentId: string, modelId: string): string | null {
+    return modelThoughtPrefsStore.fastByAgent[agentId]?.[modelId] ?? null;
+  },
+
+  setFast(agentId: string, modelId: string, fastId: string) {
+    const current = modelThoughtPrefsStore.fastByAgent[agentId] ?? {};
+    modelThoughtPrefsStore.fastByAgent = {
+      ...modelThoughtPrefsStore.fastByAgent,
+      [agentId]: {
+        ...current,
+        [modelId]: fastId,
       },
     };
   },
@@ -79,6 +97,9 @@ export async function hydrateModelThoughtPrefsStore(): Promise<void> {
       if (record.byAgent && typeof record.byAgent === "object") {
         patch.byAgent = record.byAgent;
       }
+      if (record.fastByAgent && typeof record.fastByAgent === "object") {
+        patch.fastByAgent = record.fastByAgent;
+      }
       if (
         record.preferredModelByAgent &&
         typeof record.preferredModelByAgent === "object"
@@ -106,6 +127,7 @@ export function startModelThoughtPrefsPersist(): () => void {
     {
       partialize: (state) => ({
         byAgent: state.byAgent,
+        fastByAgent: state.fastByAgent,
         preferredModelByAgent: state.preferredModelByAgent,
         preferredModeByAgent: state.preferredModeByAgent,
       }),

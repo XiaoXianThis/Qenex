@@ -44,8 +44,19 @@ export type ThemeTokens = {
   composer: ThemeComposer;
 };
 
-/** v3：主题 CSS + 用户自定义 CSS（后者优先级更高，不随主题切换） */
+/** 主题来源：固定预设，或跟随 IDE 宿主配色 */
+export type ThemeSource = "preset" | "followHost";
+
+/** v4：主题来源 + 主题 CSS + 用户自定义 CSS */
 export type StylePersistedState = {
+  schemaVersion: 4;
+  themeSource: ThemeSource;
+  themeCss: string;
+  customCss: string;
+};
+
+/** v3：主题 CSS + 用户自定义 CSS（后者优先级更高，不随主题切换） */
+export type StylePersistedStateV3 = {
   schemaVersion: 3;
   themeCss: string;
   customCss: string;

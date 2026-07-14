@@ -23,8 +23,14 @@ repositories {
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     intellijPlatform {
-        val platformVersion = providers.gradleProperty("platformVersion").get()
-        create(IntelliJPlatformType.IntellijIdeaCommunity, platformVersion)
+        // Optional: -PlocalIdePath=/path/to/IDE.app (or .../Contents) when CDN download fails
+        val localIdePath = providers.gradleProperty("localIdePath")
+        if (localIdePath.isPresent) {
+            local(localIdePath.get())
+        } else {
+            val platformVersion = providers.gradleProperty("platformVersion").get()
+            create(IntelliJPlatformType.IntellijIdeaCommunity, platformVersion)
+        }
     }
 }
 
@@ -32,6 +38,11 @@ intellijPlatform {
     pluginConfiguration {
         name = providers.gradleProperty("pluginName")
         version = providers.gradleProperty("pluginVersion")
+        ideaVersion {
+            // Compile against 2024.2 (242); allow install on current IDEs (261 = 2026.1).
+            sinceBuild = providers.gradleProperty("pluginSinceBuild")
+            untilBuild = providers.gradleProperty("pluginUntilBuild")
+        }
     }
     instrumentCode = false
 }

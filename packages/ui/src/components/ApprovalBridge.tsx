@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   approvalActions,
   findPanelZone,
   getPendingApproval,
   layoutActions,
+  pickAutoAllowOption,
+  sendApproval,
+  useApprovalPrefsStore,
   useLayoutStore,
   useTaskApproval,
   type ApprovalState,
@@ -43,8 +46,10 @@ function applyApprovalDelta(taskId: string, delta: unknown): void {
 export function ApprovalBridge({ threadId, agent }: ApprovalBridgeProps) {
   const approval = useTaskApproval(threadId);
   const pending = approval?.pending === true && !!approval.callId;
+  const autoAllow = useApprovalPrefsStore((s) => s.autoAllow);
   const puckData = useLayoutStore((s) => s.puckData);
   const panelInLayout = findPanelZone(puckData, "approval") != null;
+  const autoAllowInFlight = useRef<string | null>(null);
 
   const auiApproval = useAuiState((s) => {
     const state = s.thread.state as { approval?: ApprovalState } | null | undefined;
@@ -86,11 +91,43 @@ export function ApprovalBridge({ threadId, agent }: ApprovalBridgeProps) {
     return () => subscription.unsubscribe();
   }, [agent, threadId]);
 
+  // Auto-allow: respond immediately for any agent, picking allow_always when offered.
   useEffect(() => {
-    layoutActions.setPanelVisibleEphemeral("approval", pending);
-  }, [pending]);
+    if (!autoAllow || !pending || !approval?.callId) {
+      autoAllowInFlight.current = null;
+      return;
+    }
+    const callId = approval.callId;
+    if (autoAllowInFlight.current === callId) return;
+    autoAllowInFlight.current = callId;
 
-  if (panelInLayout) {
+    const { optionId } = pickAutoAllowOption(approval.options);
+    let cancelled = false;
+    void (async () => {
+      try {
+        await sendApproval(threadId, callId, true, optionId);
+        if (cancelled) return;
+        const next = await getPendingApproval(threadId);
+        if (!cancelled) approvalActions.set(threadId, next);
+      } catch {
+        if (!cancelled && autoAllowInFlight.current === callId) {
+          autoAllowInFlight.current = null;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // options are fixed per callId — omit from deps to avoid cancel/retry churn
+    // from useTaskApproval's plain-object copies each render.
+  }, [autoAllow, pending, approval?.callId, threadId]);
+
+  useEffect(() => {
+    layoutActions.setPanelVisibleEphemeral("approval", pending && !autoAllow);
+  }, [pending, autoAllow]);
+
+  if (panelInLayout || autoAllow) {
     return null;
   }
 

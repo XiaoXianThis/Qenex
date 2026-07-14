@@ -70,8 +70,11 @@ export const STYLE_PANEL_HOOKS_COMMENT = `\
  *   scrollToBottom | welcomeSuggestions | sessionConfigBar |
  *   tokenStats | undoRedo | checklist | approval
  *
- * 布局容器：用 [data-layout-component="<type>"] 定位
+ * 布局容器：用 [data-layout-component="<type>"] 定位（影响所有同类）
  * 可用 type: LayoutRow | LayoutColumn | root.top | root.bottom
+ *
+ * 单个实例：用 [data-layout-instance="<puckId>"] 定位
+ * puckId 形如 LayoutColumn-2、Composer-1（见布局数据中的 props.id）
  *
  * 示例（取消注释即可生效）：
  *
@@ -93,6 +96,10 @@ export const STYLE_PANEL_HOOKS_COMMENT = `\
  *
  * [data-layout-component="LayoutRow"] {
  *   gap: 1rem;
+ * }
+ *
+ * [data-layout-instance="LayoutColumn-2"] {
+ *   padding: 1rem;
  * }
  */
 `;

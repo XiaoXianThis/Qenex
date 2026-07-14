@@ -189,6 +189,56 @@ describe("replayAgUiEvents preserveRunning", () => {
   });
 });
 
+describe("replayAgUiEvents unique ids", () => {
+  test("remints when persisted user message ids collide", () => {
+    const events: AguiEvent[] = [
+      ev({
+        type: "CUSTOM",
+        name: "user_message",
+        value: {
+          message: { id: "dup-user", role: "user", content: "first" },
+        },
+      }),
+      ev({ type: "RUN_STARTED", runId: "r1", taskId: "t", threadId: "t" }),
+      ev({ type: "TEXT_MESSAGE_START", messageId: "a1" }),
+      ev({
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "a1",
+        delta: "ok",
+      }),
+      ev({ type: "TEXT_MESSAGE_END", messageId: "a1" }),
+      ev({ type: "RUN_FINISHED", runId: "r1", taskId: "t" }),
+      ev({
+        type: "CUSTOM",
+        name: "user_message",
+        value: {
+          message: { id: "dup-user", role: "user", content: "second" },
+        },
+      }),
+      ev({ type: "RUN_STARTED", runId: "r2", taskId: "t", threadId: "t" }),
+      ev({ type: "TEXT_MESSAGE_START", messageId: "a2" }),
+      ev({
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "a2",
+        delta: "ok2",
+      }),
+      ev({ type: "TEXT_MESSAGE_END", messageId: "a2" }),
+      ev({ type: "RUN_FINISHED", runId: "r2", taskId: "t" }),
+    ];
+    const repo = replayAgUiEvents(events);
+    const ids = repo.messages.map((m) => m.message.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe("dup-user");
+    expect(ids[2]).not.toBe("dup-user");
+    expect(repo.messages.map((m) => m.parentId)).toEqual([
+      null,
+      "dup-user",
+      ids[1]!,
+      ids[2]!,
+    ]);
+  });
+});
+
 describe("replayAgUiEvents image attachments", () => {
   test("restores AG-UI multimodal image source as attachment", () => {
     const events: AguiEvent[] = [

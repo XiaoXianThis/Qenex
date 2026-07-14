@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  ColorThemeKind,
   Uri,
   window,
   workspace,
@@ -12,12 +13,23 @@ import {
 } from "vscode";
 import type { BridgeManager } from "./bridge-manager";
 import {
+  hostThemeKindOnly,
   isWebviewMessage,
+  mapVscodeColorThemeKind,
   type ExtensionToWebviewMessage,
   type WebviewToExtensionMessage,
 } from "./messages";
 
 const STORAGE_PREFIX = "qenex:";
+
+function currentHostThemeSnapshot() {
+  return hostThemeKindOnly(
+    mapVscodeColorThemeKind(
+      window.activeColorTheme.kind,
+      ColorThemeKind,
+    ),
+  );
+}
 
 export class QenexWebviewProvider implements WebviewViewProvider {
   public static readonly viewType = "qenex.sidebar";
@@ -27,7 +39,16 @@ export class QenexWebviewProvider implements WebviewViewProvider {
   constructor(
     private readonly context: ExtensionContext,
     private readonly bridgeManager: BridgeManager,
-  ) {}
+  ) {
+    context.subscriptions.push(
+      window.onDidChangeActiveColorTheme(() => {
+        this.postToWebview({
+          type: "theme-update",
+          theme: currentHostThemeSnapshot(),
+        });
+      }),
+    );
+  }
 
   async resolveWebviewView(
     webviewView: WebviewView,
@@ -87,6 +108,10 @@ export class QenexWebviewProvider implements WebviewViewProvider {
           url: bridgeUrl,
           defaultWorkspace,
         });
+        this.postToWebview({
+          type: "theme-update",
+          theme: currentHostThemeSnapshot(),
+        });
         return;
       }
       case "storage-get": {
@@ -135,6 +160,14 @@ export class QenexWebviewProvider implements WebviewViewProvider {
           type: "pick-workspace-result",
           requestId: message.requestId,
           path: picked,
+        });
+        return;
+      }
+      case "get-host-theme": {
+        this.postToWebview({
+          type: "host-theme-result",
+          requestId: message.requestId,
+          theme: currentHostThemeSnapshot(),
         });
         return;
       }

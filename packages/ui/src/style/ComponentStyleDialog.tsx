@@ -5,6 +5,7 @@ import type { Extension } from "@codemirror/state";
 import { color } from "@uiw/codemirror-extensions-color";
 import CodeMirror from "@uiw/react-codemirror";
 import {
+  activeStyleComponentTarget,
   extractComponentCss,
   replaceComponentCss,
   selectActiveCustomCss,
@@ -13,6 +14,7 @@ import {
   styleActions,
   styleStore,
   useStyleStore,
+  type StyleComponentScope,
 } from "@qenex/core";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,19 +25,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@qenex/core";
 import { useEffect, useState, type FC } from "react";
 
 const STYLE_EDITOR_EXTENSIONS: Extension[] = [css(), color];
 
 export const ComponentStyleDialog: FC = () => {
-  const target = useStyleStore((s) => s.componentStyleEdit);
+  const session = useStyleStore((s) => s.componentStyleEdit);
   const themeCss = useStyleStore(selectActiveThemeCss);
   const editorTheme =
     themeCss.trim() === STYLE_THEME_PRESETS.dark.css.trim() ? "dark" : "light";
 
+  const target = session ? activeStyleComponentTarget(session) : null;
+  const canToggleScope = session?.instanceTarget != null;
+
   const [draft, setDraft] = useState("");
 
-  // 仅在打开/切换目标时载入，避免应用后 customCss 变化冲掉编辑中内容
+  // 仅在打开/切换目标（含作用域）时载入，避免应用后 customCss 变化冲掉编辑中内容
   useEffect(() => {
     if (!target) {
       setDraft("");
@@ -43,9 +49,9 @@ export const ComponentStyleDialog: FC = () => {
     }
     const latest = selectActiveCustomCss(styleStore);
     setDraft(extractComponentCss(latest, target.id, target.selector));
-  }, [target]);
+  }, [target?.id, target?.selector]);
 
-  const open = target != null;
+  const open = session != null;
 
   const applyToCustomCss = (nextComponentCss: string) => {
     if (!target) return;
@@ -57,6 +63,10 @@ export const ComponentStyleDialog: FC = () => {
       nextComponentCss,
     );
     styleActions.setCustomCss(next);
+  };
+
+  const setScope = (scope: StyleComponentScope) => {
+    styleActions.setComponentStyleScope(scope);
   };
 
   return (
@@ -77,11 +87,46 @@ export const ComponentStyleDialog: FC = () => {
             编辑样式{target ? ` · ${target.label}` : ""}
           </DialogTitle>
           <DialogDescription>
-            仅修改该组件在自定义 CSS 中的段落，其它内容保持不变。选择器：
+            {session?.activeScope === "instance"
+              ? "仅作用于当前选中的这一个实例，其它同类不受影响。"
+              : "作用于所有同类组件。"}{" "}
+            选择器：
             <code className="ms-1 rounded bg-muted px-1 py-0.5 text-[11px]">
               {target?.selector}
             </code>
           </DialogDescription>
+          {canToggleScope ? (
+            <div
+              className="mt-2 flex w-fit rounded-md border border-border p-0.5"
+              role="group"
+              aria-label="样式作用域"
+            >
+              <button
+                type="button"
+                className={cn(
+                  "cursor-pointer rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
+                  session?.activeScope === "instance"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setScope("instance")}
+              >
+                仅此实例
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "cursor-pointer rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
+                  session?.activeScope === "type"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setScope("type")}
+              >
+                所有同类
+              </button>
+            </div>
+          ) : null}
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">

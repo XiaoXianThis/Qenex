@@ -5,9 +5,11 @@ import {
   cn,
   parseThemeCss,
   selectActiveThemeCss,
+  selectThemeSource,
   STYLE_THEME_PRESET_IDS,
   STYLE_THEME_PRESETS,
   styleActions,
+  useHost,
   useStyleStore,
   type StyleThemePresetId,
 } from "@qenex/core";
@@ -24,9 +26,9 @@ import type { FC } from "react";
 
 const toolBtnClass = LAYOUT_EDIT_TOOL_BTN_CLASS;
 
-type ThemeSelectValue = StyleThemePresetId | "custom";
+type ThemeSelectValue = StyleThemePresetId | "custom" | "followHost";
 
-function matchThemePreset(css: string): ThemeSelectValue {
+function matchThemePreset(css: string): StyleThemePresetId | "custom" {
   const normalized = css.trim();
   for (const id of STYLE_THEME_PRESET_IDS) {
     if (STYLE_THEME_PRESETS[id].css.trim() === normalized) return id;
@@ -39,6 +41,9 @@ function themePrimaryColor(id: StyleThemePresetId): string {
 }
 
 function activePrimaryColor(css: string, value: ThemeSelectValue): string {
+  if (value === "followHost") {
+    return parseThemeCss(css)["--primary"] ?? "var(--primary)";
+  }
   if (value !== "custom") return themePrimaryColor(value);
   return parseThemeCss(css)["--primary"] ?? "var(--primary)";
 }
@@ -55,8 +60,17 @@ function ThemeSwatch({ color }: { color: string }) {
 
 /** 布局编辑侧栏中的独立「主题」面板 */
 export const LayoutThemePanel: FC = () => {
+  const host = useHost();
   const themeCss = useStyleStore(selectActiveThemeCss);
-  const themeValue = matchThemePreset(themeCss);
+  const themeSource = useStyleStore(selectThemeSource);
+  const supportsHostTheme = Boolean(
+    host.getHostTheme || host.onHostThemeChange,
+  );
+
+  const themeValue: ThemeSelectValue =
+    themeSource === "followHost"
+      ? "followHost"
+      : matchThemePreset(themeCss);
   const currentPrimary = activePrimaryColor(themeCss, themeValue);
 
   return (
@@ -64,6 +78,13 @@ export const LayoutThemePanel: FC = () => {
       <Select
         value={themeValue}
         onValueChange={(value) => {
+          if (value === "followHost") {
+            styleActions.enableFollowHost();
+            void host.getHostTheme?.().then((snapshot) => {
+              if (snapshot) styleActions.applyHostTheme(snapshot);
+            });
+            return;
+          }
           if (value === "light" || value === "dark") {
             styleActions.applyThemePreset(value);
           }
@@ -90,6 +111,12 @@ export const LayoutThemePanel: FC = () => {
               <SelectItemText>{STYLE_THEME_PRESETS[id].label}</SelectItemText>
             </SelectItem>
           ))}
+          {supportsHostTheme ? (
+            <SelectItem value="followHost" className="text-xs">
+              <ThemeSwatch color={currentPrimary} />
+              <SelectItemText>跟随 IDE</SelectItemText>
+            </SelectItem>
+          ) : null}
           {themeValue === "custom" ? (
             <SelectItem value="custom" disabled className="text-xs">
               <ThemeSwatch color={currentPrimary} />

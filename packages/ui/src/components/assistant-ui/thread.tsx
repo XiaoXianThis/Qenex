@@ -15,11 +15,6 @@ import {
   ReasoningTrigger,
 } from "@/components/assistant-ui/reasoning";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { AgentIcon } from "@/components/AgentIcon";
@@ -88,9 +83,6 @@ export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
-  ToolGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
   ReasoningGroup?:
     | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
     | undefined;
@@ -290,14 +282,14 @@ export const ThreadComposer: FC = () => {
         <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
           <div
             data-slot="aui_composer-shell"
-            className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+            className="border-foreground/25 data-[dragging=true]:border-ring focus-within:border-foreground/25 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border-[0.25px] bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [[data-composer-overlay]_&]:backdrop-blur-xl"
           >
             <div className="flex min-h-8 flex-col gap-1">
               <ComposerAttachments />
               <ComposerAutocomplete>
                 <ComposerPrimitive.Input
                   placeholder="发消息… 输入 @ 引用文件"
-                  className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
+                  className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
                   rows={1}
                   autoFocus={!layoutEditing}
                   enterKeyHint="send"
@@ -373,10 +365,10 @@ const ComposerSendActions: FC = () => {
             type="button"
             variant="default"
             size="icon"
-            className="aui-composer-send size-7 rounded-full"
+            className="aui-composer-send size-6 rounded-full"
             aria-label="Send message"
           >
-            <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
+            <ArrowUpIcon className="aui-composer-send-icon size-4" />
           </TooltipIconButton>
         </ComposerPrimitive.Send>
       </AuiIf>
@@ -386,10 +378,10 @@ const ComposerSendActions: FC = () => {
             type="button"
             variant="default"
             size="icon"
-            className="aui-composer-cancel size-7 rounded-full"
+            className="aui-composer-cancel size-6 rounded-full"
             aria-label="Stop generating"
           >
-            <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+            <SquareIcon className="aui-composer-cancel-icon size-3 fill-current" />
           </Button>
         </ComposerPrimitive.Cancel>
       </AuiIf>
@@ -410,7 +402,6 @@ const MessageError: FC = () => {
 const AssistantMessage: FC = () => {
   const {
     ToolFallback: ToolFallbackComponent = ToolFallback,
-    ToolGroup,
     ReasoningGroup,
   } = useContext(ThreadComponentsContext);
 
@@ -429,32 +420,19 @@ const AssistantMessage: FC = () => {
       <div
         data-slot="aui_assistant-message-content"
         // [contain-intrinsic-size:auto_24px] fixes issue #4104, don't change without checking for regressions
-        className="text-foreground px-2 leading-relaxed wrap-break-word [contain-intrinsic-size:auto_24px] [content-visibility:auto]"
+        className="text-foreground px-4 leading-relaxed wrap-break-word [contain-intrinsic-size:auto_24px] [content-visibility:auto]"
       >
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
-            "tool-call": ["group-chainOfThought", "group-tool"],
-            "standalone-tool-call": [],
+            // 工具调用保持最外层独立渲染，不并入 group-tool 折叠
+            "tool-call": [],
           })}
         >
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
                 return <div data-slot="aui_chain-of-thought">{children}</div>;
-              case "group-tool":
-                if (ToolGroup) {
-                  return <ToolGroup group={part}>{children}</ToolGroup>;
-                }
-                return (
-                  <ToolGroupRoot variant="ghost">
-                    <ToolGroupTrigger
-                      count={part.indices.length}
-                      active={part.status?.type === "running"}
-                    />
-                    <ToolGroupContent>{children}</ToolGroupContent>
-                  </ToolGroupRoot>
-                );
               case "group-reasoning": {
                 if (ReasoningGroup) {
                   return (
@@ -561,7 +539,7 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_60px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-4 duration-150 [contain-intrinsic-size:auto_60px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />
@@ -622,21 +600,25 @@ const UserActionBar: FC = () => {
       : [];
     const restoreText = textParts.join("\n");
 
+    const kept = exported.messages.slice(0, idx);
+    const remapped = kept.map((item, i) => ({
+      message: item.message,
+      parentId: i === 0 ? null : kept[i - 1]!.message.id,
+    }));
+
+    // Optimistic: update UI immediately; backend rewind is now fast (agent warms async).
+    threadRuntime.import({
+      messages: remapped,
+      headId: remapped.at(-1)?.message.id ?? null,
+    });
+    if (restoreText) {
+      threadRuntime.composer.setText(restoreText);
+    }
+    changesActions.bumpAfterRun(taskId);
+
     setBusy(true);
     try {
       const result = await rewindTask(taskId, { userMessageIndex });
-      const kept = exported.messages.slice(0, idx);
-      const remapped = kept.map((item, i) => ({
-        message: item.message,
-        parentId: i === 0 ? null : kept[i - 1]!.message.id,
-      }));
-      threadRuntime.import({
-        messages: remapped,
-        headId: remapped.at(-1)?.message.id ?? null,
-      });
-      if (restoreText) {
-        threadRuntime.composer.setText(restoreText);
-      }
       changesActions.bumpAfterRun(taskId);
       if (result.agentReset === false) {
         window.alert(
@@ -644,6 +626,8 @@ const UserActionBar: FC = () => {
         );
       }
     } catch (e) {
+      threadRuntime.import(exported);
+      changesActions.bumpAfterRun(taskId);
       window.alert(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -654,7 +638,7 @@ const UserActionBar: FC = () => {
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
-      className="aui-user-action-bar-root flex flex-col items-end gap-0.5"
+      className="aui-user-action-bar-root flex flex-row items-center gap-0.5"
     >
       <TooltipIconButton
         tooltip="还原到此消息前"
@@ -695,7 +679,7 @@ const EditComposer: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2"
+      className="flex flex-col px-4"
     >
       <ComposerPrimitive.Root className="aui-edit-composer-root border-border/60 dark:border-muted-foreground/15 ms-auto flex w-full max-w-[85%] flex-col rounded-(--composer-radius) border bg-(--composer-bg)">
         <ComposerPrimitive.Input

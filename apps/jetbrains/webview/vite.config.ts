@@ -2,10 +2,27 @@ import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import svgr from "vite-plugin-svgr";
 
 export default defineConfig({
   base: "./",
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    svgr({
+      svgrOptions: {
+        svgoConfig: {
+          plugins: [
+            {
+              name: "preset-default",
+              params: { overrides: { removeViewBox: false } },
+            },
+            { name: "convertColors", params: { currentColor: true } },
+          ],
+        },
+      },
+    }),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "../../../packages/ui/src"),

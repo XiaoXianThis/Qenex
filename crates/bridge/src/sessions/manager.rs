@@ -41,6 +41,8 @@ pub enum ManagerError {
     NoRun(String),
     #[error("approval not found: {0}")]
     ApprovalNotFound(String),
+    #[error("session busy: {0}")]
+    Busy(String),
     #[error("agent error: {0}")]
     Agent(String),
 }
@@ -62,6 +64,9 @@ struct InnerSession {
     thought_levels: Option<Vec<Value>>,
     thought_level_config_id: Option<String>,
     current_thought_level_id: Option<String>,
+    fast_options: Option<Vec<Value>>,
+    fast_config_id: Option<String>,
+    current_fast_id: Option<String>,
     current_model_id: Option<String>,
     mode_config_id: Option<String>,
 }
@@ -77,6 +82,9 @@ pub struct ActiveSession {
     pub thought_levels: Option<Vec<Value>>,
     pub thought_level_config_id: Option<String>,
     pub current_thought_level_id: Option<String>,
+    pub fast_options: Option<Vec<Value>>,
+    pub fast_config_id: Option<String>,
+    pub current_fast_id: Option<String>,
     pub current_model_id: Option<String>,
     pub mode_config_id: Option<String>,
 }
@@ -89,7 +97,8 @@ pub struct RewindTaskResult {
     pub deleted_events: u64,
     pub deleted_turns: u64,
     pub binding: Option<GitSessionBinding>,
-    /// False when ACP session reset failed (history/git still rewound).
+    /// False when the live agent could not be invalidated after rewind.
+    /// A replacement ACP session is warmed in the background.
     pub agent_reset: bool,
 }
 
@@ -102,8 +111,23 @@ pub struct SessionConfigSnapshot {
     pub thought_levels: Option<Vec<Value>>,
     pub thought_level_config_id: Option<String>,
     pub current_thought_level_id: Option<String>,
+    pub fast_options: Option<Vec<Value>>,
+    pub fast_config_id: Option<String>,
+    pub current_fast_id: Option<String>,
     pub current_model_id: Option<String>,
     pub mode_config_id: Option<String>,
+}
+
+/// Result of silently probing another model's config options.
+#[derive(Debug, Clone)]
+pub struct ModelConfigProbe {
+    pub model_id: String,
+    pub thought_levels: Option<Vec<Value>>,
+    pub thought_level_config_id: Option<String>,
+    pub current_thought_level_id: Option<String>,
+    pub fast_options: Option<Vec<Value>>,
+    pub fast_config_id: Option<String>,
+    pub current_fast_id: Option<String>,
 }
 
 pub struct SessionManager {
@@ -111,6 +135,8 @@ pub struct SessionManager {
     sessions: Arc<Mutex<HashMap<String, InnerSession>>>,
     /// Per-task mutex to serialize concurrent ensure_task calls (e.g. React StrictMode).
     ensure_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// After rewind: next ensure/hydrate must spawn a fresh ACP session (no resume).
+    needs_fresh_session: Arc<Mutex<HashSet<String>>>,
     default_agent_command: Vec<String>,
     default_git_session_mode: GitSessionMode,
     demo_mode: bool,
@@ -137,6 +163,7 @@ impl SessionManager {
             store,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             ensure_locks: Arc::new(Mutex::new(HashMap::new())),
+            needs_fresh_session: Arc::new(Mutex::new(HashSet::new())),
             default_agent_command: agent_command
                 .unwrap_or_else(|| vec!["kiro-cli".into(), "acp".into()]),
             default_git_session_mode,
@@ -194,6 +221,9 @@ impl SessionManager {
                 thought_levels: None,
                 thought_level_config_id: None,
                 current_thought_level_id: None,
+                fast_options: None,
+                fast_config_id: None,
+                current_fast_id: None,
                 current_model_id: None,
                 mode_config_id: None,
             });
@@ -319,6 +349,9 @@ impl SessionManager {
             thought_levels: init_result.thought_levels,
             thought_level_config_id: init_result.thought_level_config_id,
             current_thought_level_id: init_result.current_thought_level_id,
+            fast_options: init_result.fast_options,
+            fast_config_id: init_result.fast_config_id,
+            current_fast_id: init_result.current_fast_id,
             current_model_id: init_result.current_model_id,
             mode_config_id: init_result.mode_config_id,
         };
@@ -626,14 +659,15 @@ impl SessionManager {
             .delete_events_from_id(task_id, from_event_id)
             .await?;
 
-        // Prefer a fresh ACP session so the agent does not retain deleted turns.
-        let agent_reset = match self.reset_agent_session_fresh(task_id).await {
+        // Stop the live agent and mark the task for a fresh ACP session on next
+        // ensure/hydrate. Do not respawn here — that cold-start dominated rewind latency.
+        let agent_reset = match self.invalidate_agent_session_for_rewind(task_id).await {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(
                     task_id,
                     error = %e,
-                    "rewind truncated history but failed to reset agent session"
+                    "rewind truncated history but failed to invalidate agent session"
                 );
                 false
             }
@@ -673,35 +707,34 @@ impl SessionManager {
             .unwrap_or_else(|| binding.base_sha.clone()))
     }
 
-    /// Stop in-memory ACP session and spawn a fresh one (no resume).
-    async fn reset_agent_session_fresh(&self, task_id: &str) -> Result<(), ManagerError> {
-        let stored = self
+    /// Stop the live ACP process and require a fresh session (no resume) on next ensure.
+    async fn invalidate_agent_session_for_rewind(
+        &self,
+        task_id: &str,
+    ) -> Result<(), ManagerError> {
+        let exists = self
             .store
             .lock()
             .await
             .get(task_id)
             .await?
-            .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+            .is_some();
+        if !exists {
+            return Err(ManagerError::NoSession(task_id.to_string()));
+        }
 
+        // Mark first so concurrent hydrate cannot resume the old ACP session.
+        self.needs_fresh_session
+            .lock()
+            .await
+            .insert(task_id.to_string());
         let _ = self.stop(task_id).await?;
-
-        // Force a new ACP session so the agent does not retain deleted turns.
-        // create_task upserts agent_session_id and reuses the existing git binding.
-        let _ = self
-            .create_task(
-                task_id,
-                &stored.cwd,
-                &stored.title,
-                None,
-                None,
-                None,
-                None,
-                None,
-                stored.agent_id.clone(),
-                None,
-            )
-            .await?;
         Ok(())
+    }
+
+    /// Warm-spawn a fresh agent after rewind (non-blocking helper for HTTP layer).
+    pub async fn warm_agent_after_rewind(&self, task_id: &str) -> Result<(), ManagerError> {
+        self.hydrate_task_if_needed(task_id).await
     }
 
     /// Discard all side-branch file changes (reset to base), keep conversation.
@@ -1038,6 +1071,159 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Silently switch to `model_id`, capture thought-level options, then restore
+    /// the previous model (and thought/fast values when possible).
+    ///
+    /// Holds the session lock for the whole round-trip so concurrent config/run
+    /// calls wait and the UI does not observe the intermediate model.
+    pub async fn probe_model_config(
+        &self,
+        task_id: &str,
+        model_id: &str,
+    ) -> Result<ModelConfigProbe, ManagerError> {
+        let mut probes = self
+            .probe_models_config(task_id, &[model_id.to_string()])
+            .await?;
+        probes.pop().ok_or_else(|| {
+            ManagerError::Agent("probe_model_config returned no result".into())
+        })
+    }
+
+    /// Probe many models in one lock: switch through each target once, then
+    /// restore the original model a single time (≈N+1 set_model instead of 2N).
+    pub async fn probe_models_config(
+        &self,
+        task_id: &str,
+        model_ids: &[String],
+    ) -> Result<Vec<ModelConfigProbe>, ManagerError> {
+        if model_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if self.demo_tasks.lock().await.contains(task_id) {
+            return Ok(model_ids
+                .iter()
+                .map(|model_id| ModelConfigProbe {
+                    model_id: model_id.clone(),
+                    thought_levels: None,
+                    thought_level_config_id: None,
+                    current_thought_level_id: None,
+                    fast_options: None,
+                    fast_config_id: None,
+                    current_fast_id: None,
+                })
+                .collect());
+        }
+
+        self.hydrate_task_if_needed(task_id).await?;
+
+        let mut sessions = self.sessions.lock().await;
+        let active = sessions
+            .get_mut(task_id)
+            .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+
+        if active.current_run_id.lock().await.is_some() {
+            return Err(ManagerError::Busy(
+                "cannot probe model config while a run is active".into(),
+            ));
+        }
+
+        let mut unique_ids: Vec<String> = Vec::new();
+        for model_id in model_ids {
+            if !unique_ids.iter().any(|id| id == model_id) {
+                unique_ids.push(model_id.clone());
+            }
+        }
+
+        let original_model = active.current_model_id.clone();
+        let original_thought = active.current_thought_level_id.clone();
+        let original_fast = active.current_fast_id.clone();
+
+        let snapshot_probe = |active: &InnerSession, model_id: &str| ModelConfigProbe {
+            model_id: model_id.to_string(),
+            thought_levels: active.thought_levels.clone(),
+            thought_level_config_id: active.thought_level_config_id.clone(),
+            current_thought_level_id: active.current_thought_level_id.clone(),
+            fast_options: active.fast_options.clone(),
+            fast_config_id: active.fast_config_id.clone(),
+            current_fast_id: active.current_fast_id.clone(),
+        };
+
+        let mut probes = Vec::with_capacity(unique_ids.len());
+        let mut switched_away = false;
+
+        for model_id in &unique_ids {
+            if original_model.as_deref() == Some(model_id.as_str())
+                && !switched_away
+            {
+                probes.push(snapshot_probe(active, model_id));
+                continue;
+            }
+
+            let parsed = active
+                .connection
+                .set_model(model_id)
+                .await
+                .map_err(ManagerError::Agent)?;
+            apply_parsed_config(active, &parsed);
+            switched_away = true;
+            probes.push(snapshot_probe(active, model_id));
+        }
+
+        if switched_away {
+            let Some(restore_model) = original_model else {
+                return Ok(probes);
+            };
+
+            match active.connection.set_model(&restore_model).await {
+                Ok(parsed) => apply_parsed_config(active, &parsed),
+                Err(e) => {
+                    return Err(ManagerError::Agent(format!(
+                        "probed models but failed to restore `{restore_model}`: {e}"
+                    )));
+                }
+            }
+
+            if let Some(thought) = original_thought {
+                if active.current_thought_level_id.as_deref() != Some(thought.as_str()) {
+                    if let Some(config_id) = active.thought_level_config_id.clone() {
+                        match active
+                            .connection
+                            .set_config_option(&config_id, &thought)
+                            .await
+                        {
+                            Ok(parsed) => apply_parsed_config(active, &parsed),
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "failed to restore thought level after model probe"
+                            ),
+                        }
+                    }
+                }
+            }
+
+            if let Some(fast) = original_fast {
+                if active.current_fast_id.as_deref() != Some(fast.as_str()) {
+                    if let Some(config_id) = active.fast_config_id.clone() {
+                        match active
+                            .connection
+                            .set_config_option(&config_id, &fast)
+                            .await
+                        {
+                            Ok(parsed) => apply_parsed_config(active, &parsed),
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "failed to restore fast mode after model probe"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(probes)
+    }
+
     pub async fn set_config_option(
         &self,
         task_id: &str,
@@ -1072,6 +1258,9 @@ impl SessionManager {
                 thought_levels: None,
                 thought_level_config_id: None,
                 current_thought_level_id: None,
+                fast_options: None,
+                fast_config_id: None,
+                current_fast_id: None,
                 current_model_id: None,
                 mode_config_id: None,
             });
@@ -1090,6 +1279,9 @@ impl SessionManager {
             thought_levels: active.thought_levels.clone(),
             thought_level_config_id: active.thought_level_config_id.clone(),
             current_thought_level_id: active.current_thought_level_id.clone(),
+            fast_options: active.fast_options.clone(),
+            fast_config_id: active.fast_config_id.clone(),
+            current_fast_id: active.current_fast_id.clone(),
             current_model_id: active.current_model_id.clone(),
             mode_config_id: active.mode_config_id.clone(),
         })
@@ -1109,11 +1301,15 @@ impl SessionManager {
         git_session_mode: Option<&str>,
     ) -> Result<ActiveSession, ManagerError> {
         if self.has_session(task_id).await {
-            let sessions = self.sessions.lock().await;
-            let active = sessions
-                .get(task_id)
-                .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
-            return Ok(active_session_from_inner(task_id, cwd, active));
+            if self.needs_fresh_session.lock().await.contains(task_id) {
+                let _ = self.stop(task_id).await?;
+            } else {
+                let sessions = self.sessions.lock().await;
+                let active = sessions
+                    .get(task_id)
+                    .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+                return Ok(active_session_from_inner(task_id, cwd, active));
+            }
         }
 
         let task_lock = {
@@ -1126,17 +1322,26 @@ impl SessionManager {
         let _guard = task_lock.lock().await;
 
         if self.has_session(task_id).await {
-            let sessions = self.sessions.lock().await;
-            let active = sessions
-                .get(task_id)
-                .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
-            return Ok(active_session_from_inner(task_id, cwd, active));
+            if self.needs_fresh_session.lock().await.contains(task_id) {
+                let _ = self.stop(task_id).await?;
+            } else {
+                let sessions = self.sessions.lock().await;
+                let active = sessions
+                    .get(task_id)
+                    .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
+                return Ok(active_session_from_inner(task_id, cwd, active));
+            }
         }
 
         let stored_task = self.store.lock().await.get(task_id).await?;
-        let effective_resume = resume_session_id
-            .map(str::to_string)
-            .or_else(|| stored_task.as_ref().map(|t| t.agent_session_id.clone()));
+        let force_fresh = self.needs_fresh_session.lock().await.contains(task_id);
+        let effective_resume = if force_fresh {
+            None
+        } else {
+            resume_session_id
+                .map(str::to_string)
+                .or_else(|| stored_task.as_ref().map(|t| t.agent_session_id.clone()))
+        };
         let effective_title = stored_task
             .as_ref()
             .map(|t| t.title.as_str())
@@ -1152,24 +1357,32 @@ impl SessionManager {
             tracing::info!(
                 task_id,
                 resume_session_id = effective_resume.as_deref(),
+                force_fresh,
                 agent_id = effective_agent_id.as_deref(),
                 "rehydrating task from persistent store"
             );
         }
 
-        self.create_task(
-            task_id,
-            effective_cwd,
-            effective_title,
-            effective_resume.as_deref(),
-            mode,
-            model,
-            mcp_servers,
-            agent_command,
-            effective_agent_id,
-            git_session_mode,
-        )
-        .await
+        let created = self
+            .create_task(
+                task_id,
+                effective_cwd,
+                effective_title,
+                effective_resume.as_deref(),
+                mode,
+                model,
+                mcp_servers,
+                agent_command,
+                effective_agent_id,
+                git_session_mode,
+            )
+            .await?;
+
+        if force_fresh {
+            self.needs_fresh_session.lock().await.remove(task_id);
+        }
+
+        Ok(created)
     }
 
     pub async fn execute_command(
@@ -1292,12 +1505,15 @@ fn apply_parsed_config(session: &mut InnerSession, parsed: &ParsedConfigOptions)
         session.current_model_id = Some(current_model_id.clone());
     }
 
-    // Full configOptions responses are authoritative: if thought_level is absent,
-    // the current model does not support it and prior values must be cleared.
+    // Full configOptions responses are authoritative: if thought_level/fast are
+    // absent, the current model does not support them and prior values must be cleared.
     if parsed.from_full_config {
         session.thought_levels = parsed.thought_levels.clone();
         session.current_thought_level_id = parsed.current_thought_level_id.clone();
         session.thought_level_config_id = parsed.thought_level_config_id.clone();
+        session.fast_options = parsed.fast_options.clone();
+        session.current_fast_id = parsed.current_fast_id.clone();
+        session.fast_config_id = parsed.fast_config_id.clone();
     } else {
         if let Some(thought_levels) = &parsed.thought_levels {
             session.thought_levels = Some(thought_levels.clone());
@@ -1307,6 +1523,15 @@ fn apply_parsed_config(session: &mut InnerSession, parsed: &ParsedConfigOptions)
         }
         if let Some(thought_level_config_id) = &parsed.thought_level_config_id {
             session.thought_level_config_id = Some(thought_level_config_id.clone());
+        }
+        if let Some(fast_options) = &parsed.fast_options {
+            session.fast_options = Some(fast_options.clone());
+        }
+        if let Some(current_fast_id) = &parsed.current_fast_id {
+            session.current_fast_id = Some(current_fast_id.clone());
+        }
+        if let Some(fast_config_id) = &parsed.fast_config_id {
+            session.fast_config_id = Some(fast_config_id.clone());
         }
     }
 }
@@ -1326,6 +1551,9 @@ fn active_session_from_inner(
         thought_levels: session.thought_levels.clone(),
         thought_level_config_id: session.thought_level_config_id.clone(),
         current_thought_level_id: session.current_thought_level_id.clone(),
+        fast_options: session.fast_options.clone(),
+        fast_config_id: session.fast_config_id.clone(),
+        current_fast_id: session.current_fast_id.clone(),
         current_model_id: session.current_model_id.clone(),
         mode_config_id: session.mode_config_id.clone(),
     }

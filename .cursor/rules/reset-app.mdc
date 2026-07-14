@@ -11,7 +11,7 @@ alwaysApply: true
 
 1. **Web localStorage**（`http://localhost:3000` 等）  
    删除所有 `qenex:` 前缀键，以及遗留的 `agent-center-*` 键：  
-   `agent-center-agents` / `tabs` / `layout` / `style` / `model-thought-prefs`  
+   `agent-center-agents` / `tabs` / `layout` / `style` / `model-thought-prefs` / `model-config-cache` / `approval-prefs` / `ui-prefs`  
    做法（任选，优先能清到用户正在用的浏览器）：  
    - 打开 `http://localhost:3000/__reset-first-run.html`（同域清 key 后跳回 `/`）  
    - 或 Chrome DevTools MCP：`evaluate_script` 清 `localStorage` 后硬刷新  

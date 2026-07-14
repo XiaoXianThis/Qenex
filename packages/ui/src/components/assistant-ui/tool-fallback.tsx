@@ -1,15 +1,7 @@
 "use client";
 
-import { memo, useCallback, useRef, useState } from "react";
+import { createContext, memo, useContext, useState } from "react";
 import {
-  AlertCircleIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  LoaderIcon,
-  XCircleIcon,
-} from "lucide-react";
-import {
-  useScrollLock,
   useToolCallElapsed,
   type ToolApprovalOption,
   type ToolCallMessagePart,
@@ -17,17 +9,36 @@ import {
   type ToolCallMessagePartStatus,
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
+import { CollapsiblePartTrigger } from "@/components/assistant-ui/collapsible-part-trigger";
+import { useAutoCollapsibleOpen } from "@/components/assistant-ui/use-auto-collapsible-open";
+import {
+  ToolCallBody,
+  ToolCallCardBody,
+  ToolCallCardHeaderTrigger,
+  ToolCardShell,
+  buildToolCallModel,
+} from "@/components/assistant-ui/tool-call-view";
+import { shouldDefaultToolPreview } from "@/components/assistant-ui/tool-call-format";
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { cn, useToolProgress } from "@qenex/core";
+import {
+  cn,
+  displayApprovalOptionLabel,
+  isApprovalAllowKind,
+  useToolProgress,
+} from "@qenex/core";
 import { Button } from "@/components/ui/button";
 
 const ANIMATION_DURATION = 200;
 
-const pressable = "active:scale-[0.98]";
+/** 预览态：最多约 5 行 */
+const PREVIEW_MAX_H = "max-h-[5lh]";
+
+const pressable = "cursor-pointer active:scale-[0.98]";
+
+const ToolPreviewContext = createContext(false);
 
 export type ToolFallbackRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
@@ -36,6 +47,11 @@ export type ToolFallbackRootProps = Omit<
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   defaultOpen?: boolean;
+  /**
+   * Shell / 写文件 / 编辑等：默认预览（约 5 行）；其余默认收起。
+   * 组合用法可覆盖。
+   */
+  autoOpen?: boolean;
 };
 
 function ToolFallbackRoot({
@@ -43,35 +59,29 @@ function ToolFallbackRoot({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
+  autoOpen = false,
   children,
   ...props
 }: ToolFallbackRootProps) {
-  const collapsibleRef = useRef<HTMLDivElement>(null);
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
-
-  const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      lockScroll();
-      if (!isControlled) {
-        setUncontrolledOpen(open);
-      }
-      controlledOnOpenChange?.(open);
-    },
-    [lockScroll, isControlled, controlledOnOpenChange],
-  );
+  const { collapsibleRef, isOpen, isPreview, handleOpenChange } =
+    useAutoCollapsibleOpen({
+      autoOpen,
+      open: controlledOpen,
+      onOpenChange: controlledOnOpenChange,
+      defaultOpen,
+      animationDurationMs: ANIMATION_DURATION,
+      previewClickExpands: autoOpen,
+    });
 
   return (
     <Collapsible
       ref={collapsibleRef}
       data-slot="tool-fallback-root"
+      data-preview={isPreview ? "true" : undefined}
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "aui-tool-fallback-root group/tool-fallback-root w-full",
+        "aui-tool-fallback-root group/tool-fallback-root mb-1 w-full",
         className,
       )}
       style={
@@ -81,19 +91,22 @@ function ToolFallbackRoot({
       }
       {...props}
     >
-      {children}
+      <ToolPreviewContext.Provider value={isPreview}>
+        {children}
+      </ToolPreviewContext.Provider>
     </Collapsible>
   );
 }
 
-type ToolStatus = ToolCallMessagePartStatus["type"];
-
-const statusIconMap: Record<ToolStatus, React.ElementType> = {
-  running: LoaderIcon,
-  complete: CheckIcon,
-  incomplete: XCircleIcon,
-  "requires-action": AlertCircleIcon,
-};
+function ToolPreviewFade() {
+  return (
+    <div
+      data-slot="tool-preview-fade"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-[linear-gradient(to_top,var(--color-background),transparent)]"
+      aria-hidden
+    />
+  );
+}
 
 const formatToolDuration = (ms: number) => {
   if (ms < 1000) return "<1s";
@@ -114,7 +127,7 @@ function ToolFallbackDuration({
     <span
       data-slot="tool-fallback-duration"
       className={cn(
-        "aui-tool-fallback-duration text-muted-foreground text-xs tabular-nums",
+        "aui-tool-fallback-duration text-muted-foreground/80 text-xs tabular-nums",
         className,
       )}
       {...props}
@@ -128,8 +141,11 @@ function ToolFallbackTrigger({
   toolName,
   status,
   className,
+  label: _ignoredLabel,
+  meta: _ignoredMeta,
+  active: _ignoredActive,
   ...props
-}: React.ComponentProps<typeof CollapsibleTrigger> & {
+}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
   toolName: string;
   status?: ToolCallMessagePartStatus;
 }) {
@@ -137,66 +153,41 @@ function ToolFallbackTrigger({
   const isRunning = statusType === "running";
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
+  const isRequiresAction = statusType === "requires-action";
 
-  const Icon = statusIconMap[statusType];
-  const label = isCancelled ? "Cancelled tool" : "Used tool";
+  const label = isCancelled
+    ? `Cancelled ${toolName}`
+    : isRequiresAction
+      ? `Approve ${toolName}`
+      : toolName;
 
   return (
-    <CollapsibleTrigger
+    <CollapsiblePartTrigger
       data-slot="tool-fallback-trigger"
       className={cn(
-        "aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-fit origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",
+        "aui-tool-fallback-trigger",
+        isCancelled && "line-through opacity-70",
         className,
       )}
+      label={label}
+      meta={!isRunning && !isRequiresAction ? <ToolFallbackDuration /> : undefined}
+      active={isRunning || isRequiresAction}
       {...props}
-    >
-      <Icon
-        data-slot="tool-fallback-trigger-icon"
-        className={cn(
-          "aui-tool-fallback-trigger-icon size-4 shrink-0",
-          isCancelled && "text-muted-foreground",
-          isRunning && "animate-spin [animation-duration:0.6s]",
-        )}
-      />
-      <span
-        data-slot="tool-fallback-trigger-label"
-        className={cn(
-          "aui-tool-fallback-trigger-label-wrapper relative inline-block text-start leading-none",
-          isCancelled && "text-muted-foreground line-through",
-        )}
-      >
-        <span>
-          {label}: <b>{toolName}</b>
-        </span>
-        {isRunning && (
-          <span
-            aria-hidden
-            data-slot="tool-fallback-trigger-shimmer"
-            className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
-          >
-            {label}: <b>{toolName}</b>
-          </span>
-        )}
-      </span>
-      <ToolFallbackDuration />
-      <ChevronDownIcon
-        data-slot="tool-fallback-trigger-chevron"
-        className={cn(
-          "aui-tool-fallback-trigger-chevron size-4 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "group-data-[state=closed]/trigger:-rotate-90",
-          "group-data-[state=open]/trigger:rotate-0",
-        )}
-      />
-    </CollapsibleTrigger>
+    />
   );
 }
 
 function ToolFallbackContent({
   className,
   children,
+  compact = false,
   ...props
-}: React.ComponentProps<typeof CollapsibleContent>) {
+}: React.ComponentProps<typeof CollapsibleContent> & {
+  /** 卡片内嵌：去掉外围 padding */
+  compact?: boolean;
+}) {
+  const isPreview = useContext(ToolPreviewContext);
+
   return (
     <CollapsibleContent
       data-slot="tool-fallback-content"
@@ -215,13 +206,17 @@ function ToolFallbackContent({
     >
       <div
         className={cn(
-          "flex flex-col gap-2 ps-6 pt-1 pb-2 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
-          "group-data-[state=open]/collapsible-content:animate-in group-data-[state=open]/collapsible-content:fade-in-0 group-data-[state=open]/collapsible-content:blur-in-[2px] group-data-[state=open]/collapsible-content:slide-in-from-top-1",
-          "group-data-[state=closed]/collapsible-content:animate-out group-data-[state=closed]/collapsible-content:fade-out-0 group-data-[state=closed]/collapsible-content:blur-out-[2px] group-data-[state=closed]/collapsible-content:slide-out-to-top-1",
+          "relative",
+          "ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
+          "group-data-[state=open]/collapsible-content:animate-in group-data-[state=open]/collapsible-content:fade-in-0 group-data-[state=open]/collapsible-content:slide-in-from-top-1",
+          "group-data-[state=closed]/collapsible-content:animate-out group-data-[state=closed]/collapsible-content:fade-out-0 group-data-[state=closed]/collapsible-content:slide-out-to-top-1",
           "group-data-[state=closed]/collapsible-content:duration-(--animation-duration) group-data-[state=open]/collapsible-content:duration-(--animation-duration)",
+          compact ? "" : "flex flex-col gap-2 ps-0.5 pt-1 pb-2",
+          isPreview && cn(PREVIEW_MAX_H, "overflow-hidden"),
         )}
       >
         {children}
+        {isPreview ? <ToolPreviewFade /> : null}
       </div>
     </CollapsibleContent>
   );
@@ -242,9 +237,7 @@ function ToolFallbackArgs({
       className={cn("aui-tool-fallback-args", className)}
       {...props}
     >
-      <pre className="aui-tool-fallback-args-value bg-muted/50 text-foreground/90 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-        {argsText}
-      </pre>
+      <ToolCallBody toolName="" argsText={argsText} />
     </div>
   );
 }
@@ -264,12 +257,7 @@ function ToolFallbackResult({
       className={cn("aui-tool-fallback-result", className)}
       {...props}
     >
-      <p className="aui-tool-fallback-result-header text-muted-foreground text-xs font-medium">
-        Result:
-      </p>
-      <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-        {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
-      </pre>
+      <ToolCallBody toolName="" result={result} />
     </div>
   );
 }
@@ -293,10 +281,7 @@ function ToolFallbackProgress({
       className={cn("aui-tool-fallback-progress", className)}
       {...props}
     >
-      <p className="text-muted-foreground text-xs font-medium">Output:</p>
-      <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-64 overflow-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
-        {text}
-      </pre>
+      <ToolCallBody toolName="" progressText={text} />
     </div>
   );
 }
@@ -341,23 +326,30 @@ function ToolFallbackError({
 const APPROVED_RESULT = "Approved by user";
 const DENIED_RESULT = "User denied tool execution";
 
-const APPROVAL_OPTION_DEFAULT_LABELS: Record<string, string> = {
-  "allow-once": "允许一次",
-  "allow-always": "不再询问",
-  "reject-once": "拒绝",
-  "reject-always": "始终拒绝",
-};
+const KNOWN_APPROVAL_KINDS = new Set([
+  "allow-once",
+  "allow_once",
+  "allow-always",
+  "allow_always",
+  "reject-once",
+  "reject_once",
+  "reject-always",
+  "reject_always",
+]);
 
-const isAllowKind = (kind: string) =>
-  kind === "allow-once" || kind === "allow-always";
+const isAllowKind = (kind: string) => isApprovalAllowKind(kind);
 
 const approvalOptionLabel = (option: ToolApprovalOption) =>
-  option.label ??
-  (Object.hasOwn(APPROVAL_OPTION_DEFAULT_LABELS, option.kind)
-    ? APPROVAL_OPTION_DEFAULT_LABELS[option.kind]
-    : undefined) ??
-  option.id;
+  displayApprovalOptionLabel({
+    id: option.id,
+    label: option.label,
+    kind: option.kind,
+  });
 
+/**
+ * 行内审批（组合 API）。主路径已改为全局 ApprovalPanel / ApprovalBridge，
+ * ToolFallback 默认不再挂载本组件。
+ */
 function ToolFallbackApproval({
   className,
   addResult,
@@ -382,13 +374,9 @@ function ToolFallbackApproval({
   )
     return null;
 
-  // Custom (`_`-prefixed) kinds cannot be resolved to a boolean by the kit;
-  // hosts using custom kinds render their own bar. A declared option list is
-  // a host constraint: the kit never adds an approval path beyond it, but
-  // always preserves a refusal path.
   const declaredOptions = respondToApproval ? approval?.options : undefined;
   const options = declaredOptions?.filter((o) =>
-    Object.hasOwn(APPROVAL_OPTION_DEFAULT_LABELS, o.kind),
+    KNOWN_APPROVAL_KINDS.has(o.kind),
   );
 
   const respond = (approved: boolean) => {
@@ -558,58 +546,53 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   argsText,
   result,
   status,
-  addResult,
-  resume,
-  interrupt,
-  approval,
-  respondToApproval,
 }) => {
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
+  const isRunning = status?.type === "running";
   const isRequiresAction = status?.type === "requires-action";
 
-  const [open, setOpen] = useState(isRequiresAction);
-  const [prevRequiresAction, setPrevRequiresAction] =
-    useState(isRequiresAction);
-  if (isRequiresAction !== prevRequiresAction) {
-    setPrevRequiresAction(isRequiresAction);
-    if (isRequiresAction) setOpen(true);
-  }
-
   const liveProgress = useToolProgress(toolCallId);
-  const [prevHadProgress, setPrevHadProgress] = useState(false);
-  const hasLiveProgress = Boolean(liveProgress) && result === undefined;
-  if (hasLiveProgress !== prevHadProgress) {
-    setPrevHadProgress(hasLiveProgress);
-    if (hasLiveProgress) setOpen(true);
+  const model = buildToolCallModel(
+    toolName,
+    argsText,
+    isCancelled ? undefined : result,
+    isCancelled ? null : liveProgress,
+  );
+  const defaultPreview = shouldDefaultToolPreview(model.kind);
+  const active = isRunning || isRequiresAction;
+
+  // Shell / 写文件 / 编辑：默认预览 → 点击完全展开
+  if (defaultPreview) {
+    return (
+      <ToolFallbackRoot
+        autoOpen
+        className={cn(isCancelled && "opacity-60")}
+      >
+        <ToolCardShell>
+          <ToolCallCardHeaderTrigger model={model} active={active} />
+          <ToolFallbackContent compact>
+            <ToolFallbackError status={status} />
+            {!model.empty ? <ToolCallCardBody model={model} /> : null}
+          </ToolFallbackContent>
+        </ToolCardShell>
+      </ToolFallbackRoot>
+    );
   }
 
+  // Read / Grep / generic：默认收起 → 点击完全展开
   return (
-    <ToolFallbackRoot open={open} onOpenChange={setOpen}>
+    <ToolFallbackRoot>
       <ToolFallbackTrigger toolName={toolName} status={status} />
       <ToolFallbackContent>
         <ToolFallbackError status={status} />
-        <ToolFallbackArgs
+        <ToolCallBody
+          toolName={toolName}
           argsText={argsText}
+          result={isCancelled ? undefined : result}
+          progressText={isCancelled ? null : liveProgress}
           className={cn(isCancelled && "opacity-60")}
         />
-        {isRequiresAction && (
-          <ToolFallbackApproval
-            addResult={addResult}
-            resume={resume}
-            interrupt={interrupt}
-            approval={approval}
-            respondToApproval={respondToApproval}
-          />
-        )}
-        {!isCancelled && (
-          <ToolFallbackProgress
-            toolCallId={toolCallId}
-            hasResult={result !== undefined}
-            text={liveProgress}
-          />
-        )}
-        {!isCancelled && <ToolFallbackResult result={result} />}
       </ToolFallbackContent>
     </ToolFallbackRoot>
   );

@@ -42,6 +42,9 @@ export type EnsureSessionResponse = {
   thoughtLevels?: unknown;
   thoughtLevelConfigId?: string;
   currentThoughtLevelId?: string;
+  fastOptions?: unknown;
+  fastConfigId?: string;
+  currentFastId?: string;
   currentModelId?: string;
 };
 
@@ -52,6 +55,9 @@ export type SessionConfigResponse = {
   thoughtLevels?: unknown;
   thoughtLevelConfigId?: string;
   currentThoughtLevelId?: string;
+  fastOptions?: unknown;
+  fastConfigId?: string;
+  currentFastId?: string;
   currentModelId?: string;
 };
 
@@ -87,11 +93,13 @@ function toSessionConfig(
   const modes = parseSessionOptions(payload.modes);
   const models = parseSessionOptions(payload.models);
   const thoughtLevels = parseSessionOptions(payload.thoughtLevels);
+  const fastOptions = parseSessionOptions(payload.fastOptions);
 
   return {
     modes,
     models,
     thoughtLevels,
+    fastOptions,
     currentModeId:
       payload.currentModeId ??
       modes[0]?.id ??
@@ -105,6 +113,11 @@ function toSessionConfig(
       thoughtLevels[0]?.id ??
       null,
     thoughtLevelConfigId: payload.thoughtLevelConfigId ?? null,
+    currentFastId:
+      payload.currentFastId ??
+      fastOptions[0]?.id ??
+      null,
+    fastConfigId: payload.fastConfigId ?? null,
     ready,
     loading: false,
     error: null,
@@ -168,6 +181,95 @@ export async function setModel(
     body: JSON.stringify({ modelId }),
   });
   return getSessionConfig(taskId);
+}
+
+export type ModelConfigProbe = {
+  modelId: string;
+  thoughtLevels: SessionOption[];
+  thoughtLevelConfigId: string | null;
+  currentThoughtLevelId: string | null;
+  fastOptions: SessionOption[];
+  fastConfigId: string | null;
+  currentFastId: string | null;
+};
+
+function parseModelConfigProbe(
+  response: {
+    modelId?: string;
+    thoughtLevels?: unknown;
+    thoughtLevelConfigId?: string | null;
+    currentThoughtLevelId?: string | null;
+    fastOptions?: unknown;
+    fastConfigId?: string | null;
+    currentFastId?: string | null;
+  },
+  fallbackModelId: string,
+): ModelConfigProbe {
+  const thoughtLevels = parseSessionOptions(response.thoughtLevels);
+  const fastOptions = parseSessionOptions(response.fastOptions);
+  return {
+    modelId: response.modelId ?? fallbackModelId,
+    thoughtLevels,
+    thoughtLevelConfigId: response.thoughtLevelConfigId ?? null,
+    currentThoughtLevelId:
+      response.currentThoughtLevelId ?? thoughtLevels[0]?.id ?? null,
+    fastOptions,
+    fastConfigId: response.fastConfigId ?? null,
+    currentFastId: response.currentFastId ?? fastOptions[0]?.id ?? null,
+  };
+}
+
+/** Silently switch to a model, capture thought/fast options, then restore. */
+export async function probeModelConfig(
+  taskId: string,
+  modelId: string,
+): Promise<ModelConfigProbe> {
+  const response = await fetchJson<{
+    modelId?: string;
+    thoughtLevels?: unknown;
+    thoughtLevelConfigId?: string | null;
+    currentThoughtLevelId?: string | null;
+    fastOptions?: unknown;
+    fastConfigId?: string | null;
+    currentFastId?: string | null;
+  }>(`/v2/tasks/${taskId}/probe-model-config`, {
+    method: "POST",
+    body: JSON.stringify({ modelId }),
+  });
+  return parseModelConfigProbe(response, modelId);
+}
+
+/**
+ * Probe many models in one Bridge round-trip (N+1 set_model, single restore).
+ */
+export async function probeModelsConfig(
+  taskId: string,
+  modelIds: string[],
+): Promise<ModelConfigProbe[]> {
+  if (modelIds.length === 0) {
+    return [];
+  }
+  if (modelIds.length === 1) {
+    return [await probeModelConfig(taskId, modelIds[0]!)];
+  }
+  const response = await fetchJson<{
+    probes?: Array<{
+      modelId?: string;
+      thoughtLevels?: unknown;
+      thoughtLevelConfigId?: string | null;
+      currentThoughtLevelId?: string | null;
+      fastOptions?: unknown;
+      fastConfigId?: string | null;
+      currentFastId?: string | null;
+    }>;
+  }>(`/v2/tasks/${taskId}/probe-models-config`, {
+    method: "POST",
+    body: JSON.stringify({ modelIds }),
+  });
+  const probes = Array.isArray(response.probes) ? response.probes : [];
+  return probes.map((probe, index) =>
+    parseModelConfigProbe(probe, modelIds[index] ?? probe.modelId ?? ""),
+  );
 }
 
 export async function setConfigOption(
@@ -702,7 +804,7 @@ export type RewindTaskResponse = {
   deletedEvents: number;
   deletedTurns: number;
   binding: GitSessionBinding | null;
-  /** False when ACP session could not be reset after rewind. */
+  /** False when the live agent could not be invalidated; replacement warms in background. */
   agentReset?: boolean;
 };
 
@@ -765,6 +867,31 @@ export async function executeTaskCommand(
 
 export function hasSelectableOptions(options: SessionOption[]): boolean {
   return options.length > 1;
+}
+
+/** Cursor Fast config values are usually `"true"` / `"false"`. */
+export function isFastOptionEnabled(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const lower = id.trim().toLowerCase();
+  return (
+    lower === "true" ||
+    lower === "1" ||
+    lower === "on" ||
+    lower === "fast" ||
+    lower === "yes"
+  );
+}
+
+export function oppositeFastOptionId(
+  options: SessionOption[],
+  currentId: string | null,
+): string | null {
+  if (options.length === 0) return null;
+  if (options.length === 1) return options[0]?.id ?? null;
+
+  const enabled = isFastOptionEnabled(currentId);
+  const target = options.find((option) => isFastOptionEnabled(option.id) !== enabled);
+  return target?.id ?? options.find((option) => option.id !== currentId)?.id ?? null;
 }
 
 export function loadingSessionConfig(): SessionConfig {

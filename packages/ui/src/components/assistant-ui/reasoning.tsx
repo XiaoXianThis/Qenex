@@ -3,26 +3,22 @@
 import {
   createContext,
   memo,
-  useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useRef,
-  useState,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import {
-  useScrollLock,
   useAuiState,
   type ReasoningMessagePartComponent,
   type ReasoningGroupComponent,
 } from "@assistant-ui/react";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { CollapsiblePartTrigger } from "@/components/assistant-ui/collapsible-part-trigger";
+import { useAutoCollapsibleOpen } from "@/components/assistant-ui/use-auto-collapsible-open";
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@qenex/core";
 
@@ -30,7 +26,7 @@ const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 
-const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
+const reasoningVariants = cva("aui-reasoning-root mb-1 w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border px-3 py-2",
@@ -39,7 +35,7 @@ const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
     },
   },
   defaultVariants: {
-    variant: "outline",
+    variant: "ghost",
   },
 });
 
@@ -66,39 +62,18 @@ function ReasoningRoot({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
-  streaming,
+  streaming = false,
   children,
   ...props
 }: ReasoningRootProps) {
-  const collapsibleRef = useRef<HTMLDivElement>(null);
-  const initialOpenRef = useRef(defaultOpen);
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
-
-  const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled
-    ? controlledOpen
-    : (userOpen ?? streaming ?? initialOpenRef.current);
-  const isAutoMode = isControlled || userOpen === null;
-  const isPreview = streaming === true && isOpen && isAutoMode;
-
-  const prevStreamingRef = useRef(streaming);
-  useLayoutEffect(() => {
-    if (prevStreamingRef.current === streaming) return;
-    prevStreamingRef.current = streaming;
-    if (!isControlled && userOpen === null) lockScroll();
-  }, [streaming, isControlled, userOpen, lockScroll]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      lockScroll();
-      if (!isControlled) {
-        setUserOpen(open);
-      }
-      controlledOnOpenChange?.(open);
-    },
-    [lockScroll, isControlled, controlledOnOpenChange],
-  );
+  const { collapsibleRef, isOpen, isPreview, handleOpenChange } =
+    useAutoCollapsibleOpen({
+      autoOpen: streaming,
+      open: controlledOpen,
+      onOpenChange: controlledOnOpenChange,
+      defaultOpen,
+      animationDurationMs: ANIMATION_DURATION,
+    });
 
   return (
     <Collapsible
@@ -167,51 +142,25 @@ function ReasoningTrigger({
   active,
   duration,
   className,
+  label: _ignoredLabel,
+  meta: _ignoredMeta,
   ...props
-}: React.ComponentProps<typeof CollapsibleTrigger> & {
+}: React.ComponentProps<typeof CollapsiblePartTrigger> & {
   active?: boolean;
   duration?: number;
 }) {
-  const durationText = duration ? ` (${duration}s)` : "";
+  const label = active ? "Thinking" : "Thought";
+  const meta = duration ? `${duration}s` : undefined;
 
   return (
-    <CollapsibleTrigger
+    <CollapsiblePartTrigger
       data-slot="reasoning-trigger"
-      className={cn(
-        "aui-reasoning-trigger group/trigger text-muted-foreground hover:text-foreground flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",
-        className,
-      )}
+      className={cn("aui-reasoning-trigger", className)}
+      label={label}
+      meta={meta}
+      active={active}
       {...props}
-    >
-      <BrainIcon
-        data-slot="reasoning-trigger-icon"
-        className="aui-reasoning-trigger-icon size-4 shrink-0"
-      />
-      <span
-        data-slot="reasoning-trigger-label"
-        className="aui-reasoning-trigger-label-wrapper relative inline-block leading-none tabular-nums"
-      >
-        <span>Reasoning{durationText}</span>
-        {active ? (
-          <span
-            aria-hidden
-            data-slot="reasoning-trigger-shimmer"
-            className="aui-reasoning-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
-          >
-            Reasoning{durationText}
-          </span>
-        ) : null}
-      </span>
-      <ChevronDownIcon
-        data-slot="reasoning-trigger-chevron"
-        className={cn(
-          "aui-reasoning-trigger-chevron mt-0.5 size-4 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "group-data-[state=closed]/trigger:-rotate-90",
-          "group-data-[state=open]/trigger:rotate-0",
-        )}
-      />
-    </CollapsibleTrigger>
+    />
   );
 }
 
@@ -273,17 +222,15 @@ function ReasoningText({
       ref={scrollRef}
       data-slot="reasoning-text"
       className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-6 pt-2 pb-2 leading-relaxed text-pretty",
+        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-0.5 pt-1 pb-2 leading-relaxed text-pretty",
         "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:animate-none",
         "group-data-[state=open]/collapsible-content:animate-in",
         "group-data-[state=closed]/collapsible-content:animate-out",
         "group-data-[state=open]/collapsible-content:fade-in-0",
         "group-data-[state=closed]/collapsible-content:fade-out-0",
-        "group-data-[state=open]/collapsible-content:slide-in-from-top-4",
-        "group-data-[state=closed]/collapsible-content:slide-out-to-top-4",
-        "group-data-[state=open]/collapsible-content:blur-in-[2px]",
-        "group-data-[state=closed]/collapsible-content:blur-out-[2px]",
+        "group-data-[state=open]/collapsible-content:slide-in-from-top-2",
+        "group-data-[state=closed]/collapsible-content:slide-out-to-top-2",
         "group-data-[state=open]/collapsible-content:duration-(--animation-duration)",
         "group-data-[state=closed]/collapsible-content:duration-(--animation-duration)",
         className,

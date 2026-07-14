@@ -30,6 +30,10 @@ import {
   tabsActions,
   uninstallAgent,
   useAgentsStore,
+  useApprovalPrefsStore,
+  approvalPrefsActions,
+  useUiPrefsStore,
+  uiPrefsActions,
   useStyleStore,
   useTabsStore,
   type AgentPreset,
@@ -144,6 +148,8 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
   const [gitSessionMode, setGitSessionMode] = useState<GitSessionMode>(() =>
     getPreferredGitSessionMode(),
   );
+  const autoAllowApprovals = useApprovalPrefsStore((s) => s.autoAllow);
+  const composerOverlay = useUiPrefsStore((s) => s.composerOverlay);
 
   const jsonEnabled = jsonMode !== "off";
 
@@ -884,7 +890,39 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                   仅影响之后新建的会话。
                 </p>
               </div>
-              <label className="flex items-center gap-2 text-sm">
+              <div className="flex flex-col gap-1.5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={autoAllowApprovals}
+                    onChange={(e) =>
+                      approvalPrefsActions.setAutoAllow(e.target.checked)
+                    }
+                  />
+                  <span>无需审批，自动允许</span>
+                </label>
+                <p className="text-muted-foreground text-xs">
+                  开启后所有 Agent 的工具权限请求将自动放行（优先选「不再询问」选项），不再弹出审批面板。
+                </p>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={composerOverlay}
+                    onChange={(e) =>
+                      uiPrefsActions.setComposerOverlay(e.target.checked)
+                    }
+                  />
+                  <span>输入框毛玻璃叠层</span>
+                </label>
+                <p className="text-muted-foreground text-xs">
+                  开启后消息可滚到输入框后方，底部栏半透明并启用 backdrop blur（输入框在顶部布局时无效）。
+                </p>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   className="size-3.5 accent-primary"

@@ -5,11 +5,13 @@ import { ThreadMessagesArea, ThreadMessagesEditPreview } from "@/layout/puck/pan
 import {
   cn,
   getPanelDefinition,
+  layoutNodesHaveVisiblePanel,
   resolveStyleComponentTarget,
   selectComposerInTopBand,
   selectTabBarPosition,
   styleActions,
   useLayoutStore,
+  useUiPrefsStore,
 } from "@qenex/core";
 import type { SlotComponent } from "@puckeditor/core";
 import {
@@ -18,7 +20,14 @@ import {
   ThreadPrimitive,
 } from "@assistant-ui/react";
 import { PaintbrushVertical } from "lucide-react";
-import { useEffect, type FC, type SyntheticEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FC,
+  type SyntheticEvent,
+} from "react";
 import {
   LAYOUT_ROOT_BOTTOM_LABEL,
   LAYOUT_ROOT_TOP_LABEL,
@@ -77,14 +86,28 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
 }) => {
   const composerAtTop = useLayoutStore(selectComposerInTopBand);
   const tabBarPosition = useLayoutStore(selectTabBarPosition);
+  const composerOverlayPref = useUiPrefsStore((s) => s.composerOverlay);
   const layoutEditing = editMode || Boolean(isEditing);
-  const hasBottom =
-    layoutEditing ||
-    (Array.isArray(puckDataBottom) && puckDataBottom.length > 0);
+  const hasBottom = useLayoutStore((s) => {
+    if (layoutEditing) return true;
+    if (!Array.isArray(puckDataBottom) || puckDataBottom.length === 0) {
+      return false;
+    }
+    return layoutNodesHaveVisiblePanel(
+      puckDataBottom as import("@puckeditor/core").ComponentData[],
+      s.panels,
+    );
+  });
 
   const zoneClass = topZoneClass ?? (layoutEditing ? "relative z-30" : undefined);
   const flushTopTabBar = !layoutEditing && tabBarPosition === "top";
   const flushBottomComposer = !layoutEditing && !composerAtTop;
+  /** 毛玻璃叠层：仅底部输入带 + 非编辑态 */
+  const composerOverlay =
+    composerOverlayPref && flushBottomComposer && hasBottom && !layoutEditing;
+
+  const footerRef = useRef<HTMLDivElement>(null);
+  const [overlayInset, setOverlayInset] = useState(0);
 
   useEffect(() => {
     if (!layoutEditing) return;
@@ -94,13 +117,34 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
     }
   }, [layoutEditing]);
 
+  useEffect(() => {
+    if (!composerOverlay) {
+      setOverlayInset(0);
+      return;
+    }
+    const el = footerRef.current;
+    if (!el) return;
+
+    const sync = () => setOverlayInset(el.offsetHeight);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [composerOverlay, hasBottom]);
+
+  const messagesOverlayStyle: CSSProperties | undefined = composerOverlay
+    ? { paddingBottom: overlayInset }
+    : undefined;
+
   return (
     <ThreadPrimitive.Root
       className={cn(
         // 上 / 中 / 下三层：上下 shrink-0 实占，中间 flex-1 滚动
-        "aui-root aui-thread-root bg-background @container flex h-full min-h-0 flex-col overflow-hidden",
+        // overlay 时下区绝对定位叠在滚动消息上
+        "aui-root aui-thread-root bg-background @container relative flex h-full min-h-0 flex-col overflow-hidden",
         layoutEditing && "pointer-events-none",
       )}
+      data-composer-overlay={composerOverlay ? "" : undefined}
     >
       {renderTop ? (
         <div
@@ -139,8 +183,13 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
           "relative min-h-0 flex-1 overflow-x-hidden scroll-smooth",
           layoutEditing
             ? "overflow-hidden pointer-events-none"
-            : "overflow-y-auto",
+            : "overflow-y-scroll-stable",
         )}
+        style={
+          composerOverlay
+            ? ({ scrollPaddingBottom: overlayInset } as CSSProperties)
+            : undefined
+        }
       >
         <div
           data-layout-panel="messages"
@@ -150,6 +199,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
             layoutEditing &&
               "min-h-8 overflow-hidden border-[1px] border-dashed border-primary/40",
           )}
+          style={messagesOverlayStyle}
         >
           {layoutEditing ? (
             <>
@@ -181,15 +231,18 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
 
       {hasBottom ? (
         <div
+          ref={footerRef}
           data-slot="aui_thread-viewport-footer"
           className={cn(
-            "aui-thread-viewport-footer bg-background shrink-0 flex flex-col gap-4 overflow-hidden",
+            "aui-thread-viewport-footer flex flex-col gap-4 overflow-hidden",
             layoutEditing
-              ? "relative z-30 pointer-events-auto"
-              : cn(
-                  "rounded-t-(--composer-radius)",
-                  !flushBottomComposer && "page-padding-b",
-                ),
+              ? "relative z-30 shrink-0 bg-background pointer-events-auto"
+              : composerOverlay
+                ? "absolute inset-x-0 bottom-0 z-20 rounded-t-(--composer-radius) bg-background/55 backdrop-blur-xl supports-backdrop-filter:bg-background/40"
+                : cn(
+                    "relative shrink-0 bg-background rounded-t-(--composer-radius)",
+                    !flushBottomComposer && "page-padding-b",
+                  ),
           )}
         >
           <div className="mx-auto w-full max-w-(--thread-max-width)">

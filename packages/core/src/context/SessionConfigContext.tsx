@@ -13,28 +13,50 @@ import {
   ensureSession,
   getSessionConfig,
   isAgentNotReadyError,
+  probeModelConfig,
+  probeModelsConfig,
   setConfigOption,
   setMode,
   setModel,
+  type ModelConfigProbe,
 } from "../lib/bridge-api.ts";
 import { getPreferredGitSessionMode } from "../lib/git-session-mode.ts";
 import { isAuthRequiredError } from "../lib/bridge-client.ts";
 import { agentsActions } from "../store/agents-store.ts";
-import { legacyIdsForRegistry } from "../config/agents.ts";
+import { isCursorAgentId, legacyIdsForRegistry } from "../config/agents.ts";
 import {
   EMPTY_SESSION_CONFIG,
   type AuthChallenge,
   type SessionConfig,
+  type SessionOption,
 } from "../lib/session-config.ts";
+import { modelConfigCacheActions } from "../store/model-config-cache-store.ts";
 import { modelThoughtPrefsActions } from "../store/model-thought-prefs-store.ts";
 import { tabsActions } from "../store/tabs-store.ts";
+
+type ModelConfigSnapshot = {
+  thoughtLevels: SessionOption[];
+  fastOptions: SessionOption[];
+};
 
 type SessionConfigContextValue = {
   config: SessionConfig;
   agentId: string;
+  /**
+   * Cursor-only: per-model options need silent set_model probes.
+   * Other agents use session-level ACP configOptions directly.
+   */
+  usesPerModelConfigProbe: boolean;
+  /** Per-model thought level options (Cursor probe cache / live session). */
+  thoughtLevelsByModel: Record<string, SessionOption[]>;
+  /** Per-model Fast options (Cursor probe cache / live session). */
+  fastOptionsByModel: Record<string, SessionOption[]>;
+  /** Cursor-only: ensure thought/fast options for a model (probes when needed). */
+  ensureModelConfigForModel: (modelId: string) => Promise<ModelConfigSnapshot>;
   changeMode: (modeId: string) => Promise<void>;
   changeModel: (modelId: string) => Promise<void>;
   changeThoughtLevel: (value: string) => Promise<void>;
+  changeFast: (value: string) => Promise<void>;
   refresh: () => Promise<void>;
   /** Re-run session bootstrap after the user completed external login. */
   retryAfterAuth: () => Promise<void>;
@@ -66,10 +88,186 @@ export function SessionConfigProvider({
   const setAgentSessionId = tabsActions.setAgentSessionId;
   const setAgentLoading = tabsActions.setAgentLoading;
   const resumeSessionIdRef = useRef(agentSessionId);
+  const usesPerModelConfigProbe = isCursorAgentId(agentId);
+  const usesPerModelConfigProbeRef = useRef(usesPerModelConfigProbe);
+  usesPerModelConfigProbeRef.current = usesPerModelConfigProbe;
   const [config, setConfig] = useState<SessionConfig>({
     ...EMPTY_SESSION_CONFIG,
     loading: true,
   });
+  const [thoughtLevelsByModel, setThoughtLevelsByModel] = useState<
+    Record<string, SessionOption[]>
+  >(() => {
+    if (!isCursorAgentId(agentId)) return {};
+    const seeded: Record<string, SessionOption[]> = {};
+    for (const [modelId, entry] of Object.entries(
+      modelConfigCacheActions.getAgent(agentId),
+    )) {
+      seeded[modelId] = entry.thoughtLevels;
+    }
+    return seeded;
+  });
+  const [fastOptionsByModel, setFastOptionsByModel] = useState<
+    Record<string, SessionOption[]>
+  >(() => {
+    if (!isCursorAgentId(agentId)) return {};
+    const seeded: Record<string, SessionOption[]> = {};
+    for (const [modelId, entry] of Object.entries(
+      modelConfigCacheActions.getAgent(agentId),
+    )) {
+      seeded[modelId] = entry.fastOptions;
+    }
+    return seeded;
+  });
+  const thoughtLevelsByModelRef = useRef(thoughtLevelsByModel);
+  thoughtLevelsByModelRef.current = thoughtLevelsByModel;
+  const fastOptionsByModelRef = useRef(fastOptionsByModel);
+  fastOptionsByModelRef.current = fastOptionsByModel;
+  const probeInFlightRef = useRef<
+    Map<string, Promise<ModelConfigSnapshot>>
+  >(new Map());
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+
+  const sameOptions = (
+    prev: SessionOption[] | undefined,
+    next: SessionOption[],
+  ) =>
+    !!prev &&
+    prev.length === next.length &&
+    prev.every((item, index) => item.id === next[index]?.id);
+
+  const cacheThoughtLevels = useCallback(
+    (modelId: string, levels: SessionOption[]) => {
+      setThoughtLevelsByModel((current) => {
+        if (sameOptions(current[modelId], levels)) {
+          return current;
+        }
+        return { ...current, [modelId]: levels };
+      });
+    },
+    [],
+  );
+
+  const cacheFastOptions = useCallback(
+    (modelId: string, options: SessionOption[]) => {
+      setFastOptionsByModel((current) => {
+        if (sameOptions(current[modelId], options)) {
+          return current;
+        }
+        return { ...current, [modelId]: options };
+      });
+    },
+    [],
+  );
+
+  const cacheModelConfig = useCallback(
+    (
+      modelId: string,
+      thoughtLevels: SessionOption[],
+      fastOptions: SessionOption[],
+    ) => {
+      if (!usesPerModelConfigProbeRef.current) {
+        return;
+      }
+      cacheThoughtLevels(modelId, thoughtLevels);
+      cacheFastOptions(modelId, fastOptions);
+      modelConfigCacheActions.set(
+        agentIdRef.current,
+        modelId,
+        thoughtLevels,
+        fastOptions,
+      );
+    },
+    [cacheThoughtLevels, cacheFastOptions],
+  );
+
+  const seedFromPersistentCache = useCallback((forAgentId: string) => {
+    if (!isCursorAgentId(forAgentId)) {
+      setThoughtLevelsByModel({});
+      setFastOptionsByModel({});
+      thoughtLevelsByModelRef.current = {};
+      fastOptionsByModelRef.current = {};
+      return;
+    }
+    const thought: Record<string, SessionOption[]> = {};
+    const fast: Record<string, SessionOption[]> = {};
+    for (const [modelId, entry] of Object.entries(
+      modelConfigCacheActions.getAgent(forAgentId),
+    )) {
+      thought[modelId] = entry.thoughtLevels;
+      fast[modelId] = entry.fastOptions;
+    }
+    setThoughtLevelsByModel(thought);
+    setFastOptionsByModel(fast);
+    thoughtLevelsByModelRef.current = thought;
+    fastOptionsByModelRef.current = fast;
+  }, []);
+
+  const applyProbePrefs = useCallback(
+    (probe: ModelConfigProbe) => {
+      const modelId = probe.modelId;
+      if (
+        probe.currentThoughtLevelId &&
+        probe.thoughtLevels.some(
+          (level) => level.id === probe.currentThoughtLevelId,
+        ) &&
+        !modelThoughtPrefsActions.get(agentId, modelId)
+      ) {
+        modelThoughtPrefsActions.set(
+          agentId,
+          modelId,
+          probe.currentThoughtLevelId,
+        );
+      }
+      if (
+        probe.currentFastId &&
+        probe.fastOptions.some((option) => option.id === probe.currentFastId) &&
+        !modelThoughtPrefsActions.getFast(agentId, modelId)
+      ) {
+        modelThoughtPrefsActions.setFast(
+          agentId,
+          modelId,
+          probe.currentFastId,
+        );
+      }
+    },
+    [agentId],
+  );
+
+  const readCachedSnapshot = useCallback(
+    (modelId: string): ModelConfigSnapshot | null => {
+      const hasThought = Object.prototype.hasOwnProperty.call(
+        thoughtLevelsByModelRef.current,
+        modelId,
+      );
+      const hasFast = Object.prototype.hasOwnProperty.call(
+        fastOptionsByModelRef.current,
+        modelId,
+      );
+      if (hasThought && hasFast) {
+        return {
+          thoughtLevels: thoughtLevelsByModelRef.current[modelId] ?? [],
+          fastOptions: fastOptionsByModelRef.current[modelId] ?? [],
+        };
+      }
+
+      const persisted = modelConfigCacheActions.get(agentId, modelId);
+      if (persisted) {
+        cacheModelConfig(
+          modelId,
+          persisted.thoughtLevels,
+          persisted.fastOptions,
+        );
+        return {
+          thoughtLevels: persisted.thoughtLevels,
+          fastOptions: persisted.fastOptions,
+        };
+      }
+      return null;
+    },
+    [agentId, cacheModelConfig],
+  );
 
   const bootstrap = useCallback(async (signal?: AbortSignal): Promise<"ok" | "auth" | "error"> => {
     setConfig((current) => ({
@@ -78,6 +276,8 @@ export function SessionConfigProvider({
       error: null,
       authChallenge: null,
     }));
+    seedFromPersistentCache(agentId);
+    probeInFlightRef.current.clear();
 
     const runEnsureSession = async () =>
       ensureSession({
@@ -195,6 +395,13 @@ export function SessionConfigProvider({
       if (signal?.aborted) {
         return "error";
       }
+      if (next.currentModelId) {
+        cacheModelConfig(
+          next.currentModelId,
+          next.thoughtLevels,
+          next.fastOptions,
+        );
+      }
       setConfig(next);
       setAgentSessionId(tabId, result.agentSessionId);
       setAgentLoading(tabId, false);
@@ -235,6 +442,8 @@ export function SessionConfigProvider({
     agentId,
     setAgentSessionId,
     setAgentLoading,
+    cacheModelConfig,
+    seedFromPersistentCache,
   ]);
 
   useEffect(() => {
@@ -262,17 +471,25 @@ export function SessionConfigProvider({
     const modelId = config.currentModelId;
     const thoughtId = config.currentThoughtLevelId;
     if (
-      !modelId ||
-      !thoughtId ||
-      config.thoughtLevels.length === 0 ||
-      !config.thoughtLevels.some((level) => level.id === thoughtId)
+      modelId &&
+      thoughtId &&
+      config.thoughtLevels.length > 0 &&
+      config.thoughtLevels.some((level) => level.id === thoughtId) &&
+      !modelThoughtPrefsActions.get(agentId, modelId)
     ) {
-      return;
+      modelThoughtPrefsActions.set(agentId, modelId, thoughtId);
     }
-    if (modelThoughtPrefsActions.get(agentId, modelId)) {
-      return;
+
+    const fastId = config.currentFastId;
+    if (
+      modelId &&
+      fastId &&
+      config.fastOptions.length > 0 &&
+      config.fastOptions.some((option) => option.id === fastId) &&
+      !modelThoughtPrefsActions.getFast(agentId, modelId)
+    ) {
+      modelThoughtPrefsActions.setFast(agentId, modelId, fastId);
     }
-    modelThoughtPrefsActions.set(agentId, modelId, thoughtId);
   }, [
     agentId,
     config.ready,
@@ -280,11 +497,39 @@ export function SessionConfigProvider({
     config.currentModelId,
     config.currentThoughtLevelId,
     config.thoughtLevels,
+    config.currentFastId,
+    config.fastOptions,
+  ]);
+
+  // Keep the live session model cache in sync when thought/fast options change.
+  useEffect(() => {
+    if (!config.ready || config.loading || !config.currentModelId) {
+      return;
+    }
+    cacheModelConfig(
+      config.currentModelId,
+      config.thoughtLevels,
+      config.fastOptions,
+    );
+  }, [
+    cacheModelConfig,
+    config.ready,
+    config.loading,
+    config.currentModelId,
+    config.thoughtLevels,
+    config.fastOptions,
   ]);
 
   const refresh = useCallback(async () => {
     try {
       const next = await getSessionConfig(threadId);
+      if (next.currentModelId) {
+        cacheModelConfig(
+          next.currentModelId,
+          next.thoughtLevels,
+          next.fastOptions,
+        );
+      }
       setConfig(next);
     } catch (error) {
       setConfig((current) => ({
@@ -292,7 +537,84 @@ export function SessionConfigProvider({
         error: error instanceof Error ? error.message : "加载配置失败",
       }));
     }
-  }, [threadId]);
+  }, [threadId, cacheModelConfig]);
+
+  const runBatchProbe = useCallback(
+    async (modelIds: string[]) => {
+      if (!usesPerModelConfigProbeRef.current || modelIds.length === 0) {
+        return;
+      }
+      const probes =
+        modelIds.length === 1
+          ? [await probeModelConfig(threadId, modelIds[0]!)]
+          : await probeModelsConfig(threadId, modelIds);
+      for (const probe of probes) {
+        cacheModelConfig(
+          probe.modelId,
+          probe.thoughtLevels,
+          probe.fastOptions,
+        );
+        applyProbePrefs(probe);
+      }
+    },
+    [threadId, cacheModelConfig, applyProbePrefs],
+  );
+
+  const ensureModelConfigForModel = useCallback(
+    async (modelId: string): Promise<ModelConfigSnapshot> => {
+      // Non-Cursor agents: standard ACP session config is authoritative.
+      if (!usesPerModelConfigProbe) {
+        return {
+          thoughtLevels: config.thoughtLevels,
+          fastOptions: config.fastOptions,
+        };
+      }
+
+      const cached = readCachedSnapshot(modelId);
+      if (cached) {
+        return cached;
+      }
+
+      if (config.currentModelId === modelId) {
+        cacheModelConfig(modelId, config.thoughtLevels, config.fastOptions);
+        return {
+          thoughtLevels: config.thoughtLevels,
+          fastOptions: config.fastOptions,
+        };
+      }
+
+      const inflight = probeInFlightRef.current.get(modelId);
+      if (inflight) {
+        return inflight;
+      }
+
+      const probePromise = (async () => {
+        try {
+          await runBatchProbe([modelId]);
+          return (
+            readCachedSnapshot(modelId) ?? {
+              thoughtLevels: [],
+              fastOptions: [],
+            }
+          );
+        } finally {
+          probeInFlightRef.current.delete(modelId);
+        }
+      })();
+
+      probeInFlightRef.current.set(modelId, probePromise);
+      return probePromise;
+    },
+    [
+      usesPerModelConfigProbe,
+      cacheModelConfig,
+      config.currentModelId,
+      config.thoughtLevels,
+      config.fastOptions,
+      readCachedSnapshot,
+      runBatchProbe,
+    ],
+  );
 
   const changeMode = useCallback(
     async (modeId: string) => {
@@ -339,6 +661,32 @@ export function SessionConfigProvider({
     [threadId, config.thoughtLevelConfigId, config.currentModelId, agentId],
   );
 
+  const changeFast = useCallback(
+    async (value: string) => {
+      const configId = config.fastConfigId;
+      if (!configId) {
+        return;
+      }
+
+      if (config.currentModelId) {
+        modelThoughtPrefsActions.setFast(agentId, config.currentModelId, value);
+      }
+
+      setConfig((current) => ({ ...current, loading: true, error: null }));
+      try {
+        const next = await setConfigOption(threadId, configId, value);
+        setConfig(next);
+      } catch (error) {
+        setConfig((current) => ({
+          ...current,
+          loading: false,
+          error: error instanceof Error ? error.message : "切换 Fast 模式失败",
+        }));
+      }
+    },
+    [threadId, config.fastConfigId, config.currentModelId, agentId],
+  );
+
   const changeModel = useCallback(
     async (modelId: string) => {
       modelThoughtPrefsActions.setPreferredModel(agentId, modelId);
@@ -367,7 +715,6 @@ export function SessionConfigProvider({
             (level) => level.id === next.currentThoughtLevelId,
           )
         ) {
-          // Seed preference from agent default when we have no saved mapping.
           modelThoughtPrefsActions.set(
             agentId,
             modelId,
@@ -375,7 +722,36 @@ export function SessionConfigProvider({
           );
         }
 
+        const preferredFast = modelThoughtPrefsActions.getFast(agentId, modelId);
+        const fastConfigId = next.fastConfigId;
+        const canApplyFast =
+          !!preferredFast &&
+          !!fastConfigId &&
+          next.fastOptions.some((option) => option.id === preferredFast) &&
+          next.currentFastId !== preferredFast;
+
+        if (canApplyFast && preferredFast && fastConfigId) {
+          next = await setConfigOption(threadId, fastConfigId, preferredFast);
+        } else if (
+          !preferredFast &&
+          next.currentFastId &&
+          next.fastOptions.some((option) => option.id === next.currentFastId)
+        ) {
+          modelThoughtPrefsActions.setFast(
+            agentId,
+            modelId,
+            next.currentFastId,
+          );
+        }
+
         setConfig(next);
+        if (next.currentModelId) {
+          cacheModelConfig(
+            next.currentModelId,
+            next.thoughtLevels,
+            next.fastOptions,
+          );
+        }
       } catch (error) {
         setConfig((current) => ({
           ...current,
@@ -384,25 +760,35 @@ export function SessionConfigProvider({
         }));
       }
     },
-    [threadId, agentId],
+    [threadId, agentId, cacheModelConfig],
   );
 
   const value = useMemo(
     () => ({
       config,
       agentId,
+      usesPerModelConfigProbe,
+      thoughtLevelsByModel,
+      fastOptionsByModel,
+      ensureModelConfigForModel,
       changeMode,
       changeModel,
       changeThoughtLevel,
+      changeFast,
       refresh,
       retryAfterAuth,
     }),
     [
       config,
       agentId,
+      usesPerModelConfigProbe,
+      thoughtLevelsByModel,
+      fastOptionsByModel,
+      ensureModelConfigForModel,
       changeMode,
       changeModel,
       changeThoughtLevel,
+      changeFast,
       refresh,
       retryAfterAuth,
     ],

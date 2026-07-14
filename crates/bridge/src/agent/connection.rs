@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientRequest, ContentBlock,
+    AuthenticateRequest, CancelNotification, ClientCapabilities, ClientRequest, ContentBlock,
     CreateTerminalResponse, ExtRequest, Implementation, InitializeRequest,
     KillTerminalResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
     NewSessionResponse, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use super::auth::{
     auth_methods_info, looks_like_auth_error, pick_auth_method_id, AuthRequiredPayload,
 };
-use super::command::{prefer_node_entry, resolve_agent_command};
+use super::command::{is_env_assignment, prefer_node_entry, resolve_agent_command};
 use super::session_init::{
     canonicalize_cwd, current_mode_id, modes_to_json, parse_config_options, parse_mcp_servers,
     ParsedConfigOptions,
@@ -222,8 +222,55 @@ pub struct AgentInitResult {
     pub thought_levels: Option<Vec<Value>>,
     pub thought_level_config_id: Option<String>,
     pub current_thought_level_id: Option<String>,
+    pub fast_options: Option<Vec<Value>>,
+    pub fast_config_id: Option<String>,
+    pub current_fast_id: Option<String>,
     pub current_model_id: Option<String>,
     pub mode_config_id: Option<String>,
+}
+
+/// Cursor ACP only exposes thought/fast/variant picks when the client advertises
+/// `_meta.parameterizedModelPicker`. Other agents ignore unknown `_meta` keys;
+/// we still gate on Cursor argv so non-Cursor agents keep the default handshake.
+pub(crate) fn wants_parameterized_model_picker(command: &[String]) -> bool {
+    let bins: Vec<String> = command
+        .iter()
+        .filter(|part| !is_env_assignment(part))
+        .map(|part| {
+            Path::new(part)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(part.as_str())
+                .to_ascii_lowercase()
+                .trim_end_matches(".exe")
+                .trim_end_matches(".cmd")
+                .to_string()
+        })
+        .collect();
+
+    if bins
+        .iter()
+        .any(|bin| bin == "cursor-agent" || bin == "cursor")
+    {
+        return true;
+    }
+
+    // Cursor also ships as `agent acp`.
+    bins.first().map(String::as_str) == Some("agent") && bins.iter().any(|bin| bin == "acp")
+}
+
+fn build_initialize_request(command: &[String]) -> InitializeRequest {
+    let mut request = InitializeRequest::new(ProtocolVersion::V1)
+        .client_info(Implementation::new("acp-to-agui", "0.1.0"));
+
+    if wants_parameterized_model_picker(command) {
+        let mut meta = serde_json::Map::new();
+        meta.insert("parameterizedModelPicker".to_string(), Value::Bool(true));
+        request = request.client_capabilities(ClientCapabilities::new().meta(meta));
+        tracing::info!("advertising Cursor parameterizedModelPicker client capability");
+    }
+
+    request
 }
 
 enum AgentCommand {
@@ -574,8 +621,7 @@ fn merge_init_config(
     }
 }
 
-fn session_result_from_load(session_id: String, resp: LoadSessionResponse) -> AgentInitResult {
-    let config = merge_init_config(resp.config_options.as_deref(), resp.modes.as_ref());
+fn session_result_from_parsed(session_id: String, config: ParsedConfigOptions) -> AgentInitResult {
     AgentInitResult {
         agent_session_id: session_id,
         modes: config.modes,
@@ -584,24 +630,22 @@ fn session_result_from_load(session_id: String, resp: LoadSessionResponse) -> Ag
         thought_levels: config.thought_levels,
         thought_level_config_id: config.thought_level_config_id,
         current_thought_level_id: config.current_thought_level_id,
+        fast_options: config.fast_options,
+        fast_config_id: config.fast_config_id,
+        current_fast_id: config.current_fast_id,
         current_model_id: config.current_model_id,
         mode_config_id: config.mode_config_id,
     }
 }
 
+fn session_result_from_load(session_id: String, resp: LoadSessionResponse) -> AgentInitResult {
+    let config = merge_init_config(resp.config_options.as_deref(), resp.modes.as_ref());
+    session_result_from_parsed(session_id, config)
+}
+
 fn session_result_from_new(resp: NewSessionResponse) -> AgentInitResult {
     let config = merge_init_config(resp.config_options.as_deref(), resp.modes.as_ref());
-    AgentInitResult {
-        agent_session_id: resp.session_id.to_string(),
-        modes: config.modes,
-        models: config.models,
-        current_mode_id: config.current_mode_id,
-        thought_levels: config.thought_levels,
-        thought_level_config_id: config.thought_level_config_id,
-        current_thought_level_id: config.current_thought_level_id,
-        current_model_id: config.current_model_id,
-        mode_config_id: config.mode_config_id,
-    }
+    session_result_from_parsed(resp.session_id.to_string(), config)
 }
 
 async fn send_ext_command(
@@ -876,10 +920,7 @@ async fn run_agent_connection(
         )
         .connect_with(spawned, move |connection: ConnectionTo<Agent>| async move {
             let init_response = connection
-                .send_request(
-                    InitializeRequest::new(ProtocolVersion::V1)
-                        .client_info(Implementation::new("acp-to-agui", "0.1.0")),
-                )
+                .send_request(build_initialize_request(&command))
                 .block_task()
                 .await?;
 
@@ -1093,5 +1134,31 @@ mod tests {
         );
         assert_eq!(auth_timeout_for("cursor_login"), AUTH_TIMEOUT_DEFAULT);
         assert_eq!(auth_timeout_for("qoder-oauth"), AUTH_TIMEOUT_BROWSER);
+    }
+
+    #[test]
+    fn parameterized_model_picker_only_for_cursor() {
+        assert!(wants_parameterized_model_picker(&[
+            "cursor-agent".into(),
+            "acp".into()
+        ]));
+        assert!(wants_parameterized_model_picker(&[
+            "/usr/local/bin/cursor-agent".into(),
+            "acp".into()
+        ]));
+        assert!(wants_parameterized_model_picker(&[
+            "agent".into(),
+            "acp".into()
+        ]));
+        assert!(!wants_parameterized_model_picker(&[
+            "opencode".into(),
+            "acp".into()
+        ]));
+        assert!(!wants_parameterized_model_picker(&[
+            "claude-agent-acp".into()
+        ]));
+        assert!(!wants_parameterized_model_picker(&[
+            "codex-acp".into()
+        ]));
     }
 }

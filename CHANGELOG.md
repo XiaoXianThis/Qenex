@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-07-14 - v0.2.0 Host Theme, Chat UX, Preferences
+
+### Added
+
+#### 🎨 Host theme sync
+- Theme source **「跟随 IDE」** (`themeSource: followHost`); layout theme panel supports preset / custom / follow host; style persist schema v4
+- **VS Code**: extension pushes light/dark (incl. high contrast); webview samples `--vscode-*` surface colors and syncs on theme change
+- **JetBrains**: `HostThemeCollector` samples LaF / `UIManager` colors into CEF; `get-host-theme` / `theme-update` bridge to webview
+- `@qenex/platform` `HostThemeSnapshot`; core `host-theme.ts` merges host colors into light/dark presets
+
+#### ⚡ Session & model config
+- **Fast** option for Cursor Agent: Bridge parses `fast_options` from ACP `sessionOptions`; SessionConfigBar Fast toggle per model
+- `probe-model-config` / `probe-models-config` APIs; `model-config-cache-store` (12h); per-model fast prefs in thought prefs store
+
+#### 💬 Chat & tool-call UI
+- Cursor-style **tool-call view**: read / write / edit / grep / shell; edit/write diff preview with +/- stats; shell command summary
+- Shared collapsible parts: shell/edit/write preview ~5 lines by default; Reasoning auto-expand while streaming then collapse
+- Markdown code blocks use **Shiki** (`react-shiki`); skip tokenization while streaming; `light-dark()` after finish
+
+#### ⚙️ Preferences & layout
+- **Approval prefs**: global auto-allow (prefer `allow_always`); hide approval overlay when on
+- **UI prefs**: frosted composer overlay so messages scroll under the bottom input
+- **Layout visibility**: hide empty rows/cols when no visible child panels (non-edit mode)
+- Component style edit: type-level vs instance-level scope
+- `AppErrorBoundary` for webview / JCEF render errors (copyable error panel)
+- `AgentIcon` local SVG rendering with contrast-aware coloring
+
+### Changed
+
+- JetBrains webview bridge: `waitForBridge` + `qenex-bridge-injected` to fix CEF inject vs React hydrate race
+- Bridge **rewind** marks `needs_fresh_session` and warms on next ensure/hydrate instead of cold ACP sync (faster undo)
+- Approval button labels prefer ACP `kind` mapping over agent English `name` strings
+- Reset-app flow also clears `model-config-cache` / `approval-prefs` / `ui-prefs`
+
+### Fixed
+
+- `allow_always` no longer mislabeled as one-time allow
+- Empty layout rows/cols no longer leave blank space when all panels hidden
+- Concurrent model-config probe returns session busy (409) instead of colliding with active session
+
+### Breaking Changes
+None.
+
 ## 2026-07-13 - Windows Agent Launch, Spawn Diagnostics, Approval UX
 
 ### Added

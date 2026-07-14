@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import type { QenexHost } from "@qenex/platform";
+import { AppErrorBoundary } from "../components/AppErrorBoundary.tsx";
 import {
   clearBridgeHost,
   setBridgeHost,
@@ -29,6 +30,18 @@ import {
   hydrateModelThoughtPrefsStore,
   startModelThoughtPrefsPersist,
 } from "../store/model-thought-prefs-store.ts";
+import {
+  hydrateModelConfigCacheStore,
+  startModelConfigCachePersist,
+} from "../store/model-config-cache-store.ts";
+import {
+  hydrateApprovalPrefsStore,
+  startApprovalPrefsPersist,
+} from "../store/approval-prefs-store.ts";
+import {
+  hydrateUiPrefsStore,
+  startUiPrefsPersist,
+} from "../store/ui-prefs-store.ts";
 import {
   hydrateStyleStore,
   startStylePersist,
@@ -65,33 +78,46 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     let stopLayoutPersist: (() => void) | undefined;
     let stopStylePersist: (() => void) | undefined;
     let stopModelThoughtPrefsPersist: (() => void) | undefined;
+    let stopModelConfigCachePersist: (() => void) | undefined;
+    let stopApprovalPrefsPersist: (() => void) | undefined;
+    let stopUiPrefsPersist: (() => void) | undefined;
 
     void (async () => {
-      // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
-      await hydrateAgentsStore();
-      // Best-effort: merge PATH/vendor-ready agents into presets.
       try {
-        const discovered = await discoverLocalAgents(false);
-        agentsActions.mergeDetectedAgents(discovered.agents);
-      } catch {
-        // Bridge may be starting; ignore discover failures at hydrate time.
-      }
-      await Promise.all([
-        hydrateTabsStore(),
-        hydrateLayoutStore(),
-        hydrateStyleStore(),
-        hydrateModelThoughtPrefsStore(),
-      ]);
-      syncPreferredAgentAfterHydrate();
+        // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
+        await hydrateAgentsStore();
+        // Best-effort: merge PATH/vendor-ready agents into presets.
+        try {
+          const discovered = await discoverLocalAgents(false);
+          agentsActions.mergeDetectedAgents(discovered.agents);
+        } catch {
+          // Bridge may be starting; ignore discover failures at hydrate time.
+        }
+        await Promise.all([
+          hydrateTabsStore(),
+          hydrateLayoutStore(),
+          hydrateStyleStore(),
+          hydrateModelThoughtPrefsStore(),
+          hydrateModelConfigCacheStore(),
+          hydrateApprovalPrefsStore(),
+          hydrateUiPrefsStore(),
+        ]);
+        syncPreferredAgentAfterHydrate();
 
-      stopAgentsPersist = startAgentsPersist();
-      stopTabsPersist = startTabsPersist();
-      stopLayoutPersist = startLayoutPersist();
-      stopStylePersist = startStylePersist();
-      stopModelThoughtPrefsPersist = startModelThoughtPrefsPersist();
-      void tabsActions.ensureInitialTab().finally(() => {
+        stopAgentsPersist = startAgentsPersist();
+        stopTabsPersist = startTabsPersist();
+        stopLayoutPersist = startLayoutPersist();
+        stopStylePersist = startStylePersist();
+        stopModelThoughtPrefsPersist = startModelThoughtPrefsPersist();
+        stopModelConfigCachePersist = startModelConfigCachePersist();
+        stopApprovalPrefsPersist = startApprovalPrefsPersist();
+        stopUiPrefsPersist = startUiPrefsPersist();
+        await tabsActions.ensureInitialTab();
+      } catch (error) {
+        console.error("[qenex] host hydrate failed:", error);
+      } finally {
         setHydrated(true);
-      });
+      }
     })();
 
     return () => {
@@ -100,19 +126,36 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
       stopLayoutPersist?.();
       stopStylePersist?.();
       stopModelThoughtPrefsPersist?.();
+      stopModelConfigCachePersist?.();
+      stopApprovalPrefsPersist?.();
+      stopUiPrefsPersist?.();
       clearBridgeHost();
       clearHostPersistStorage();
       setHydrated(false);
     };
   }, [host]);
 
-  if (!hydrated) {
-    return null;
-  }
-
-  return (
+  const body = !hydrated ? (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100%",
+        width: "100%",
+        background: "var(--background, transparent)",
+        color: "var(--foreground, #888)",
+        fontFamily: "system-ui, sans-serif",
+        fontSize: 13,
+      }}
+    >
+      Loading Qenex…
+    </div>
+  ) : (
     <HostContext.Provider value={host}>{children}</HostContext.Provider>
   );
+
+  return <AppErrorBoundary label="Qenex">{body}</AppErrorBoundary>;
 }
 
 export function useHost(): QenexHost {

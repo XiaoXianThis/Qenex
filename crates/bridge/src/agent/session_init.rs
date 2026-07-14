@@ -94,6 +94,11 @@ fn is_thought_level_option(opt: &SessionConfigOption) -> bool {
     )
 }
 
+/// Cursor parameterized picker exposes Fast as a standalone select (id=`fast`).
+fn is_fast_option(opt: &SessionConfigOption) -> bool {
+    opt.id.to_string().eq_ignore_ascii_case("fast")
+}
+
 fn extract_select_config(
     config_options: Option<&[SessionConfigOption]>,
     predicate: impl Fn(&SessionConfigOption) -> bool,
@@ -144,6 +149,9 @@ pub struct ParsedConfigOptions {
     pub thought_levels: Option<Vec<Value>>,
     pub current_thought_level_id: Option<String>,
     pub thought_level_config_id: Option<String>,
+    pub fast_options: Option<Vec<Value>>,
+    pub current_fast_id: Option<String>,
+    pub fast_config_id: Option<String>,
 }
 
 pub fn parse_config_options(
@@ -152,6 +160,7 @@ pub fn parse_config_options(
     let model = extract_select_config(config_options, is_model_option);
     let mode = extract_select_config(config_options, is_mode_option);
     let thought = extract_select_config(config_options, is_thought_level_option);
+    let fast = extract_select_config(config_options, is_fast_option);
 
     ParsedConfigOptions {
         from_full_config: config_options.is_some(),
@@ -168,6 +177,11 @@ pub fn parse_config_options(
         thought_level_config_id: thought
             .as_ref()
             .map(|snapshot| snapshot.config_id.clone()),
+        fast_options: fast.as_ref().map(|snapshot| snapshot.options.clone()),
+        current_fast_id: fast
+            .as_ref()
+            .and_then(|snapshot| snapshot.current_value.clone()),
+        fast_config_id: fast.as_ref().map(|snapshot| snapshot.config_id.clone()),
     }
 }
 
@@ -182,6 +196,13 @@ pub fn extract_thought_levels(
     config_options: Option<&[SessionConfigOption]>,
 ) -> Option<SelectConfigSnapshot> {
     extract_select_config(config_options, is_thought_level_option)
+}
+
+/// Extract Cursor Fast mode options from session `config_options`.
+pub fn extract_fast_options(
+    config_options: Option<&[SessionConfigOption]>,
+) -> Option<SelectConfigSnapshot> {
+    extract_select_config(config_options, is_fast_option)
 }
 
 fn select_options_to_models(options: &SessionConfigSelectOptions) -> Vec<Value> {
@@ -377,5 +398,66 @@ mod tests {
     fn parse_config_options_none_is_not_full_config() {
         let parsed = parse_config_options(None);
         assert!(!parsed.from_full_config);
+    }
+
+    #[test]
+    fn extract_fast_option_by_id() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigId, SessionConfigSelectOption, SessionConfigSelectOptions,
+            SessionConfigValueId,
+        };
+
+        let opt = SessionConfigOption::select(
+            SessionConfigId::new("fast"),
+            "Fast",
+            SessionConfigValueId::new("false"),
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("false"), "Off"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("true"), "On"),
+            ]),
+        );
+
+        let snapshot = extract_fast_options(Some(&[opt])).expect("fast options");
+        assert_eq!(snapshot.config_id, "fast");
+        assert_eq!(snapshot.current_value.as_deref(), Some("false"));
+        assert_eq!(snapshot.options.len(), 2);
+
+        let parsed = parse_config_options(Some(&[SessionConfigOption::select(
+            SessionConfigId::new("fast"),
+            "Fast",
+            SessionConfigValueId::new("true"),
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new(SessionConfigValueId::new("false"), "Off"),
+                SessionConfigSelectOption::new(SessionConfigValueId::new("true"), "On"),
+            ]),
+        )]));
+        assert_eq!(parsed.fast_config_id.as_deref(), Some("fast"));
+        assert_eq!(parsed.current_fast_id.as_deref(), Some("true"));
+        assert!(parsed.thought_levels.is_none());
+    }
+
+    #[test]
+    fn parse_config_options_full_config_omits_fast_when_absent() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigId, SessionConfigSelectOption, SessionConfigSelectOptions,
+            SessionConfigValueId,
+        };
+
+        let mut model = SessionConfigOption::select(
+            SessionConfigId::new("model"),
+            "Model",
+            SessionConfigValueId::new("composer-2.5"),
+            SessionConfigSelectOptions::Ungrouped(vec![SessionConfigSelectOption::new(
+                SessionConfigValueId::new("composer-2.5"),
+                "Composer 2.5",
+            )]),
+        );
+        model.category = Some(SessionConfigOptionCategory::Model);
+
+        let parsed = parse_config_options(Some(&[model]));
+        assert!(parsed.from_full_config);
+        assert!(parsed.fast_options.is_none());
+        assert!(parsed.fast_config_id.is_none());
+        assert!(parsed.current_fast_id.is_none());
     }
 }

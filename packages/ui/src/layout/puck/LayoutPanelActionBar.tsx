@@ -27,10 +27,17 @@ export const LayoutPanelActionBar: FC<LayoutPanelActionBarProps> = ({
   children,
 }) => {
   const selectedType = usePuck((s) => s.selectedItem?.type ?? null);
+  const selectedInstanceId = usePuck((s) => {
+    const id = s.selectedItem?.props?.id;
+    return typeof id === "string" ? id : null;
+  });
   const panelId = selectedType
     ? (panelIdFromPuckType(selectedType) as PanelId | null)
     : null;
-  const styleTarget = resolveStyleComponentTarget(selectedType);
+  const styleSession = resolveStyleComponentTarget(
+    selectedType,
+    selectedInstanceId,
+  );
 
   const visible = useLayoutStore((s) =>
     panelId ? s.panels[panelId].visible : true,
@@ -54,12 +61,12 @@ export const LayoutPanelActionBar: FC<LayoutPanelActionBarProps> = ({
         {label ? <ActionBar.Label label={label} /> : null}
       </ActionBar.Group>
       <ActionBar.Group>
-        {styleTarget ? (
+        {styleSession ? (
           <ActionBar.Action
             label="编辑样式"
             onClick={(e) => {
               stop(e);
-              styleActions.openComponentStyleEdit(styleTarget);
+              styleActions.openComponentStyleEdit(styleSession);
             }}
           >
             <PaintbrushVertical size={16} />

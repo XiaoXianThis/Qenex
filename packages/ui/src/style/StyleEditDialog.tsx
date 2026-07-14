@@ -75,7 +75,7 @@ export const StyleEditDialog: FC = () => {
           <DialogTitle>CSS 编辑</DialogTitle>
           <DialogDescription>
             上方为主题 CSS（随主题切换）；下方为自定义 CSS（不随主题变化，优先级更高）。
-            均支持 :root 与 [data-layout-panel]。
+            均支持 :root、[data-layout-panel]、[data-layout-component] 与 [data-layout-instance]。
           </DialogDescription>
         </DialogHeader>
 

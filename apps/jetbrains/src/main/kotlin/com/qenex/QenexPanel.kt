@@ -1,11 +1,13 @@
 package com.qenex
 
+import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.ui.components.JBLabel
@@ -35,6 +37,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
     private val log = Logger.getInstance(QenexPanel::class.java)
     private val json = Json { ignoreUnknownKeys = true }
     private var bridgeReadySent = false
+    private val panelDisposable = Disposer.newDisposable("QenexPanel")
 
     private val browser: JBCefBrowserBase? = if (JBCefApp.isSupported()) {
         createBrowser()
@@ -46,11 +49,19 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
 
     init {
         border = JBUI.Borders.empty()
+        isOpaque = true
+        applyIdeBackground()
         if (browser == null || jsQuery == null) {
             showMessage("JCEF is not supported in this IDE runtime.")
         } else {
             try {
                 setupBrowser(browser as JBCefBrowser, jsQuery)
+                ApplicationManager.getApplication().messageBus
+                    .connect(panelDisposable)
+                    .subscribe(LafManagerListener.TOPIC, LafManagerListener {
+                        applyIdeBackground()
+                        postThemeUpdate()
+                    })
             } catch (error: Exception) {
                 log.error("Failed to initialize Qenex webview", error)
                 showMessage("Qenex failed to load: ${error.message ?: error}")
@@ -59,6 +70,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
     }
 
     fun disposePanel() {
+        Disposer.dispose(panelDisposable)
         WebviewHttpServer.stop()
         browser?.dispose()
     }
@@ -79,7 +91,42 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
         if (!SystemInfo.isLinux) {
             builder.setOffScreenRendering(false)
         }
-        return builder.build()
+        val created = builder.build()
+        applyIdeBackground(created)
+        return created
+    }
+
+    /** 面板 / Swing 包装 / CEF 默认页底色 → 当前 IDE 主题背景。 */
+    private fun applyIdeBackground(target: JBCefBrowser? = browser as? JBCefBrowser) {
+        val bg = HostThemeCollector.panelBackground()
+        val css = HostThemeCollector.toCss(bg)
+        background = bg
+        target?.component?.background = bg
+        target?.setPageBackgroundColor(css)
+        injectDocumentBackground(css)
+    }
+
+    private fun injectDocumentBackground(cssColor: String = HostThemeCollector.panelBackgroundCss()) {
+        val browser = browser ?: return
+        val url = browser.cefBrowser.url ?: return
+        if (url.isBlank() || url == "about:blank") return
+        val safe = cssColor.replace("\\", "\\\\").replace("'", "\\'")
+        browser.cefBrowser.executeJavaScript(
+            """
+            (function() {
+              var c = '$safe';
+              document.documentElement.style.background = c;
+              document.documentElement.style.backgroundColor = c;
+              document.documentElement.style.setProperty('--background', c);
+              if (document.body) {
+                document.body.style.background = c;
+                document.body.style.backgroundColor = c;
+              }
+            })();
+            """.trimIndent(),
+            url,
+            0,
+        )
     }
 
     private fun setupBrowser(browser: JBCefBrowser, jsQuery: JBCefJSQuery) {
@@ -96,11 +143,13 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
                     return
                 }
                 log.info("Qenex webview loaded: ${frame.url} ($httpStatusCode)")
+                injectDocumentBackground()
                 injectBridge(frame)
             }
         }, browser.cefBrowser)
 
         removeAll()
+        applyIdeBackground(browser)
         add(browser.component, BorderLayout.CENTER)
         revalidate()
         repaint()
@@ -197,7 +246,26 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
                     },
                 )
             }
+            "get-host-theme" -> {
+                val requestId = element.requestId() ?: return
+                postToWebview(
+                    buildJsonObject {
+                        put("type", "host-theme-result")
+                        put("requestId", requestId)
+                        put("theme", HostThemeCollector.snapshotJson())
+                    },
+                )
+            }
         }
+    }
+
+    private fun postThemeUpdate() {
+        postToWebview(
+            buildJsonObject {
+                put("type", "theme-update")
+                put("theme", HostThemeCollector.snapshotJson())
+            },
+        )
     }
 
     private fun sendBridgeReady() {
@@ -223,6 +291,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
                     }
                 },
             )
+            postThemeUpdate()
         } catch (error: Exception) {
             log.error("Failed to start Qenex bridge", error)
             postToWebview(

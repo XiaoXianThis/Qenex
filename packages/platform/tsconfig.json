@@ -1,4 +1,4 @@
 {
-  "extends": "@qenex/tsconfig/react.json",
+  "extends": "../tsconfig/react.json",
   "include": ["src"]
 }

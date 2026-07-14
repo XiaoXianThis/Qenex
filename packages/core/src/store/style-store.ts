@@ -1,5 +1,6 @@
 import { proxy } from "valtio";
 import { useSnapshot } from "valtio/react";
+import type { HostThemeSnapshot } from "@qenex/platform";
 import { themeToCss } from "../style/css-theme.ts";
 import {
   cloneDefaultTheme,
@@ -7,16 +8,22 @@ import {
   DEFAULT_CUSTOM_CSS,
   DEFAULT_STYLE_CSS,
 } from "../style/defaults.ts";
+import { mapHostThemeToCss } from "../style/host-theme.ts";
 import {
   STYLE_THEME_PRESETS,
   type StyleThemePresetId,
 } from "../style/presets.ts";
-import type { StyleComponentTarget } from "../style/panel-css.ts";
+import type {
+  StyleComponentEditSession,
+  StyleComponentScope,
+} from "../style/panel-css.ts";
 import type {
   DeepPartialTheme,
   StylePersistedState,
   StylePersistedStateV1,
   StylePersistedStateV2,
+  StylePersistedStateV3,
+  ThemeSource,
   ThemeTokens,
 } from "../style/types.ts";
 import {
@@ -34,7 +41,12 @@ export type StyleState = StylePersistedState & {
   draftThemeCss: string | null;
   draftCustomCss: string | null;
   /** 布局编辑中：单独编辑某组件 CSS（不持久化） */
-  componentStyleEdit: StyleComponentTarget | null;
+  componentStyleEdit: StyleComponentEditSession | null;
+  /**
+   * followHost 时由宿主推送的明暗（供 color-scheme；不持久化）。
+   * 未收到快照前为 null。
+   */
+  hostThemeKind: HostThemeSnapshot["kind"] | null;
 };
 
 function mergeTheme(
@@ -67,77 +79,80 @@ function isThemeTokens(value: unknown): value is ThemeTokens {
   );
 }
 
-function migratePersistedStyle(persisted: unknown): StylePersistedState {
+function toV4(
+  themeCss: string,
+  customCss: string,
+  themeSource: ThemeSource = "preset",
+): StylePersistedState {
+  return {
+    schemaVersion: 4,
+    themeSource,
+    themeCss,
+    customCss,
+  };
+}
+
+/** @internal 测试与 hydrate 共用 */
+export function migratePersistedStyle(persisted: unknown): StylePersistedState {
   if (!persisted || typeof persisted !== "object") {
     return createDefaultStyleState();
   }
 
-  // Intersection of v1/v2/v3 collapses to `never` (schemaVersion literals conflict).
   const record = persisted as Partial<StylePersistedState> &
+    Partial<StylePersistedStateV3> &
     Partial<StylePersistedStateV2> &
     Partial<StylePersistedStateV1> & {
       themeCss?: string;
       customCss?: string;
       css?: string;
       theme?: ThemeTokens;
+      themeSource?: ThemeSource;
     };
+
+  if (
+    record.schemaVersion === 4 &&
+    typeof record.themeCss === "string" &&
+    typeof record.customCss === "string"
+  ) {
+    const themeSource: ThemeSource =
+      record.themeSource === "followHost" ? "followHost" : "preset";
+    return toV4(record.themeCss, record.customCss, themeSource);
+  }
 
   if (
     record.schemaVersion === 3 &&
     typeof record.themeCss === "string" &&
     typeof record.customCss === "string"
   ) {
-    return {
-      schemaVersion: 3,
-      themeCss: record.themeCss,
-      customCss: record.customCss,
-    };
+    return toV4(record.themeCss, record.customCss);
   }
 
-  // v2：整段 css 视为主题 CSS，自定义为空
   if (record.schemaVersion === 2 && typeof record.css === "string") {
-    return {
-      schemaVersion: 3,
-      themeCss: record.css,
-      customCss: DEFAULT_CUSTOM_CSS,
-    };
+    return toV4(record.css, DEFAULT_CUSTOM_CSS);
   }
 
   if (record.schemaVersion === 1 && isThemeTokens(record.theme)) {
     const theme = mergeTheme(cloneDefaultTheme(), record.theme);
-    return {
-      schemaVersion: 3,
-      themeCss: themeToCss(theme),
-      customCss: DEFAULT_CUSTOM_CSS,
-    };
+    return toV4(themeToCss(theme), DEFAULT_CUSTOM_CSS);
   }
 
   if (typeof record.themeCss === "string") {
-    return {
-      schemaVersion: 3,
-      themeCss: record.themeCss,
-      customCss:
-        typeof record.customCss === "string"
-          ? record.customCss
-          : DEFAULT_CUSTOM_CSS,
-    };
+    return toV4(
+      record.themeCss,
+      typeof record.customCss === "string"
+        ? record.customCss
+        : DEFAULT_CUSTOM_CSS,
+      record.themeSource === "followHost" ? "followHost" : "preset",
+    );
   }
 
   if (typeof record.css === "string") {
-    return {
-      schemaVersion: 3,
-      themeCss: record.css,
-      customCss: DEFAULT_CUSTOM_CSS,
-    };
+    return toV4(record.css, DEFAULT_CUSTOM_CSS);
   }
 
   if (isThemeTokens(record.theme)) {
     const theme = mergeTheme(cloneDefaultTheme(), record.theme);
-    return {
-      schemaVersion: 3,
-      themeCss: themeToCss(theme),
-      customCss: DEFAULT_CUSTOM_CSS,
-    };
+    return toV4(themeToCss(theme), DEFAULT_CUSTOM_CSS);
   }
 
   return createDefaultStyleState();
@@ -150,12 +165,12 @@ export const styleStore = proxy<StyleState>({
   draftThemeCss: null,
   draftCustomCss: null,
   componentStyleEdit: null,
+  hostThemeKind: null,
 });
 
 export const styleActions = {
   setEditMode(editMode: boolean) {
     if (editMode) {
-      // 允许在布局编辑中打开 CSS 编辑，不再互斥退出布局
       styleStore.discardEditDraft = false;
       styleStore.draftThemeCss = styleStore.themeCss;
       styleStore.draftCustomCss = styleStore.customCss;
@@ -163,10 +178,15 @@ export const styleActions = {
       return;
     }
 
-    // 完成：提交草稿
     if (!styleStore.discardEditDraft) {
       if (styleStore.draftThemeCss != null) {
+        const themeChanged = styleStore.draftThemeCss !== styleStore.themeCss;
         styleStore.themeCss = styleStore.draftThemeCss;
+        // 手动改了主题 CSS 则退出跟随 IDE（仅改 customCss 仍保持 followHost）
+        if (themeChanged && styleStore.themeSource === "followHost") {
+          styleStore.themeSource = "preset";
+          styleStore.hostThemeKind = null;
+        }
       }
       if (styleStore.draftCustomCss != null) {
         styleStore.customCss = styleStore.draftCustomCss;
@@ -178,7 +198,6 @@ export const styleActions = {
     styleStore.editMode = false;
   },
 
-  /** 丢弃本次编辑草稿并退出编辑模式 */
   cancelEditMode() {
     styleStore.discardEditDraft = true;
     styleStore.draftThemeCss = null;
@@ -200,10 +219,6 @@ export const styleActions = {
     styleStore.draftCustomCss = css;
   },
 
-  /**
-   * 更新自定义 CSS。
-   * 样式编辑模式中写草稿；否则直接写入持久化字段（供组件级 CSS 弹窗使用）。
-   */
   setCustomCss(css: string) {
     if (styleStore.editMode) {
       styleStore.draftCustomCss = css;
@@ -212,34 +227,62 @@ export const styleActions = {
     styleStore.customCss = css;
   },
 
-  openComponentStyleEdit(target: StyleComponentTarget) {
-    styleStore.componentStyleEdit = target;
+  openComponentStyleEdit(session: StyleComponentEditSession) {
+    styleStore.componentStyleEdit = session;
+  },
+
+  setComponentStyleScope(scope: StyleComponentScope) {
+    const session = styleStore.componentStyleEdit;
+    if (!session) return;
+    if (scope === "instance" && !session.instanceTarget) return;
+    styleStore.componentStyleEdit = { ...session, activeScope: scope };
   },
 
   closeComponentStyleEdit() {
     styleStore.componentStyleEdit = null;
   },
 
-  /** 恢复主题默认 CSS；自定义 CSS 清空 */
   resetToDefault() {
     if (styleStore.editMode) {
       styleStore.draftThemeCss = DEFAULT_STYLE_CSS;
       styleStore.draftCustomCss = DEFAULT_CUSTOM_CSS;
       return;
     }
+    styleStore.themeSource = "preset";
+    styleStore.hostThemeKind = null;
     styleStore.themeCss = DEFAULT_STYLE_CSS;
     styleStore.customCss = DEFAULT_CUSTOM_CSS;
   },
 
-  /** 应用亮/暗主题预设（只改主题 CSS，不动自定义 CSS） */
+  /** 应用亮/暗主题预设（退出跟随 IDE） */
   applyThemePreset(id: StyleThemePresetId) {
     const preset = STYLE_THEME_PRESETS[id];
     if (!preset) return;
+    styleStore.themeSource = "preset";
+    styleStore.hostThemeKind = null;
     if (styleStore.editMode) {
       styleStore.draftThemeCss = preset.css;
       return;
     }
     styleStore.themeCss = preset.css;
+  },
+
+  /** 开启「跟随 IDE」；真正的色值由 applyHostTheme / HostThemeSync 写入 */
+  enableFollowHost() {
+    styleStore.themeSource = "followHost";
+  },
+
+  /**
+   * 应用宿主主题快照。仅在 `themeSource === "followHost"` 且非编辑模式时生效。
+   */
+  applyHostTheme(snapshot: HostThemeSnapshot) {
+    if (styleStore.themeSource !== "followHost") return;
+    if (styleStore.editMode) {
+      styleStore.hostThemeKind = snapshot.kind;
+      return;
+    }
+    styleStore.hostThemeKind = snapshot.kind;
+    styleStore.themeCss = mapHostThemeToCss(snapshot);
   },
 };
 
@@ -248,18 +291,26 @@ export function useStyleStore<T>(selector: (state: StyleState) => T): T {
   return selector(snap);
 }
 
-/** 当前主题 CSS（编辑中用 draft） */
 export function selectActiveThemeCss(state: StyleState): string {
   if (state.editMode && state.draftThemeCss != null) return state.draftThemeCss;
   return state.themeCss;
 }
 
-/** 当前自定义 CSS（编辑中用 draft） */
 export function selectActiveCustomCss(state: StyleState): string {
   if (state.editMode && state.draftCustomCss != null) {
     return state.draftCustomCss;
   }
   return state.customCss;
+}
+
+export function selectThemeSource(state: StyleState): ThemeSource {
+  return state.themeSource;
+}
+
+export function selectHostThemeKind(
+  state: StyleState,
+): HostThemeSnapshot["kind"] | null {
+  return state.hostThemeKind;
 }
 
 /** @deprecated 使用 selectActiveThemeCss */
@@ -278,6 +329,7 @@ export async function hydrateStyleStore(): Promise<void> {
         draftThemeCss: null,
         draftCustomCss: null,
         componentStyleEdit: null,
+        hostThemeKind: null,
       };
     },
   });
@@ -292,7 +344,8 @@ export function startStylePersist(): () => void {
     styleStore,
     {
       partialize: (state) => ({
-        schemaVersion: 3 as const,
+        schemaVersion: 4 as const,
+        themeSource: state.themeSource,
         themeCss: state.themeCss,
         customCss: state.customCss,
       }),
@@ -312,3 +365,18 @@ layoutActions.setEditMode = (editMode: boolean) => {
   }
   prevLayoutSetEditMode(editMode);
 };
+
+/** 测试用：重置 store（不写存储） */
+export function resetStyleStoreForTests(): void {
+  const defaults = createDefaultStyleState();
+  styleStore.schemaVersion = defaults.schemaVersion;
+  styleStore.themeSource = defaults.themeSource;
+  styleStore.themeCss = defaults.themeCss;
+  styleStore.customCss = defaults.customCss;
+  styleStore.editMode = false;
+  styleStore.discardEditDraft = false;
+  styleStore.draftThemeCss = null;
+  styleStore.draftCustomCss = null;
+  styleStore.componentStyleEdit = null;
+  styleStore.hostThemeKind = null;
+}

@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import { LayoutShell } from "@/layout/LayoutShell";
-import { useTabsStore, type RuntimeSessionConfig } from "@qenex/core";
+import {
+  AppErrorBoundary,
+  useTabsStore,
+  type RuntimeSessionConfig,
+} from "@qenex/core";
 
 export default function App() {
   const tabs = useTabsStore((s) => s.tabs);
@@ -34,10 +38,12 @@ export default function App() {
   }, [activeTabs]);
 
   return (
-    <LayoutShell
-      activeTabId={activeTabId}
-      tabSessions={tabSessions}
-      hasActiveTab={Boolean(activeTab)}
-    />
+    <AppErrorBoundary label="App">
+      <LayoutShell
+        activeTabId={activeTabId}
+        tabSessions={tabSessions}
+        hasActiveTab={Boolean(activeTab)}
+      />
+    </AppErrorBoundary>
   );
 }

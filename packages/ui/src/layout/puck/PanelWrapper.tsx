@@ -16,6 +16,8 @@ import { renderPanel } from "@/layout/puck/panels";
 
 type PanelWrapperProps = {
   puckType: string;
+  /** Puck 实例 id，用于实例级样式挂点 */
+  instanceId?: string;
   ctx: PanelRenderContext;
   children?: ReactNode;
   puck?: { isEditing?: boolean };
@@ -23,6 +25,7 @@ type PanelWrapperProps = {
 
 export const PanelWrapper: FC<PanelWrapperProps> = ({
   puckType,
+  instanceId,
   ctx,
   children,
   puck,
@@ -50,12 +53,17 @@ export const PanelWrapper: FC<PanelWrapperProps> = ({
   );
 
   if (!isEditing) {
-    return <div data-layout-panel={panelId}>{wrapped}</div>;
+    return (
+      <div data-layout-panel={panelId} data-layout-instance={instanceId}>
+        {wrapped}
+      </div>
+    );
   }
 
   return (
     <div
       data-layout-panel={panelId}
+      data-layout-instance={instanceId}
       data-layout-puck-type={puckType}
       className={cn(
         "relative min-h-8 border-[1px] border-dashed transition-opacity",

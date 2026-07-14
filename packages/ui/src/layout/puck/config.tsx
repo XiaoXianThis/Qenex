@@ -8,8 +8,10 @@ import {
   cn,
   containerAtMaxChildDepth,
   getPanelDefinition,
+  layoutContainerShouldRender,
   panelIdFromPuckType,
   PUCK_PANEL_TYPE,
+  useLayoutStore,
   type PanelId,
 } from "@qenex/core";
 import type {
@@ -19,8 +21,10 @@ import type {
   PuckComponent,
   SlotComponent,
 } from "@puckeditor/core";
+import type { FC } from "react";
 
 type LayoutContainerProps = {
+  id?: string;
   children: SlotComponent;
 };
 
@@ -71,9 +75,10 @@ function panelCtx(metadata: LayoutMetadata): PanelRenderContext {
 
 function panelConfig(puckType: string, panelId: PanelId) {
   const def = getPanelDefinition(panelId);
-  const render: PuckComponent<DefaultComponentProps> = ({ puck }) => (
+  const render: PuckComponent<DefaultComponentProps> = ({ id, puck }) => (
     <PanelWrapper
       puckType={puckType}
+      instanceId={typeof id === "string" ? id : undefined}
       ctx={panelCtx(puck.metadata as LayoutMetadata)}
       puck={puck}
     />
@@ -106,43 +111,61 @@ export type LayoutPageProps = {
   bottom: import("@puckeditor/core").SlotComponent;
 };
 
-function renderLayoutRow({
-  children: Children,
-  puck,
-}: {
+type LayoutContainerRenderProps = {
+  id?: string;
   children: SlotComponent;
   puck: { isEditing: boolean };
-}) {
+};
+
+const LayoutRowView: FC<LayoutContainerRenderProps> = ({
+  id,
+  children: Children,
+  puck,
+}) => {
+  const editMode = useLayoutStore((s) => s.editMode);
+  const editing = editMode || puck.isEditing;
+  const shouldRender = useLayoutStore((s) =>
+    layoutContainerShouldRender(s.puckData, id, s.panels, { editing }),
+  );
+  if (!shouldRender) return null;
+
   return (
     <LayoutContainerSlot
       label="行"
       componentType="LayoutRow"
-      editing={puck.isEditing}
-      className={layoutContainerSlotClass("row", puck.isEditing)}
+      instanceId={id}
+      editing={editing}
+      className={layoutContainerSlotClass("row", editing)}
     >
       {Children}
     </LayoutContainerSlot>
   );
-}
+};
 
-function renderLayoutColumn({
+const LayoutColumnView: FC<LayoutContainerRenderProps> = ({
+  id,
   children: Children,
   puck,
-}: {
-  children: SlotComponent;
-  puck: { isEditing: boolean };
-}) {
+}) => {
+  const editMode = useLayoutStore((s) => s.editMode);
+  const editing = editMode || puck.isEditing;
+  const shouldRender = useLayoutStore((s) =>
+    layoutContainerShouldRender(s.puckData, id, s.panels, { editing }),
+  );
+  if (!shouldRender) return null;
+
   return (
     <LayoutContainerSlot
       label="列"
       componentType="LayoutColumn"
-      editing={puck.isEditing}
-      className={layoutContainerSlotClass("column", puck.isEditing)}
+      instanceId={id}
+      editing={editing}
+      className={layoutContainerSlotClass("column", editing)}
     >
       {Children}
     </LayoutContainerSlot>
   );
-}
+};
 
 export const layoutConfig = {
   categories: {
@@ -183,7 +206,7 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: renderLayoutRow as PuckComponent<LayoutContainerProps>,
+      render: LayoutRowView as PuckComponent<LayoutContainerProps>,
     },
     LayoutColumn: {
       label: "列 (Column)",
@@ -195,7 +218,7 @@ export const layoutConfig = {
           allow: [...LAYOUT_SLOT_ALLOW],
         },
       },
-      render: renderLayoutColumn as PuckComponent<LayoutContainerProps>,
+      render: LayoutColumnView as PuckComponent<LayoutContainerProps>,
     },
     TabBar: panelConfig("TabBar", "tabBar"),
     TokenStats: panelConfig("TokenStats", "tokenStats"),

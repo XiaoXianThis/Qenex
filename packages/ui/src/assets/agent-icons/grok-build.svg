@@ -1,10 +1,6 @@
 <!--
-  Geometric "X" silhouette evoking xAI's mathematical-double-struck X
-  brand mark (Unicode U+1D54F 𝕏). Drawn as simple straight strokes so
-  AgentIcon's mono mask path can paint it in the active theme color
-  alongside hermes / mimo / pi / kilo / cursor-agent. The fill is set
-  to a baked dark color so any non-masked render path still produces
-  a legible mark instead of black-on-black.
+  Geometric "X" silhouette. SVGR convertColors → currentColor;
+  AgentIcon paints with text-foreground.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="#1c1b1a">
   <path d="M 158 158 L 432 432 L 158 432 L 158 158 Z" />

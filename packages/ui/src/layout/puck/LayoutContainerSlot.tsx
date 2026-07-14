@@ -10,6 +10,8 @@ type SlotComponent = ComponentType<{ className?: string; children?: ReactNode }>
 type LayoutContainerSlotProps = {
   label: string;
   componentType: string;
+  /** Puck 实例 id，用于实例级样式挂点 */
+  instanceId?: string;
   editing?: boolean;
   className: string;
   children: SlotComponent;
@@ -18,6 +20,7 @@ type LayoutContainerSlotProps = {
 export const LayoutContainerSlot: FC<LayoutContainerSlotProps> = ({
   label,
   componentType,
+  instanceId,
   editing,
   className,
   children: Children,
@@ -29,7 +32,11 @@ export const LayoutContainerSlot: FC<LayoutContainerSlotProps> = ({
 
   if (!editing) {
     return (
-      <div data-layout-component={componentType} className="w-full min-w-0">
+      <div
+        data-layout-component={componentType}
+        data-layout-instance={instanceId}
+        className="w-full min-w-0"
+      >
         <Children className={className} />
       </div>
     );
@@ -38,6 +45,7 @@ export const LayoutContainerSlot: FC<LayoutContainerSlotProps> = ({
   return (
     <div
       data-layout-component={componentType}
+      data-layout-instance={instanceId}
       data-layout-puck-type={componentType}
       className={cn(
         "relative w-full min-w-0",

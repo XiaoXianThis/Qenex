@@ -37,8 +37,7 @@ export const DARK_THEME: ThemeTokens = {
     pagePadding: DEFAULT_THEME.sizes.pagePadding,
   },
   composer: {
-    background:
-      "color-mix(in oklab, var(--color-muted) 40%, var(--color-background))",
+    background: "rgb(255 255 255 / 0.05)",
   },
 };
 

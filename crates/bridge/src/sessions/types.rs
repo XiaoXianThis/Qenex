@@ -97,6 +97,12 @@ pub struct CreateTaskResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_thought_level_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast_options: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_fast_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_model_id: Option<String>,
 }
 
@@ -115,6 +121,12 @@ pub struct SessionConfigResponse {
     pub thought_level_config_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_thought_level_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast_options: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_fast_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_model_id: Option<String>,
 }

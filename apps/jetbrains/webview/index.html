@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Qenex</title>
+    <!-- 透明底，让 JBCef setPageBackgroundColor / 宿主注入的 IDE 主题色透出 -->
+    <style>
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

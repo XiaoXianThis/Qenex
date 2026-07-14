@@ -134,6 +134,8 @@ object WebviewHttpServer {
                     val bytes = Files.readAllBytes(file)
                     exchange.responseHeaders.set("Content-Type", contentTypeFor(file))
                     exchange.responseHeaders.set("Cache-Control", "no-cache")
+                    // ES module scripts use CORS mode; allow same-origin JCEF loads.
+                    exchange.responseHeaders.set("Access-Control-Allow-Origin", "*")
                     exchange.sendResponseHeaders(200, bytes.size.toLong())
                     exchange.responseBody.use { it.write(bytes) }
                 } catch (error: Exception) {
