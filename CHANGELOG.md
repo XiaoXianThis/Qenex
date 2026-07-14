@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-15 - v0.2.2 Default Theme Follow Host / System
+
+### Changed
+
+- **Default theme source**: IDE plugins (VS Code / JetBrains) default to「跟随 IDE」; Web / Desktop default to「跟随系统」(`prefers-color-scheme`); otherwise light preset
+- Theme picker adds「跟随系统」; `SystemThemeSync` keeps light/dark presets in sync with OS preference
+- Web / Desktop boot script falls back to system color-scheme when no `qenex:boot-theme` cache
+
+### Breaking Changes
+None.
+
 ## 2026-07-15 - v0.2.1 Mermaid, Boot Theme, Composer Layout
 
 ### Added

@@ -1,12 +1,14 @@
 import { proxy } from "valtio";
 import { useSnapshot } from "valtio/react";
-import type { HostThemeSnapshot } from "@qenex/platform";
+import type { HostThemeSnapshot, QenexHostKind } from "@qenex/platform";
 import { themeToCss } from "../style/css-theme.ts";
 import {
   cloneDefaultTheme,
   createDefaultStyleState,
   DEFAULT_CUSTOM_CSS,
   DEFAULT_STYLE_CSS,
+  getSystemPrefersColorScheme,
+  resolveDefaultThemeSource,
 } from "../style/defaults.ts";
 import { mapHostThemeToCss } from "../style/host-theme.ts";
 import {
@@ -26,11 +28,17 @@ import type {
   ThemeSource,
   ThemeTokens,
 } from "../style/types.ts";
+import { getHostPersistStorage } from "../lib/host-storage.ts";
 import {
   hydrateValtioStore,
   subscribeValtioPersist,
 } from "../lib/valtio-persist.ts";
 import { layoutActions } from "./layout-store.ts";
+
+function normalizeThemeSource(value: unknown): ThemeSource {
+  if (value === "followHost" || value === "followSystem") return value;
+  return "preset";
+}
 
 export const STYLE_PERSIST_KEY = "agent-center-style";
 
@@ -114,8 +122,7 @@ export function migratePersistedStyle(persisted: unknown): StylePersistedState {
     typeof record.themeCss === "string" &&
     typeof record.customCss === "string"
   ) {
-    const themeSource: ThemeSource =
-      record.themeSource === "followHost" ? "followHost" : "preset";
+    const themeSource = normalizeThemeSource(record.themeSource);
     return toV4(record.themeCss, record.customCss, themeSource);
   }
 
@@ -142,7 +149,7 @@ export function migratePersistedStyle(persisted: unknown): StylePersistedState {
       typeof record.customCss === "string"
         ? record.customCss
         : DEFAULT_CUSTOM_CSS,
-      record.themeSource === "followHost" ? "followHost" : "preset",
+      normalizeThemeSource(record.themeSource),
     );
   }
 
@@ -182,8 +189,12 @@ export const styleActions = {
       if (styleStore.draftThemeCss != null) {
         const themeChanged = styleStore.draftThemeCss !== styleStore.themeCss;
         styleStore.themeCss = styleStore.draftThemeCss;
-        // 手动改了主题 CSS 则退出跟随 IDE（仅改 customCss 仍保持 followHost）
-        if (themeChanged && styleStore.themeSource === "followHost") {
+        // 手动改了主题 CSS 则退出跟随 IDE / 系统（仅改 customCss 仍保持）
+        if (
+          themeChanged &&
+          (styleStore.themeSource === "followHost" ||
+            styleStore.themeSource === "followSystem")
+        ) {
           styleStore.themeSource = "preset";
           styleStore.hostThemeKind = null;
         }
@@ -254,7 +265,7 @@ export const styleActions = {
     styleStore.customCss = DEFAULT_CUSTOM_CSS;
   },
 
-  /** 应用亮/暗主题预设（退出跟随 IDE） */
+  /** 应用亮/暗主题预设（退出跟随 IDE / 系统） */
   applyThemePreset(id: StyleThemePresetId) {
     const preset = STYLE_THEME_PRESETS[id];
     if (!preset) return;
@@ -270,6 +281,44 @@ export const styleActions = {
   /** 开启「跟随 IDE」；真正的色值由 applyHostTheme / HostThemeSync 写入 */
   enableFollowHost() {
     styleStore.themeSource = "followHost";
+  },
+
+  /** 开启「跟随系统」；按 prefers-color-scheme 套用亮/暗预设 */
+  enableFollowSystem() {
+    styleStore.themeSource = "followSystem";
+    styleStore.hostThemeKind = null;
+    styleActions.applySystemColorScheme(getSystemPrefersColorScheme());
+  },
+
+  /**
+   * 按系统明暗写入对应预设 CSS。仅在 `themeSource === "followSystem"` 时生效。
+   */
+  applySystemColorScheme(scheme: "light" | "dark") {
+    if (styleStore.themeSource !== "followSystem") return;
+    const preset = STYLE_THEME_PRESETS[scheme];
+    if (!preset) return;
+    if (styleStore.editMode) {
+      styleStore.draftThemeCss = preset.css;
+      return;
+    }
+    styleStore.themeCss = preset.css;
+  },
+
+  /**
+   * 首次使用：按宿主类型写入默认主题来源。
+   * IDE → followHost；Web/Desktop → followSystem；其它 → 亮色预设。
+   */
+  applyDefaultThemeForHost(kind: QenexHostKind) {
+    const source = resolveDefaultThemeSource(kind);
+    if (source === "followHost") {
+      styleActions.enableFollowHost();
+      return;
+    }
+    if (source === "followSystem") {
+      styleActions.enableFollowSystem();
+      return;
+    }
+    styleActions.applyThemePreset("light");
   },
 
   /**
@@ -318,7 +367,11 @@ export function selectActiveCss(state: StyleState): string {
   return selectActiveThemeCss(state);
 }
 
-export async function hydrateStyleStore(): Promise<void> {
+export async function hydrateStyleStore(): Promise<boolean> {
+  const storage = getHostPersistStorage();
+  const raw = await storage.getItem(STYLE_PERSIST_KEY);
+  if (!raw) return false;
+
   await hydrateValtioStore(STYLE_PERSIST_KEY, styleStore, {
     merge: (persisted) => {
       const migrated = migratePersistedStyle(persisted);
@@ -333,6 +386,7 @@ export async function hydrateStyleStore(): Promise<void> {
       };
     },
   });
+  return true;
 }
 
 let unsubscribeStylePersist: (() => void) | null = null;

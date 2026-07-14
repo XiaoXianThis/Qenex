@@ -8,20 +8,29 @@
       (function () {
         try {
           var raw = localStorage.getItem("qenex:boot-theme");
-          if (!raw) return;
-          var t = JSON.parse(raw);
-          if (!t || !t.background) return;
-          var s = document.documentElement.style;
-          s.backgroundColor = t.background;
-          if (t.foreground) s.color = t.foreground;
-          if (t.colorScheme) {
-            s.colorScheme = t.colorScheme;
-            document.documentElement.dataset.colorScheme = t.colorScheme;
-            document.documentElement.classList.toggle(
-              "dark",
-              t.colorScheme === "dark",
-            );
+          if (raw) {
+            var t = JSON.parse(raw);
+            if (t && t.background) {
+              var s = document.documentElement.style;
+              s.backgroundColor = t.background;
+              if (t.foreground) s.color = t.foreground;
+              if (t.colorScheme) {
+                s.colorScheme = t.colorScheme;
+                document.documentElement.dataset.colorScheme = t.colorScheme;
+                document.documentElement.classList.toggle(
+                  "dark",
+                  t.colorScheme === "dark",
+                );
+              }
+              return;
+            }
           }
+          var dark =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          document.documentElement.dataset.colorScheme = dark ? "dark" : "light";
+          document.documentElement.classList.toggle("dark", !!dark);
         } catch (e) {}
       })();
     </script>

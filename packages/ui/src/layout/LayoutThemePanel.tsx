@@ -26,7 +26,11 @@ import type { FC } from "react";
 
 const toolBtnClass = LAYOUT_EDIT_TOOL_BTN_CLASS;
 
-type ThemeSelectValue = StyleThemePresetId | "custom" | "followHost";
+type ThemeSelectValue =
+  | StyleThemePresetId
+  | "custom"
+  | "followHost"
+  | "followSystem";
 
 function matchThemePreset(css: string): StyleThemePresetId | "custom" {
   const normalized = css.trim();
@@ -41,7 +45,7 @@ function themePrimaryColor(id: StyleThemePresetId): string {
 }
 
 function activePrimaryColor(css: string, value: ThemeSelectValue): string {
-  if (value === "followHost") {
+  if (value === "followHost" || value === "followSystem") {
     return parseThemeCss(css)["--primary"] ?? "var(--primary)";
   }
   if (value !== "custom") return themePrimaryColor(value);
@@ -70,7 +74,9 @@ export const LayoutThemePanel: FC = () => {
   const themeValue: ThemeSelectValue =
     themeSource === "followHost"
       ? "followHost"
-      : matchThemePreset(themeCss);
+      : themeSource === "followSystem"
+        ? "followSystem"
+        : matchThemePreset(themeCss);
   const currentPrimary = activePrimaryColor(themeCss, themeValue);
 
   return (
@@ -83,6 +89,10 @@ export const LayoutThemePanel: FC = () => {
             void host.getHostTheme?.().then((snapshot) => {
               if (snapshot) styleActions.applyHostTheme(snapshot);
             });
+            return;
+          }
+          if (value === "followSystem") {
+            styleActions.enableFollowSystem();
             return;
           }
           if (value === "light" || value === "dark") {
@@ -117,6 +127,10 @@ export const LayoutThemePanel: FC = () => {
               <SelectItemText>跟随 IDE</SelectItemText>
             </SelectItem>
           ) : null}
+          <SelectItem value="followSystem" className="text-xs">
+            <ThemeSwatch color={currentPrimary} />
+            <SelectItemText>跟随系统</SelectItemText>
+          </SelectItem>
           {themeValue === "custom" ? (
             <SelectItem value="custom" disabled className="text-xs">
               <ThemeSwatch color={currentPrimary} />

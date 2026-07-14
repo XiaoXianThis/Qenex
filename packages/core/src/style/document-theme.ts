@@ -45,6 +45,24 @@ function resolveColorScheme(
   if (themeSource === "followHost" && hostThemeKind) {
     return colorSchemeFromHostThemeKind(hostThemeKind);
   }
+  if (themeSource === "followSystem") {
+    if (themeCss.trim() === STYLE_THEME_PRESETS.dark.css.trim()) {
+      return "dark";
+    }
+    if (themeCss.trim() === STYLE_THEME_PRESETS.light.css.trim()) {
+      return "light";
+    }
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+      try {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+      } catch {
+        return "light";
+      }
+    }
+    return "light";
+  }
   if (themeCss.trim() === STYLE_THEME_PRESETS.dark.css.trim()) {
     return "dark";
   }

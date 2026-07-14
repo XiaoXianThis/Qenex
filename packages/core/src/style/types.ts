@@ -44,8 +44,8 @@ export type ThemeTokens = {
   composer: ThemeComposer;
 };
 
-/** 主题来源：固定预设，或跟随 IDE 宿主配色 */
-export type ThemeSource = "preset" | "followHost";
+/** 主题来源：固定预设、跟随 IDE，或跟随系统 prefers-color-scheme */
+export type ThemeSource = "preset" | "followHost" | "followSystem";
 
 /** v4：主题来源 + 主题 CSS + 用户自定义 CSS */
 export type StylePersistedState = {

@@ -1,10 +1,38 @@
+import type { QenexHostKind } from "@qenex/platform";
 import { themeToCss, themeToVarMap } from "./css-theme.ts";
 import type {
   AllowedStyleVar,
   ComposerShadowPresetId,
   StylePersistedState,
+  ThemeSource,
   ThemeTokens,
 } from "./types.ts";
+
+/**
+ * 首次使用 / 无持久化主题时的默认来源：
+ * - IDE 插件 → 跟随 IDE
+ * - Web / Desktop → 跟随系统
+ * - 其它 → 亮色预设
+ */
+export function resolveDefaultThemeSource(kind: QenexHostKind): ThemeSource {
+  if (kind === "vscode" || kind === "jetbrains") return "followHost";
+  if (kind === "web" || kind === "tauri") return "followSystem";
+  return "preset";
+}
+
+/** 读取系统明暗偏好；不可用时回落 light */
+export function getSystemPrefersColorScheme(): "light" | "dark" {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "light";
+  }
+  try {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  } catch {
+    return "light";
+  }
+}
 
 /** Composer 阴影预设 → CSS 值 */
 export const COMPOSER_SHADOW_PRESETS: Record<ComposerShadowPresetId, string> = {

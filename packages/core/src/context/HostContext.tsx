@@ -43,6 +43,7 @@ import {
   startUiPrefsPersist,
 } from "../store/ui-prefs-store.ts";
 import { applyDocumentThemeStyles } from "../style/document-theme.ts";
+import { getSystemPrefersColorScheme } from "../style/defaults.ts";
 import {
   hydrateStyleStore,
   startStylePersist,
@@ -97,7 +98,10 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
     void (async () => {
       try {
         // 先 hydrate 主题并立刻写入 DOM，让 Loading 页背景跟随已保存主题
-        await hydrateStyleStore();
+        const hadPersistedStyle = await hydrateStyleStore();
+        if (!hadPersistedStyle) {
+          styleActions.applyDefaultThemeForHost(host.kind);
+        }
         applyPersistedDocumentTheme();
         if (styleStore.themeSource === "followHost") {
           try {
@@ -109,6 +113,9 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
           } catch {
             // 宿主主题稍后由 HostThemeSync 补齐
           }
+        } else if (styleStore.themeSource === "followSystem") {
+          styleActions.applySystemColorScheme(getSystemPrefersColorScheme());
+          applyPersistedDocumentTheme();
         }
 
         // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确

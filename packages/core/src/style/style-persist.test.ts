@@ -34,4 +34,14 @@ describe("style persist schema v4", () => {
     });
     expect(migrated.themeSource).toBe("followHost");
   });
+
+  test("keeps followSystem on v4", () => {
+    const migrated = migratePersistedStyle({
+      schemaVersion: 4,
+      themeSource: "followSystem",
+      themeCss: ":root { --background: #111; }",
+      customCss: "",
+    });
+    expect(migrated.themeSource).toBe("followSystem");
+  });
 });

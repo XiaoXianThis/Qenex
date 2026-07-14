@@ -3,6 +3,7 @@
 import { PuckLayoutRenderer } from "@/layout/puck/PuckLayoutRenderer";
 import { ComponentStyleDialog } from "@/style/ComponentStyleDialog";
 import { HostThemeSync } from "@/style/HostThemeSync";
+import { SystemThemeSync } from "@/style/SystemThemeSync";
 import { StyleEditDialog } from "@/style/StyleEditDialog";
 import { ThemeStyleInjector } from "@/style/ThemeStyleInjector";
 import {
@@ -33,6 +34,7 @@ export const LayoutShell: FC<LayoutShellProps> = ({
     <div className="relative flex h-dvh flex-col overflow-hidden">
       <ThemeStyleInjector />
       <HostThemeSync />
+      <SystemThemeSync />
       <StyleEditDialog />
       <ComponentStyleDialog />
       <PuckLayoutRenderer
