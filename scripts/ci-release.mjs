@@ -195,7 +195,7 @@ function main() {
 
   console.log("\nRelease artifacts:");
   console.log(artifacts);
-  console.log(`\nDone â†?${distArtifactsDir}`);
+  console.log(`\nDone â†’${distArtifactsDir}`);
 }
 
 main();

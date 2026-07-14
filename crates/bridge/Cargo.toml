@@ -2,7 +2,7 @@
 name = "acp-to-agui"
 version = "0.2.1"
 edition = "2021"
-description = "ACP â†?AG-UI bridge: translate Agent Client Protocol into AG-UI events"
+description = "ACP â†’ AG-UI bridge: translate Agent Client Protocol into AG-UI events"
 license = "MIT"
 
 [features]
