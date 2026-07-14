@@ -233,17 +233,23 @@ pub struct AgentInitResult {
 /// `_meta.parameterizedModelPicker`. Other agents ignore unknown `_meta` keys;
 /// we still gate on Cursor argv so non-Cursor agents keep the default handshake.
 pub(crate) fn wants_parameterized_model_picker(command: &[String]) -> bool {
-    let bins: Vec<String> = command
+    let parts: Vec<&str> = command
         .iter()
         .filter(|part| !is_env_assignment(part))
+        .map(String::as_str)
+        .collect();
+
+    let bins: Vec<String> = parts
+        .iter()
         .map(|part| {
             Path::new(part)
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or(part.as_str())
+                .unwrap_or(part)
                 .to_ascii_lowercase()
                 .trim_end_matches(".exe")
                 .trim_end_matches(".cmd")
+                .trim_end_matches(".ps1")
                 .to_string()
         })
         .collect();
@@ -255,8 +261,19 @@ pub(crate) fn wants_parameterized_model_picker(command: &[String]) -> bool {
         return true;
     }
 
-    // Cursor also ships as `agent acp`.
-    bins.first().map(String::as_str) == Some("agent") && bins.iter().any(|bin| bin == "acp")
+    // Windows `resolve_cursor_agent_direct` rewrites to
+    // `%LOCALAPPDATA%\cursor-agent\versions\…\node.exe` + `index.js` + `acp`.
+    // Match the install path, not just the filename (`node` / `index.js`).
+    if parts.iter().any(|part| {
+        part.to_ascii_lowercase()
+            .replace('/', "\\")
+            .contains("\\cursor-agent\\")
+    }) {
+        return true;
+    }
+
+    // Cursor also ships as `agent acp` (and Windows `cmd /c agent.cmd acp`).
+    bins.iter().any(|bin| bin == "agent") && bins.iter().any(|bin| bin == "acp")
 }
 
 fn build_initialize_request(command: &[String]) -> InitializeRequest {
@@ -1150,6 +1167,20 @@ mod tests {
             "agent".into(),
             "acp".into()
         ]));
+        // Windows rewrite: node.exe + index.js under cursor-agent\versions.
+        assert!(wants_parameterized_model_picker(&[
+            r"C:\Users\x\AppData\Local\cursor-agent\versions\2026.05.05-84a231c\node.exe"
+                .into(),
+            r"C:\Users\x\AppData\Local\cursor-agent\versions\2026.05.05-84a231c\index.js"
+                .into(),
+            "acp".into(),
+        ]));
+        assert!(wants_parameterized_model_picker(&[
+            "cmd.exe".into(),
+            "/c".into(),
+            r"C:\Users\x\AppData\Local\cursor-agent\agent.cmd".into(),
+            "acp".into(),
+        ]));
         assert!(!wants_parameterized_model_picker(&[
             "opencode".into(),
             "acp".into()
@@ -1159,6 +1190,11 @@ mod tests {
         ]));
         assert!(!wants_parameterized_model_picker(&[
             "codex-acp".into()
+        ]));
+        assert!(!wants_parameterized_model_picker(&[
+            r"C:\tools\node.exe".into(),
+            r"C:\tools\index.js".into(),
+            "acp".into(),
         ]));
     }
 }

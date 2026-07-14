@@ -5,7 +5,7 @@ import {
   type ChatModelAdapter,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
-import { ApprovalBridge } from "@/components/approvalBridge";
+import { ApprovalBridge } from "@/components/ApprovalBridge";
 import { ChangesRefreshBridge } from "@/components/ChangesRefreshBridge";
 import { ModeSyncBridge } from "@/components/ModeSyncBridge";
 import { TabTitleBridge } from "@/components/TabTitleBridge";
