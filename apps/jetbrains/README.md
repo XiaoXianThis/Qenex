@@ -50,7 +50,7 @@ bun run dev:jetbrains   # 构建并启动沙箱 IDE（runIde）
 bun run package:jetbrains
 ```
 
-生成 `apps/jetbrains/build/distributions/qenex-0.1.0.zip`，可通过 IDE「从磁盘安装插件」安装。
+生成 `apps/jetbrains/build/distributions/qenex-0.2.2.zip`（版本随 `pluginVersion`），可通过 IDE「从磁盘安装插件」安装。
 
 ## 架构
 

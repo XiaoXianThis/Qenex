@@ -48,7 +48,7 @@ bun run verify:vscode
 bun run package:vscode
 ```
 
-生成 `apps/vscode/qenex-0.1.0.vsix`，可通过 VS Code「从 VSIX 安装扩展」安装。
+生成 `apps/vscode/qenex-0.2.2.vsix`（版本随 `package.json`），可通过 VS Code「从 VSIX 安装扩展」安装。
 
 ## 架构
 

@@ -2,17 +2,18 @@
 
 **统一的 AI 编码 Agent 工作台** — 一套界面，连接多种 ACP Agent，随处可用。
 
-当前版本：**v0.1.1**
+当前版本：**v0.2.2**
 
-用现代化对话 UI 驱动任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent（OpenCode、Kiro、Claude、Codex 等）。同一套体验覆盖 Web、VS Code、JetBrains 与桌面端：多会话并行、可编辑布局与主题、工具审批、历史回放与断线恢复。
+用现代化对话 UI 驱动任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent（OpenCode、Kiro、Claude、Codex、Cursor 等）。同一套体验覆盖 Web、VS Code、JetBrains 与桌面端：多会话并行、可编辑布局与主题、工具审批、历史回放与断线恢复。
 
-## 特性（v0.1.1）
+## 特性（v0.2.2）
 
-- **Agent 无关** — 标准 ACP 接入，每 Tab 可独立选择 Agent / 模型 / 工作目录
+- **Agent 无关** — 标准 ACP 接入，每 Tab 可独立选择 Agent / 模型 / 工作目录；Registry 发现与一键安装
 - **多会话** — 最多 5 个活跃 Tab，归档与恢复，状态本地持久化（Valtio）
-- **可编辑布局** — 基于 Puck 的面板编排，预设布局 + 草稿编辑 / 保存
-- **主题与样式** — 亮色 / 暗色预设，组件级样式可调
-- **工具审批** — Agent 请求敏感操作时弹出审批，再继续执行
+- **可编辑布局** — 基于 Puck 的面板编排，预设布局 + 草稿编辑 / 保存；空面板自动折叠
+- **主题与样式** — 亮色 / 暗色预设；IDE 插件默认「跟随 IDE」、Web / Desktop 默认「跟随系统」；组件级样式可调
+- **对话体验** — Cursor 风格工具调用视图、Shiki 代码高亮、Mermaid 图、`@` 文件引用、检查点 Changes 还原
+- **工具审批** — 短标签审批（允许 / 总是 / 拒绝）；可设全局自动允许
 - **会话不丢** — SQLite 持久化事件，支持历史回放与 `resumeSessionId` 续接
 - **四端同构** — Web 一体服务端、VS Code、JetBrains、Tauri Desktop
 
@@ -145,8 +146,8 @@ bun run build:jetbrains && bun run package:jetbrains
 推送代码**不会**自动构建。打 `v*` tag 才会触发多平台 Release：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.2
+git push origin v0.2.2
 ```
 
 也可在 Actions → Release → Run workflow 手动跑（仅 Artifacts，不创建 Release）。轻量 CI 需手动触发：Actions → CI → Run workflow。
