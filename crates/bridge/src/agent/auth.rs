@@ -75,7 +75,21 @@ pub fn auth_methods_info(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
 }
 
 /// Prefer a known method id when present; otherwise first advertised method.
+///
+/// Codex advertises `api-key` before `chat-gpt`, but API-key authentication
+/// cannot work unless the key is present in the bridge process environment.
+/// Prefer ChatGPT in the common desktop case so an existing Codex login can be
+/// reused (or the browser login can be started).
 pub fn pick_auth_method_id(methods: &[AuthMethod]) -> Option<String> {
+    let has_api_key = ["CODEX_API_KEY", "OPENAI_API_KEY"].iter().any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    pick_auth_method_id_with_api_key(methods, has_api_key)
+}
+
+fn pick_auth_method_id_with_api_key(methods: &[AuthMethod], has_api_key: bool) -> Option<String> {
     if methods.is_empty() {
         return None;
     }
@@ -85,20 +99,32 @@ pub fn pick_auth_method_id(methods: &[AuthMethod]) -> Option<String> {
             return Some((*pref).to_string());
         }
     }
+    if has_api_key && methods.iter().any(|m| m.id().0.as_ref() == "api-key") {
+        return Some("api-key".to_string());
+    }
+    if methods.iter().any(|m| m.id().0.as_ref() == "chat-gpt") {
+        return Some("chat-gpt".to_string());
+    }
     Some(methods[0].id().0.to_string())
 }
 
 pub fn external_hint_for_method(method_id: &str) -> Option<String> {
     match method_id {
         "cursor_login" => Some(
-            "请先在终端执行 `agent login`（或设置 CURSOR_API_KEY），完成后回到此处重试。"
+            "请先在终端执行 `agent login`（或设置 CURSOR_API_KEY），完成后回到此处重试。".into(),
+        ),
+        id if id.contains("claude") => {
+            Some("请先登录 Claude（`claude` CLI）或设置 ANTHROPIC_API_KEY，完成后重试。".into())
+        }
+        id if id.contains("codex") => {
+            Some("请先登录 Codex 或设置 OPENAI_API_KEY / CODEX_API_KEY，完成后重试。".into())
+        }
+        "chat-gpt" => Some(
+            "将使用浏览器登录 OpenAI/ChatGPT；也可以先在终端执行 `codex login`，完成后重试。"
                 .into(),
         ),
-        id if id.contains("claude") => Some(
-            "请先登录 Claude（`claude` CLI）或设置 ANTHROPIC_API_KEY，完成后重试。".into(),
-        ),
-        id if id.contains("codex") => Some(
-            "请先登录 Codex 或设置 OPENAI_API_KEY / CODEX_API_KEY，完成后重试。".into(),
+        "api-key" => Some(
+            "请设置 CODEX_API_KEY 或 OPENAI_API_KEY，并从同一终端启动 AgentCenter 后重试。".into(),
         ),
         _ => None,
     }
@@ -133,6 +159,30 @@ mod tests {
         assert_eq!(
             pick_auth_method_id(&methods).as_deref(),
             Some("cursor_login")
+        );
+    }
+
+    #[test]
+    fn codex_prefers_chat_gpt_without_api_key() {
+        let methods = vec![
+            AuthMethod::Agent(AuthMethodAgent::new("api-key", "API Key")),
+            AuthMethod::Agent(AuthMethodAgent::new("chat-gpt", "ChatGPT")),
+        ];
+        assert_eq!(
+            pick_auth_method_id_with_api_key(&methods, false).as_deref(),
+            Some("chat-gpt")
+        );
+    }
+
+    #[test]
+    fn codex_prefers_api_key_when_configured() {
+        let methods = vec![
+            AuthMethod::Agent(AuthMethodAgent::new("api-key", "API Key")),
+            AuthMethod::Agent(AuthMethodAgent::new("chat-gpt", "ChatGPT")),
+        ];
+        assert_eq!(
+            pick_auth_method_id_with_api_key(&methods, true).as_deref(),
+            Some("api-key")
         );
     }
 

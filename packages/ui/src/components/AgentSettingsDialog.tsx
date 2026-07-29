@@ -20,6 +20,7 @@ import {
   fetchAgentRegistry,
   GIT_SESSION_MODE_OPTIONS,
   getPreferredGitSessionMode,
+  installAgentHostWithProgress,
   legacyIdsForRegistry,
   mergeAgentsConfig,
   parseOverlayJson,
@@ -420,7 +421,10 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     try {
       const result = await ensureAgentReadyWithProgress(
         entry.id,
-        { preferUpdate: options?.preferUpdate },
+        {
+          preferUpdate: options?.preferUpdate,
+          forceInstall: options?.forceInstall,
+        },
         (event: InstallProgressEvent) => {
           if (event.type === "stage") {
             setProgressById((prev) => ({
@@ -465,6 +469,61 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
       }
       syncDraftFromStore();
       probedCommandsRef.current = {};
+      await loadRegistry(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyIds((prev) => {
+        const next = { ...prev };
+        delete next[entry.id];
+        return next;
+      });
+      setProgressById((prev) => {
+        const next = { ...prev };
+        delete next[entry.id];
+        return next;
+      });
+    }
+  };
+
+  const handleInstallHost = async (entry: RegistryAgentEntry) => {
+    const host = entry.host;
+    if (!host?.installable) return;
+    setActionError(null);
+    setBusyIds((prev) => ({ ...prev, [entry.id]: "host" }));
+    setProgressById((prev) => ({
+      ...prev,
+      [entry.id]: {
+        message: host.updateAvailable ? "开始更新本体…" : "开始安装本体…",
+        stage: "start",
+      },
+    }));
+    try {
+      await installAgentHostWithProgress(
+        entry.id,
+        (event: InstallProgressEvent) => {
+          if (event.type === "stage") {
+            setProgressById((prev) => ({
+              ...prev,
+              [entry.id]: {
+                message: event.message,
+                stage: event.stage,
+              },
+            }));
+          } else if (event.type === "download") {
+            setProgressById((prev) => ({
+              ...prev,
+              [entry.id]: {
+                message: event.message,
+                stage: "download",
+                downloadedBytes: event.downloadedBytes,
+                totalBytes: event.totalBytes,
+                url: event.url,
+              },
+            }));
+          }
+        },
+      );
       await loadRegistry(false);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -619,6 +678,11 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                       : needAdapter
                         ? "安装适配层"
                         : "安装";
+                    const host = entry.host ?? null;
+                    const canInstallHost =
+                      Boolean(host?.installable) &&
+                      (host?.source === "none" ||
+                        Boolean(host?.updateAvailable));
                     return (
                       <li
                         key={entry.id}
@@ -701,13 +765,86 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                 {entry.detail}
                               </p>
                             ) : null}
-                            {busy === "install" && progressById[entry.id] ? (
+                            {host ? (
+                              <div className="mt-2 rounded-md border border-border/80 bg-background/70 px-2.5 py-2">
+                                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                  <span className="font-medium text-foreground">
+                                    本体 · {host.name}
+                                  </span>
+                                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground">
+                                    {host.version
+                                      ? `v${host.version}`
+                                      : "未检测到"}
+                                  </span>
+                                  <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+                                    {host.source === "managed"
+                                      ? "托管"
+                                      : host.source === "bundled"
+                                        ? "适配层内置"
+                                        : host.source === "path"
+                                          ? "系统 PATH"
+                                          : "缺失"}
+                                  </span>
+                                  {host.latestVersion ? (
+                                    <span className="text-muted-foreground">
+                                      最新 v{host.latestVersion}
+                                    </span>
+                                  ) : null}
+                                  {host.updateAvailable ? (
+                                    <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400">
+                                      本体可更新
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-[10px] text-muted-foreground">
+                                  {host.detail}
+                                </p>
+                                {host.candidates.length > 1 ? (
+                                  <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">
+                                    检测：
+                                    {host.candidates
+                                      .map(
+                                        (candidate) =>
+                                          `${
+                                            candidate.source === "bundled"
+                                              ? "内置"
+                                              : candidate.source === "managed"
+                                                ? "托管"
+                                                : "PATH"
+                                          } ${candidate.version ?? "未知"}`,
+                                      )
+                                      .join(" · ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {(busy === "install" || busy === "host") &&
+                            progressById[entry.id] ? (
                               <InstallProgressView
                                 state={progressById[entry.id]!}
                               />
                             ) : null}
                           </div>
                           <div className="flex shrink-0 flex-col gap-1">
+                            {canInstallHost ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 gap-1 px-2 text-xs"
+                                disabled={Boolean(busy)}
+                                onClick={() => void handleInstallHost(entry)}
+                              >
+                                {busy === "host" ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Download className="size-3.5" />
+                                )}
+                                {host?.updateAvailable
+                                  ? "更新本体"
+                                  : "安装本体"}
+                              </Button>
+                            ) : null}
                             {onPath && !entry.updateAvailable ? (
                               <Button
                                 type="button"

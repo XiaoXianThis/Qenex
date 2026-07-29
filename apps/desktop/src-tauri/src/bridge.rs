@@ -32,9 +32,38 @@ struct BridgeConfigTemplate {
 pub struct BridgeState {
     pub base_url: String,
     child: Mutex<Option<CommandChild>>,
+    status: Mutex<BridgeStatus>,
+}
+
+#[derive(Clone)]
+enum BridgeStatus {
+    Starting,
+    Ready,
+    Failed(String),
 }
 
 impl BridgeState {
+    fn new(base_url: String, child: CommandChild) -> Self {
+        Self {
+            base_url,
+            child: Mutex::new(Some(child)),
+            status: Mutex::new(BridgeStatus::Starting),
+        }
+    }
+
+    fn set_status(&self, status: BridgeStatus) {
+        if let Ok(mut guard) = self.status.lock() {
+            *guard = status;
+        }
+    }
+
+    fn status(&self) -> Result<BridgeStatus, String> {
+        self.status
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| "Bridge status lock poisoned".to_string())
+    }
+
     pub fn stop(&self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(child) = guard.take() {
@@ -44,7 +73,7 @@ impl BridgeState {
     }
 }
 
-pub async fn start_bridge(app: &AppHandle) -> Result<(), String> {
+pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
     let port = find_free_port()?;
     let config_path = write_bridge_config(app, port)?;
     let base_url = format!("http://127.0.0.1:{port}");
@@ -65,20 +94,42 @@ pub async fn start_bridge(app: &AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("failed to spawn bridge sidecar: {e}"))?;
 
-    wait_for_health(&base_url, HEALTH_TIMEOUT_MS).await?;
+    app.manage(BridgeState::new(base_url.clone(), child));
 
-    app.manage(BridgeState {
-        base_url: base_url.clone(),
-        child: Mutex::new(Some(child)),
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let status = match wait_for_health(&base_url, HEALTH_TIMEOUT_MS).await {
+            Ok(()) => BridgeStatus::Ready,
+            Err(error) => {
+                tracing_log(&error);
+                BridgeStatus::Failed(error)
+            }
+        };
+
+        if let Some(state) = app_handle.try_state::<BridgeState>() {
+            state.set_status(status);
+        }
     });
 
     Ok(())
 }
 
-pub fn get_bridge_url(app: &AppHandle) -> Result<String, String> {
-    app.try_state::<BridgeState>()
-        .map(|state| state.base_url.clone())
-        .ok_or_else(|| "Bridge is not ready".to_string())
+pub async fn get_bridge_url(app: &AppHandle) -> Result<String, String> {
+    let deadline = std::time::Instant::now() + Duration::from_millis(HEALTH_TIMEOUT_MS);
+
+    while std::time::Instant::now() < deadline {
+        if let Some(state) = app.try_state::<BridgeState>() {
+            match state.status()? {
+                BridgeStatus::Ready => return Ok(state.base_url.clone()),
+                BridgeStatus::Failed(error) => return Err(error),
+                BridgeStatus::Starting => {}
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    Err("Bridge did not become ready in time".to_string())
 }
 
 fn find_free_port() -> Result<u16, String> {
@@ -190,10 +241,7 @@ fn write_bridge_config(app: &AppHandle, port: u16) -> Result<PathBuf, String> {
         "tauri://localhost".to_string(),
     ];
 
-    let config_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
 
     let config_path = config_dir.join("bridge.config.json");
@@ -249,6 +297,9 @@ pub fn get_default_workspace(app: &AppHandle) -> Result<String, String> {
 
 pub fn set_last_workspace(app: &AppHandle, path: &str) -> Result<(), String> {
     let store = open_store(app)?;
-    store.set(LAST_WORKSPACE_KEY, serde_json::Value::String(path.to_string()));
+    store.set(
+        LAST_WORKSPACE_KEY,
+        serde_json::Value::String(path.to_string()),
+    );
     store.save().map_err(|e| e.to_string())
 }

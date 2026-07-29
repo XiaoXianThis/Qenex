@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,13 @@ const required = [
   join(tauriDir, "src", "lib.rs"),
   join(desktopDir, "src", "host", "tauri-host.ts"),
 ];
+const sidecarPath = join(tauriDir, "binaries", sidecarName);
+const stagedDebugSidecarPath = join(
+  tauriDir,
+  "target",
+  "debug",
+  isWin ? "acp-to-agui.exe" : "acp-to-agui",
+);
 
 let failed = false;
 
@@ -37,6 +44,45 @@ for (const file of required) {
     console.log(`OK  ${file}`);
   } else {
     console.error(`MISSING  ${file}`);
+    failed = true;
+  }
+}
+
+function newestRustSourceMtime(directory) {
+  let newest = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      newest = Math.max(newest, newestRustSourceMtime(path));
+    } else if (entry.name.endsWith(".rs")) {
+      newest = Math.max(newest, statSync(path).mtimeMs);
+    }
+  }
+  return newest;
+}
+
+if (existsSync(sidecarPath)) {
+  const bridgeSourceMtime = Math.max(
+    newestRustSourceMtime(join(root, "crates", "bridge", "src")),
+    statSync(join(root, "crates", "bridge", "Cargo.toml")).mtimeMs,
+  );
+  const sidecarMtime = statSync(sidecarPath).mtimeMs;
+  if (sidecarMtime < bridgeSourceMtime) {
+    console.error(
+      `STALE  ${sidecarPath}\nRun "bun run dev:desktop" or "bun run build:desktop" to rebuild it.`,
+    );
+    failed = true;
+  } else {
+    console.log(`FRESH  ${sidecarPath}`);
+  }
+
+  if (
+    existsSync(stagedDebugSidecarPath) &&
+    statSync(stagedDebugSidecarPath).mtimeMs < sidecarMtime
+  ) {
+    console.error(
+      `STALE  ${stagedDebugSidecarPath}\nRun "bun run dev:desktop" to refresh Tauri's staged debug sidecar.`,
+    );
     failed = true;
   }
 }

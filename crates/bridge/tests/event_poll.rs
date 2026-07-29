@@ -1,15 +1,54 @@
 use acp_to_agui::agui::events::AguiEvent;
+use acp_to_agui::sessions::manager::SessionManager;
 use acp_to_agui::sessions::store::SessionStore;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_db() -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let db_path = std::env::temp_dir().join(format!("acp-event-poll-{nanos}.db"));
+    let sequence = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let db_path = std::env::temp_dir().join(format!(
+        "acp-event-poll-{}-{sequence}.db",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&db_path);
     db_path
+}
+
+#[tokio::test]
+async fn task_agent_identity_survives_create_update_and_reload() {
+    let db_path = temp_db();
+    let mut store = SessionStore::new(db_path.clone());
+    store.initialize().await.unwrap();
+
+    store
+        .create(
+            "task-agent",
+            "pending-session",
+            "/tmp",
+            "T",
+            Some("claude-acp"),
+        )
+        .await
+        .unwrap();
+    store
+        .create("task-agent", "real-session", "/tmp", "T", None)
+        .await
+        .unwrap();
+
+    let task = store.get("task-agent").await.unwrap().unwrap();
+    assert_eq!(task.agent_id.as_deref(), Some("claude-acp"));
+    assert_eq!(task.agent_session_id, "real-session");
+
+    drop(store);
+    let mut reloaded = SessionStore::new(db_path.clone());
+    reloaded.initialize().await.unwrap();
+    let task = reloaded.get("task-agent").await.unwrap().unwrap();
+    assert_eq!(task.agent_id.as_deref(), Some("claude-acp"));
+
+    let _ = std::fs::remove_file(&db_path);
 }
 
 #[tokio::test]
@@ -74,10 +113,7 @@ async fn completed_run_should_not_report_as_running() {
         .create("task-1", "agent-sess", "/tmp", "T", None)
         .await
         .unwrap();
-    store
-        .update("task-1", None, Some("running"))
-        .await
-        .unwrap();
+    store.update("task-1", None, Some("running")).await.unwrap();
 
     let started = AguiEvent::run_started("run-1", "task-1");
     let finished = AguiEvent::run_finished("run-1", "task-1");
@@ -108,6 +144,69 @@ async fn completed_run_should_not_report_as_running() {
         task.status.as_str()
     };
     assert_eq!(effective_status, "idle");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn orphaned_running_task_is_closed_as_interrupted() {
+    let db_path = temp_db();
+    let store = Arc::new(Mutex::new(SessionStore::new(db_path.clone())));
+    store.lock().await.initialize().await.unwrap();
+    store
+        .lock()
+        .await
+        .create("task-orphan", "agent-sess", "/tmp", "T", None)
+        .await
+        .unwrap();
+    store
+        .lock()
+        .await
+        .update("task-orphan", None, Some("running"))
+        .await
+        .unwrap();
+    let started = AguiEvent::run_started("run-orphan", "task-orphan");
+    store
+        .lock()
+        .await
+        .save_event(
+            "task-orphan",
+            "run-orphan",
+            started.event_type().as_str(),
+            &serde_json::to_string(&started).unwrap(),
+            started.timestamp(),
+        )
+        .await
+        .unwrap();
+
+    let manager = SessionManager::new(store.clone(), None, true);
+    manager.reconcile_task_status("task-orphan").await.unwrap();
+
+    let task = store
+        .lock()
+        .await
+        .get("task-orphan")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.status, "idle");
+    assert!(store
+        .lock()
+        .await
+        .run_is_complete("task-orphan", "run-orphan")
+        .await
+        .unwrap());
+
+    let events = store
+        .lock()
+        .await
+        .get_events_for_run("task-orphan", "run-orphan")
+        .await
+        .unwrap();
+    assert!(matches!(
+        events.last(),
+        Some(AguiEvent::RunError { code, .. }) if code.as_deref() == Some("interrupted")
+    ));
 
     let _ = std::fs::remove_file(&db_path);
 }

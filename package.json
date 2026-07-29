@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "bun scripts/dev.mjs",
     "dev:web": "bun run --filter @qenex/web dev",
-    "dev:desktop": "bun run --filter @qenex/desktop tauri:dev",
+    "dev:desktop": "bun scripts/dev-desktop.mjs",
     "dev:jetbrains": "bun scripts/dev-jetbrains.mjs",
     "dev:rust": "cargo run --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui -- --config crates/bridge/bridge.config.json",
     "build": "bun scripts/build-all.mjs",

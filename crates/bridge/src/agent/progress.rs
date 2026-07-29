@@ -6,10 +6,7 @@ use serde::Serialize;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum InstallProgressEvent {
     #[serde(rename_all = "camelCase")]
-    Stage {
-        stage: String,
-        message: String,
-    },
+    Stage { stage: String, message: String },
     #[serde(rename_all = "camelCase")]
     Download {
         message: String,

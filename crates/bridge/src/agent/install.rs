@@ -9,9 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::download::download_file_with_progress;
-use crate::agent::paths::{
-    agent_version_dir, agents_dir, ensure_qenex_dirs, installed_db_path,
-};
+use crate::agent::paths::{agent_version_dir, agents_dir, ensure_qenex_dirs, installed_db_path};
 use crate::agent::progress::{self, ProgressFn};
 use crate::agent::registry::{
     find_registry_agent, resolve_install_plan, InstallKind, InstallPlan, PackageDistribution,
@@ -290,17 +288,9 @@ pub fn package_bin_name(package: &str) -> String {
     // `@scope/name@version` | `@scope/name` | `name@version` | `name`
     if let Some(rest) = package.strip_prefix('@') {
         let spec = rest.split('@').next().unwrap_or(rest);
-        return spec
-            .split('/')
-            .nth(1)
-            .unwrap_or(spec)
-            .to_string();
+        return spec.split('/').nth(1).unwrap_or(spec).to_string();
     }
-    package
-        .split('@')
-        .next()
-        .unwrap_or(package)
-        .to_string()
+    package.split('@').next().unwrap_or(package).to_string()
 }
 
 /// Normalize `@scope/name@version` / `name@version` → install folder under node_modules.
@@ -309,11 +299,7 @@ fn package_folder_name(package: &str) -> String {
         let spec = rest.split('@').next().unwrap_or(rest);
         return format!("@{spec}");
     }
-    package
-        .split('@')
-        .next()
-        .unwrap_or(package)
-        .to_string()
+    package.split('@').next().unwrap_or(package).to_string()
 }
 
 fn package_dir(prefix: &Path, package: &str) -> PathBuf {
@@ -405,11 +391,7 @@ async fn install_npx(
         .map_err(|e| e.to_string())?;
     }
 
-    progress::stage(
-        progress,
-        "bun",
-        format!("bun add {}…", pkg.package),
-    );
+    progress::stage(progress, "bun", format!("bun add {}…", pkg.package));
     // Bun installs optionalDependencies by default and is much faster than npm.
     let status = Command::new(&runtime.bun)
         .current_dir(&install_dir)
@@ -462,7 +444,7 @@ async fn install_npx(
     })
 }
 
-fn openai_codex_platform_spec() -> Option<&'static str> {
+pub(crate) fn openai_codex_platform_spec() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => Some("@openai/codex-win32-x64"),
         ("windows", "aarch64") => Some("@openai/codex-win32-arm64"),
@@ -472,6 +454,44 @@ fn openai_codex_platform_spec() -> Option<&'static str> {
         ("linux", "aarch64") => Some("@openai/codex-linux-arm64"),
         _ => None,
     }
+}
+
+pub(crate) fn find_openai_codex_native(prefix: &Path) -> Option<PathBuf> {
+    let platform_pkg = openai_codex_platform_spec()?;
+    let name = platform_pkg.trim_start_matches("@openai/");
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        _ => return None,
+    };
+    let binary = if cfg!(windows) { "codex.exe" } else { "codex" };
+    [
+        prefix
+            .join("node_modules")
+            .join("@openai")
+            .join(name)
+            .join("vendor")
+            .join(target)
+            .join("bin")
+            .join(binary),
+        prefix
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join(name)
+            .join("vendor")
+            .join(target)
+            .join("bin")
+            .join(binary),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 fn openai_codex_version(prefix: &Path) -> Option<String> {
@@ -505,7 +525,7 @@ fn openai_codex_platform_present(prefix: &Path, platform_pkg: &str) -> bool {
     candidates.iter().any(|p| p.is_file())
 }
 
-async fn ensure_openai_codex_platform_binary(
+pub(crate) async fn ensure_openai_codex_platform_binary(
     runtime: &BunRuntime,
     install_dir: &Path,
     progress: Option<&ProgressFn>,
@@ -576,20 +596,11 @@ async fn install_uvx(
     let tools_bin = install_dir.join("bin");
     fs::create_dir_all(&tools_bin).map_err(|e| e.to_string())?;
 
-    progress::stage(
-        progress,
-        "uv",
-        format!("uv tool install {}…", pkg.package),
-    );
+    progress::stage(progress, "uv", format!("uv tool install {}…", pkg.package));
 
     let status = Command::new(&runtime.uv)
         .env("UV_TOOL_BIN_DIR", &tools_bin)
-        .args([
-            "tool",
-            "install",
-            "--force",
-            &pkg.package,
-        ])
+        .args(["tool", "install", "--force", &pkg.package])
         .status()
         .map_err(|e| format!("uv tool install failed to start: {e}"))?;
     if !status.success() {

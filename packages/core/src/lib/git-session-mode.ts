@@ -4,7 +4,7 @@ export type GitSessionMode = "off" | "inplace" | "worktree" | "snapshot";
 
 export const GIT_SESSION_MODE_STORAGE_KEY = "qenex:git-session-mode";
 
-export const DEFAULT_GIT_SESSION_MODE: GitSessionMode = "snapshot";
+export const DEFAULT_GIT_SESSION_MODE: GitSessionMode = "worktree";
 
 export const GIT_SESSION_MODE_OPTIONS: {
   value: GitSessionMode;
@@ -12,15 +12,9 @@ export const GIT_SESSION_MODE_OPTIONS: {
   description: string;
 }[] = [
   {
-    value: "snapshot",
-    label: "检查点（推荐）",
-    description:
-      "像 Cursor：在项目里改文件，用外部检查点记录版本，不污染你的分支。",
-  },
-  {
     value: "worktree",
-    label: "独立沙箱",
-    description: "Agent 在隔离目录工作；主项目不被直接改动（高级）。",
+    label: "独立沙箱（推荐）",
+    description: "每个任务在独立目录工作；撤回不会影响其他任务或主项目。",
   },
   {
     value: "inplace",
@@ -46,10 +40,12 @@ export function parseGitSessionMode(value: unknown): GitSessionMode | null {
 export function getPreferredGitSessionMode(): GitSessionMode {
   if (typeof localStorage === "undefined") return DEFAULT_GIT_SESSION_MODE;
   try {
-    return (
-      parseGitSessionMode(localStorage.getItem(GIT_SESSION_MODE_STORAGE_KEY)) ??
-      DEFAULT_GIT_SESSION_MODE
+    const stored = parseGitSessionMode(
+      localStorage.getItem(GIT_SESSION_MODE_STORAGE_KEY),
     );
+    // Snapshot is retained in the wire/storage type for old task bindings, but
+    // new tasks always migrate to isolated worktrees.
+    return stored === "snapshot" ? "worktree" : (stored ?? DEFAULT_GIT_SESSION_MODE);
   } catch {
     return DEFAULT_GIT_SESSION_MODE;
   }

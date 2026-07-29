@@ -904,6 +904,7 @@ mod tests {
     use tempfile::tempdir;
 
     static WT_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn git_sync(cwd: &Path, args: &[&str]) {
         let status = StdCommand::new("git")
@@ -951,6 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_worktree_keeps_main_branch() {
+        let _env_guard = ENV_LOCK.lock().await;
         with_isolated_worktree_root(|_| ());
         let (_tmp, root) = init_repo();
         let base = std::env::temp_dir().join(format!(
@@ -986,6 +988,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_branch_and_commit_turn() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-commit-{}-{}",
             std::process::id(),
@@ -1024,6 +1027,7 @@ mod tests {
 
     #[tokio::test]
     async fn rewind_and_unrewind() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-rewind-{}-{}",
             std::process::id(),
@@ -1061,6 +1065,7 @@ mod tests {
 
     #[tokio::test]
     async fn merge_to_base_branch() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-merge-{}-{}",
             std::process::id(),
@@ -1090,6 +1095,7 @@ mod tests {
 
     #[tokio::test]
     async fn merge_fails_when_not_on_base() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-merge-fail-{}-{}",
             std::process::id(),
@@ -1119,6 +1125,7 @@ mod tests {
 
     #[tokio::test]
     async fn dual_tasks_isolated_worktrees() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-dual-{}-{}",
             std::process::id(),
@@ -1148,6 +1155,7 @@ mod tests {
 
     #[tokio::test]
     async fn noop_commit_when_clean() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-clean-{}-{}",
             std::process::id(),
@@ -1179,6 +1187,7 @@ mod tests {
 
     #[tokio::test]
     async fn reensure_existing_branch_preserves_commits() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-reensure-{}-{}",
             std::process::id(),
@@ -1222,6 +1231,7 @@ mod tests {
 
     #[tokio::test]
     async fn seeds_env_files() {
+        let _env_guard = ENV_LOCK.lock().await;
         let base = std::env::temp_dir().join(format!(
             "qenex-wt-env-{}-{}",
             std::process::id(),

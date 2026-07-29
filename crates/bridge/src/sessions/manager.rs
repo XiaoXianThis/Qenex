@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::agent::{AgentConnection, ParsedConfigOptions, SessionInitParams};
@@ -27,6 +27,15 @@ struct PersistEventJob {
     event_json: String,
     timestamp: f64,
     session_title: Option<String>,
+}
+
+enum PersistCommand {
+    Event(PersistEventJob),
+    UpdateStatus {
+        task_id: String,
+        status: &'static str,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -55,6 +64,7 @@ struct InnerSession {
     agent_session_id: String,
     connection: AgentConnection,
     bridge: SharedBridge,
+    persist_tx: mpsc::UnboundedSender<PersistCommand>,
     permissions: PermissionRegistry,
     runs: Mutex<HashMap<String, RunState>>,
     current_run_id: Mutex<Option<String>>,
@@ -135,6 +145,8 @@ pub struct SessionManager {
     sessions: Arc<Mutex<HashMap<String, InnerSession>>>,
     /// Per-task mutex to serialize concurrent ensure_task calls (e.g. React StrictMode).
     ensure_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Serializes run lifecycle, cancellation, rewind and git checkpoint work per task.
+    operation_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// After rewind: next ensure/hydrate must spawn a fresh ACP session (no resume).
     needs_fresh_session: Arc<Mutex<HashSet<String>>>,
     default_agent_command: Vec<String>,
@@ -150,7 +162,7 @@ impl SessionManager {
         agent_command: Option<Vec<String>>,
         demo_mode: bool,
     ) -> Self {
-        Self::with_git_mode(store, agent_command, demo_mode, GitSessionMode::Snapshot)
+        Self::with_git_mode(store, agent_command, demo_mode, GitSessionMode::Worktree)
     }
 
     pub fn with_git_mode(
@@ -163,6 +175,7 @@ impl SessionManager {
             store,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             ensure_locks: Arc::new(Mutex::new(HashMap::new())),
+            operation_locks: Arc::new(Mutex::new(HashMap::new())),
             needs_fresh_session: Arc::new(Mutex::new(HashSet::new())),
             default_agent_command: agent_command
                 .unwrap_or_else(|| vec!["kiro-cli".into(), "acp".into()]),
@@ -175,6 +188,63 @@ impl SessionManager {
 
     pub fn demo_mode(&self) -> bool {
         self.demo_mode
+    }
+
+    async fn operation_lock(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.operation_locks.lock().await;
+        locks
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    async fn persist_status(
+        persist_tx: &mpsc::UnboundedSender<PersistCommand>,
+        task_id: &str,
+        status: &'static str,
+    ) -> Result<(), ManagerError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        persist_tx
+            .send(PersistCommand::UpdateStatus {
+                task_id: task_id.to_string(),
+                status,
+                ack: ack_tx,
+            })
+            .map_err(|_| ManagerError::Agent("event persistence worker stopped".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| ManagerError::Agent("event persistence acknowledgement dropped".into()))?
+            .map_err(ManagerError::Agent)
+    }
+
+    async fn ensure_snapshot_exclusive(&self, task_id: &str) -> Result<(), ManagerError> {
+        let store = self.store.lock().await;
+        let Some(binding) = store.get_git_binding(task_id).await? else {
+            return Ok(());
+        };
+        if binding.enabled
+            && binding.mode == GitSessionMode::Snapshot
+            && store
+                .has_other_enabled_snapshot_binding(task_id, &binding.repo_root)
+                .await?
+        {
+            return Err(ManagerError::Busy(
+                "legacy snapshot mode is shared by multiple tasks; switch this task to an isolated worktree before running or rewinding".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn ensure_no_active_run(&self, task_id: &str) -> Result<(), ManagerError> {
+        let sessions = self.sessions.lock().await;
+        if let Some(active) = sessions.get(task_id) {
+            if let Some(run_id) = active.current_run_id.lock().await.as_deref() {
+                return Err(ManagerError::Busy(format!(
+                    "task {task_id} has active run {run_id}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub async fn create_task(
@@ -190,9 +260,17 @@ impl SessionManager {
         agent_id: Option<String>,
         git_session_mode: Option<&str>,
     ) -> Result<ActiveSession, ManagerError> {
-        let resolved_git_mode = GitSessionMode::parse_or_default(
+        let requested_git_mode = GitSessionMode::parse_or_default(
             git_session_mode.or(Some(self.default_git_session_mode.as_str())),
         );
+        // Snapshot mode shares the user's real worktree and cannot provide safe
+        // task-local rewind. Preserve old persisted bindings, but create all new
+        // snapshot requests as isolated worktrees.
+        let resolved_git_mode = if requested_git_mode == GitSessionMode::Snapshot {
+            GitSessionMode::Worktree
+        } else {
+            requested_git_mode
+        };
 
         if self.demo_mode {
             let agent_session_id = format!("stub-{}", &Uuid::new_v4().to_string()[..8]);
@@ -243,19 +321,24 @@ impl SessionManager {
         })
         .map_err(ManagerError::Agent)?;
 
-        // Persist task row first (FK for git_bindings), bind git strategy, then spawn.
-        let placeholder_session = format!("pending-{}", &Uuid::new_v4().to_string()[..8]);
-        self.store
-            .lock()
-            .await
-            .create(
-                task_id,
-                &placeholder_session,
-                cwd,
-                title,
-                agent_id.as_deref(),
-            )
-            .await?;
+        // New tasks need a row first for the git_bindings FK. Never overwrite an
+        // existing real agent session id with a temporary value while spawning:
+        // auth_required and other spawn failures must leave resumable state intact.
+        let existing_task = self.store.lock().await.get(task_id).await?;
+        if existing_task.is_none() {
+            let placeholder_session = format!("pending-{}", &Uuid::new_v4().to_string()[..8]);
+            self.store
+                .lock()
+                .await
+                .create(
+                    task_id,
+                    &placeholder_session,
+                    cwd,
+                    title,
+                    agent_id.as_deref(),
+                )
+                .await?;
+        }
         let git_binding = self
             .bind_git_session(task_id, cwd, resolved_git_mode)
             .await;
@@ -275,42 +358,61 @@ impl SessionManager {
         let init =
             SessionInitParams::from_api(&agent_cwd, resume_session_id, mcp_servers.as_ref());
         let (connection, init_result) =
-            match AgentConnection::spawn(task_id, init, &command, Some(bridge.clone())).await {
-                Ok(v) => v,
-                Err(e) => {
-                    if git_binding.enabled {
-                        let _ = remove_for_binding(&git_binding).await;
-                    }
-                    return Err(e.into());
-                }
-            };
+            AgentConnection::spawn(task_id, init, &command, Some(bridge.clone())).await?;
 
         // 串行落库：每个事件各自 tokio::spawn 会乱序写入，刷新重放时文本 delta 会错位
         let store = self.store.clone();
-        let (persist_tx, mut persist_rx) = mpsc::unbounded_channel::<PersistEventJob>();
+        let (persist_tx, mut persist_rx) = mpsc::unbounded_channel::<PersistCommand>();
         tokio::spawn(async move {
-            while let Some(job) = persist_rx.recv().await {
-                if let Some(title) = job.session_title {
-                    let _ = store
-                        .lock()
-                        .await
-                        .update(&job.task_id, Some(&title), None)
-                        .await;
+            let mut pending_error: Option<String> = None;
+            while let Some(command) = persist_rx.recv().await {
+                match command {
+                    PersistCommand::Event(job) => {
+                        if let Some(title) = job.session_title {
+                            let _ = store
+                                .lock()
+                                .await
+                                .update(&job.task_id, Some(&title), None)
+                                .await;
+                        }
+                        if let Err(error) = store
+                            .lock()
+                            .await
+                            .save_event(
+                                &job.task_id,
+                                &job.run_id,
+                                &job.event_type,
+                                &job.event_json,
+                                job.timestamp,
+                            )
+                            .await
+                        {
+                            pending_error = Some(error.to_string());
+                        }
+                    }
+                    PersistCommand::UpdateStatus {
+                        task_id,
+                        status,
+                        ack,
+                    } => {
+                        let result = if let Some(error) = pending_error.take() {
+                            Err(error)
+                        } else {
+                            store
+                                .lock()
+                                .await
+                                .update(&task_id, None, Some(status))
+                                .await
+                                .map(|_| ())
+                                .map_err(|error| error.to_string())
+                        };
+                        let _ = ack.send(result);
+                    }
                 }
-                let _ = store
-                    .lock()
-                    .await
-                    .save_event(
-                        &job.task_id,
-                        &job.run_id,
-                        &job.event_type,
-                        &job.event_json,
-                        job.timestamp,
-                    )
-                    .await;
             }
         });
         {
+            let bridge_persist_tx = persist_tx.clone();
             let mut b = bridge.lock().await;
             b.set_persist_callback(move |task_id, run_id, event| {
                 let session_title = match &event {
@@ -330,7 +432,10 @@ impl SessionManager {
                     timestamp: event.timestamp(),
                     session_title,
                 };
-                if persist_tx.send(job).is_err() {
+                if bridge_persist_tx
+                    .send(PersistCommand::Event(job))
+                    .is_err()
+                {
                     tracing::error!("persist channel closed, dropping event");
                 }
             });
@@ -340,6 +445,7 @@ impl SessionManager {
             agent_session_id: init_result.agent_session_id.clone(),
             connection,
             bridge,
+            persist_tx,
             permissions,
             runs: Mutex::new(HashMap::new()),
             current_run_id: Mutex::new(None),
@@ -516,6 +622,18 @@ impl SessionManager {
         task_id: &str,
         commit_sha: &str,
     ) -> Result<GitSessionBinding, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.ensure_no_active_run(task_id).await?;
+        self.ensure_snapshot_exclusive(task_id).await?;
+        self.git_rewind_inner(task_id, commit_sha).await
+    }
+
+    async fn git_rewind_inner(
+        &self,
+        task_id: &str,
+        commit_sha: &str,
+    ) -> Result<GitSessionBinding, ManagerError> {
         let mut binding = self.get_git_binding(task_id).await?;
         if !binding.enabled {
             return Err(ManagerError::Agent("git session disabled".into()));
@@ -532,6 +650,10 @@ impl SessionManager {
     }
 
     pub async fn git_unrewind(&self, task_id: &str) -> Result<GitSessionBinding, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.ensure_no_active_run(task_id).await?;
+        self.ensure_snapshot_exclusive(task_id).await?;
         let mut binding = self.get_git_binding(task_id).await?;
         git_session::unrewind(&mut binding)
             .await
@@ -545,6 +667,10 @@ impl SessionManager {
     }
 
     pub async fn git_merge_base(&self, task_id: &str) -> Result<String, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.ensure_no_active_run(task_id).await?;
+        self.ensure_snapshot_exclusive(task_id).await?;
         let binding = self.get_git_binding(task_id).await?;
         let merge_sha = git_session::merge_to_base(&binding)
             .await
@@ -599,6 +725,12 @@ impl SessionManager {
         run_id: Option<&str>,
         user_message_index: Option<usize>,
     ) -> Result<RewindTaskResult, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.ensure_snapshot_exclusive(task_id).await?;
+        if self.has_session(task_id).await {
+            self.cancel_run_inner(task_id).await?;
+        }
         let store = self.store.clone();
 
         let (from_event_id, resolved_run_id) = {
@@ -728,7 +860,7 @@ impl SessionManager {
             .lock()
             .await
             .insert(task_id.to_string());
-        let _ = self.stop(task_id).await?;
+        let _ = self.stop_inner(task_id).await?;
         Ok(())
     }
 
@@ -742,12 +874,16 @@ impl SessionManager {
         &self,
         task_id: &str,
     ) -> Result<GitSessionBinding, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.ensure_no_active_run(task_id).await?;
+        self.ensure_snapshot_exclusive(task_id).await?;
         let binding = self.get_git_binding(task_id).await?;
         if !binding.enabled {
             return Err(ManagerError::Agent("git session disabled".into()));
         }
         let base = binding.base_sha.clone();
-        self.git_rewind(task_id, &base).await?;
+        self.git_rewind_inner(task_id, &base).await?;
         // Drop turn records so UI matches working tree (conversation kept).
         let turns = self.list_git_turns(task_id).await?;
         let run_ids: Vec<String> = turns.into_iter().map(|t| t.run_id).collect();
@@ -793,7 +929,10 @@ impl SessionManager {
         input: &Value,
         _config: Option<&Value>,
     ) -> Result<String, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
         self.hydrate_task_if_needed(task_id).await?;
+        self.ensure_snapshot_exclusive(task_id).await?;
 
         let run_id = Uuid::new_v4().to_string();
 
@@ -805,19 +944,23 @@ impl SessionManager {
             );
             let task_id_owned = task_id.to_string();
             let run_id_owned = run_id.clone();
-            let user_text = extract_user_text(input);
             let input_owned = input.clone();
             let store = self.store.clone();
             tokio::spawn(async move {
-                if let Some(text) = user_text {
-                    persist_user_message_event(
-                        store.clone(),
-                        &task_id_owned,
-                        &run_id_owned,
-                        &input_owned,
-                        &text,
-                    )
-                    .await;
+                if let Some(job) =
+                    user_message_persist_job(&task_id_owned, &run_id_owned, &input_owned)
+                {
+                    let _ = store
+                        .lock()
+                        .await
+                        .save_event(
+                            &job.task_id,
+                            &job.run_id,
+                            &job.event_type,
+                            &job.event_json,
+                            job.timestamp,
+                        )
+                        .await;
                 }
                 enqueue_demo_events(tx, task_id_owned, run_id_owned).await;
             });
@@ -827,38 +970,62 @@ impl SessionManager {
         let (tx, rx) = mpsc::unbounded_channel();
         let prompt = build_prompt_blocks(input);
 
-        let bridge = {
+        let (bridge, persist_tx) = {
             let sessions = self.sessions.lock().await;
             let active = sessions
                 .get(task_id)
                 .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
 
+            let mut current_run_id = active.current_run_id.lock().await;
+            if let Some(active_run_id) = current_run_id.as_deref() {
+                return Err(ManagerError::Busy(format!(
+                    "task {task_id} already has active run {active_run_id}"
+                )));
+            }
+            if let Some(job) = user_message_persist_job(task_id, &run_id, input) {
+                active
+                    .persist_tx
+                    .send(PersistCommand::Event(job))
+                    .map_err(|_| {
+                        ManagerError::Agent("event persistence worker stopped".into())
+                    })?;
+            }
             active.runs.lock().await.insert(
                 run_id.clone(),
                 RunState { rx: Some(rx) },
             );
-            *active.current_run_id.lock().await = Some(run_id.clone());
+            *current_run_id = Some(run_id.clone());
 
             let mut bridge = active.bridge.lock().await;
-            if let Some(user_text) = extract_user_text(input) {
-                persist_user_message_event(
-                    self.store.clone(),
-                    task_id,
-                    &run_id,
-                    input,
-                    &user_text,
-                )
-                .await;
-            }
             bridge.start_run(&run_id, tx);
-            active.bridge.clone()
+            (active.bridge.clone(), active.persist_tx.clone())
         };
 
-        self.store
-            .lock()
-            .await
-            .update(task_id, None, Some("running"))
-            .await?;
+        // The status command is queued after user_message and RUN_STARTED, so callers
+        // can never observe `running` before the resumable run events are durable.
+        if let Err(error) = Self::persist_status(&persist_tx, task_id, "running").await {
+            let mut b = bridge.lock().await;
+            if b.is_run_active() {
+                b.error_run(
+                    "Failed to persist run start",
+                    Some("persistence_error".to_string()),
+                );
+            }
+            drop(b);
+            let sessions = self.sessions.lock().await;
+            if let Some(active) = sessions.get(task_id) {
+                *active.current_run_id.lock().await = None;
+                active.runs.lock().await.remove(&run_id);
+            }
+            drop(sessions);
+            let _ = self
+                .store
+                .lock()
+                .await
+                .update(task_id, None, Some("idle"))
+                .await;
+            return Err(error);
+        }
 
         // Send the prompt and grab the turn-result receiver while briefly holding the
         // sessions lock, then release it. Awaiting the receiver below must NOT hold the
@@ -877,6 +1044,8 @@ impl SessionManager {
         let run_id_owned = run_id.clone();
         let store = self.store.clone();
         let sessions = self.sessions.clone();
+        let operation_locks = self.operation_locks.clone();
+        let persist_tx_for_completion = persist_tx.clone();
 
         tokio::spawn(async move {
             let result = match prompt_rx {
@@ -885,6 +1054,29 @@ impl SessionManager {
                     .unwrap_or_else(|_| Err("agent connection closed".to_string())),
                 Err(e) => Err(e),
             };
+
+            let operation_lock = {
+                let mut locks = operation_locks.lock().await;
+                locks
+                    .entry(task_id_owned.clone())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                    .clone()
+            };
+            let _operation_guard = operation_lock.lock().await;
+
+            let owns_run = {
+                let sessions = sessions.lock().await;
+                match sessions.get(&task_id_owned) {
+                    Some(active) => {
+                        active.current_run_id.lock().await.as_deref()
+                            == Some(run_id_owned.as_str())
+                    }
+                    None => false,
+                }
+            };
+            if !owns_run {
+                return;
+            }
 
             let mut b = bridge.lock().await;
             match result {
@@ -907,13 +1099,26 @@ impl SessionManager {
                 }
             }
 
-            let _ = store
-                .lock()
-                .await
-                .update(&task_id_owned, None, Some("idle"))
-                .await;
+            // RUN_FINISHED / RUN_ERROR and all closing message/tool events were queued
+            // by the bridge before this status command. Awaiting it is our durability
+            // barrier before exposing idle or committing the git checkpoint.
+            let persisted = SessionManager::persist_status(
+                &persist_tx_for_completion,
+                &task_id_owned,
+                "idle",
+            )
+            .await;
 
-            SessionManager::maybe_commit_git_turn(store, &task_id_owned, &run_id_owned).await;
+            if persisted.is_ok() {
+                SessionManager::maybe_commit_git_turn(store, &task_id_owned, &run_id_owned).await;
+            } else if let Err(error) = persisted {
+                tracing::error!(
+                    task_id = %task_id_owned,
+                    run_id = %run_id_owned,
+                    error = %error,
+                    "run terminal persistence failed; git checkpoint skipped"
+                );
+            }
         });
 
         Ok(run_id)
@@ -937,8 +1142,8 @@ impl SessionManager {
             .get(task_id)
             .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
         let mut runs = active.runs.lock().await;
-        let state = runs
-            .get_mut(run_id)
+        let mut state = runs
+            .remove(run_id)
             .ok_or_else(|| ManagerError::NoRun(format!("{task_id}:{run_id}")))?;
         state
             .rx
@@ -999,6 +1204,12 @@ impl SessionManager {
     }
 
     pub async fn cancel_run(&self, task_id: &str) -> Result<(), ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.cancel_run_inner(task_id).await
+    }
+
+    async fn cancel_run_inner(&self, task_id: &str) -> Result<(), ManagerError> {
         if self.demo_tasks.lock().await.contains(task_id) {
             return Ok(());
         }
@@ -1006,12 +1217,15 @@ impl SessionManager {
         let active = sessions
             .get(task_id)
             .ok_or_else(|| ManagerError::NoSession(task_id.to_string()))?;
-        active
-            .connection
-            .cancel()
-            .await
-            .map_err(ManagerError::Agent)?;
+        let run_id = active.current_run_id.lock().await.clone();
+        let persist_tx = active.persist_tx.clone();
         let bridge = active.bridge.clone();
+        if run_id.is_none() {
+            drop(sessions);
+            Self::persist_status(&persist_tx, task_id, "idle").await?;
+            return Ok(());
+        }
+        let cancel_error = active.connection.cancel().await.err();
         drop(sessions);
 
         {
@@ -1024,15 +1238,25 @@ impl SessionManager {
         {
             let sessions = self.sessions.lock().await;
             if let Some(active) = sessions.get(task_id) {
-                *active.current_run_id.lock().await = None;
+                let mut current = active.current_run_id.lock().await;
+                if *current == run_id {
+                    *current = None;
+                }
             }
         }
 
-        self.store
-            .lock()
-            .await
-            .update(task_id, None, Some("idle"))
-            .await?;
+        Self::persist_status(&persist_tx, task_id, "idle").await?;
+        if let Some(error) = cancel_error {
+            tracing::warn!(
+                task_id,
+                error = %error,
+                "agent cancel notification failed"
+            );
+        }
+        // ACP cancellation is a notification without a completion acknowledgement.
+        // Tear down this process before allowing another prompt, guaranteeing that
+        // the cancelled turn cannot keep running tools beside the next turn.
+        let _ = self.stop_inner(task_id).await?;
         Ok(())
     }
 
@@ -1341,6 +1565,7 @@ impl SessionManager {
             resume_session_id
                 .map(str::to_string)
                 .or_else(|| stored_task.as_ref().map(|t| t.agent_session_id.clone()))
+                .filter(|session_id| !session_id.starts_with("pending-"))
         };
         let effective_title = stored_task
             .as_ref()
@@ -1409,10 +1634,92 @@ impl SessionManager {
             .map_err(ManagerError::Agent)
     }
 
+    /// Resolve persisted `running` rows that no longer have a matching live run.
+    /// This covers process restarts and hard agent exits where no terminal event
+    /// could be emitted before the in-memory session disappeared.
+    pub async fn reconcile_task_status(&self, task_id: &str) -> Result<(), ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+
+        let task = self.store.lock().await.get(task_id).await?;
+        let Some(task) = task else {
+            return Err(ManagerError::NoSession(task_id.to_string()));
+        };
+        if task.status != "running" {
+            return Ok(());
+        }
+
+        let latest_run_id = self.store.lock().await.latest_run_id(task_id).await?;
+        let has_matching_live_run = {
+            let sessions = self.sessions.lock().await;
+            match (sessions.get(task_id), latest_run_id.as_deref()) {
+                (Some(active), Some(run_id)) => {
+                    active.current_run_id.lock().await.as_deref() == Some(run_id)
+                }
+                _ => false,
+            }
+        };
+        if has_matching_live_run {
+            return Ok(());
+        }
+
+        if let Some(run_id) = latest_run_id {
+            let complete = self
+                .store
+                .lock()
+                .await
+                .run_is_complete(task_id, &run_id)
+                .await?;
+            if !complete {
+                let event = AguiEvent::run_error(
+                    run_id.clone(),
+                    task_id.to_string(),
+                    "Run interrupted because the backend restarted",
+                    Some("interrupted".to_string()),
+                );
+                self.store
+                    .lock()
+                    .await
+                    .save_event(
+                        task_id,
+                        &run_id,
+                        event.event_type().as_str(),
+                        &serde_json::to_string(&event).unwrap_or_default(),
+                        event.timestamp(),
+                    )
+                    .await?;
+            }
+        }
+        self.store
+            .lock()
+            .await
+            .update(task_id, None, Some("idle"))
+            .await?;
+        Ok(())
+    }
+
     pub async fn stop(&self, task_id: &str) -> Result<bool, ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.stop_inner(task_id).await
+    }
+
+    async fn stop_inner(&self, task_id: &str) -> Result<bool, ManagerError> {
         self.demo_tasks.lock().await.remove(task_id);
         let removed = self.sessions.lock().await.remove(task_id);
         if let Some(active) = removed {
+            let run_id = active.current_run_id.lock().await.take();
+            if run_id.is_some() {
+                let mut bridge = active.bridge.lock().await;
+                if bridge.is_run_active() {
+                    bridge.error_run(
+                        "Run interrupted because the agent session stopped",
+                        Some("interrupted".to_string()),
+                    );
+                }
+                drop(bridge);
+                Self::persist_status(&active.persist_tx, task_id, "idle").await?;
+            }
             active.connection.shutdown().await;
             Ok(true)
         } else {
@@ -1421,6 +1728,10 @@ impl SessionManager {
     }
 
     pub async fn destroy(&self, task_id: &str) -> Result<(), ManagerError> {
+        let operation_lock = self.operation_lock(task_id).await;
+        let _operation_guard = operation_lock.lock().await;
+        // Stop and persist any active run before deleting its worktree/snapshot.
+        let _ = self.stop_inner(task_id).await?;
         if let Ok(binding) = self.get_git_binding(task_id).await {
             if binding.enabled {
                 if let Err(e) = remove_for_binding(&binding).await {
@@ -1428,14 +1739,13 @@ impl SessionManager {
                 }
             }
         }
-        let _ = self.stop(task_id).await?;
         Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<(), ManagerError> {
         let ids: Vec<String> = self.sessions.lock().await.keys().cloned().collect();
         for id in ids {
-            let _ = self.destroy(&id).await;
+            let _ = self.stop(&id).await;
         }
         Ok(())
     }
@@ -1559,16 +1869,11 @@ fn active_session_from_inner(
     }
 }
 
-async fn persist_user_message_event(
-    store: Arc<Mutex<SessionStore>>,
+fn user_message_persist_job(
     task_id: &str,
     run_id: &str,
     input: &Value,
-    content: &str,
-) {
-    if content.is_empty() {
-        return;
-    }
+) -> Option<PersistEventJob> {
     let last_user_message = input
         .get("messages")
         .and_then(|m| m.as_array())
@@ -1579,21 +1884,27 @@ async fn persist_user_message_event(
                 .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
                 .cloned()
         });
+    let content = extract_user_text(input).unwrap_or_default();
+    if content.is_empty() && last_user_message.is_none() {
+        return None;
+    }
     let event = AguiEvent::custom(
         "user_message",
         json!({
             "content": content,
             "message": last_user_message,
+            "runId": run_id,
         }),
     );
     let event_type = event.event_type().as_str().to_string();
-    let event_json = serde_json::to_string(&event).unwrap_or_default();
-    let timestamp = event.timestamp();
-    let _ = store
-        .lock()
-        .await
-        .save_event(task_id, run_id, &event_type, &event_json, timestamp)
-        .await;
+    Some(PersistEventJob {
+        task_id: task_id.to_string(),
+        run_id: run_id.to_string(),
+        event_type,
+        event_json: serde_json::to_string(&event).unwrap_or_default(),
+        timestamp: event.timestamp(),
+        session_title: None,
+    })
 }
 
 fn extract_user_text(input: &Value) -> Option<String> {

@@ -1,5 +1,6 @@
 import { HttpAgent, type RunAgentInput } from "@ag-ui/client";
 import type { RunAgentParameters } from "@ag-ui/client";
+import { cancelTask } from "./bridge-api.ts";
 import { bridgeFetch } from "./bridge-client.ts";
 
 export type SessionProps = {
@@ -16,6 +17,7 @@ export type AguiEvent = {
 
 export class BridgeHttpAgent extends HttpAgent {
   private sessionProps: SessionProps;
+  private pendingCancel: Promise<void> | null = null;
 
   constructor(
     url: string,
@@ -32,19 +34,48 @@ export class BridgeHttpAgent extends HttpAgent {
   }
 
   async loadHistory(taskId: string): Promise<AguiEvent[]> {
-    try {
-      const response = await bridgeFetch(`/v2/tasks/${taskId}/messages`);
-      if (!response.ok) {
-        console.warn(`Failed to load history for task ${taskId}:`, response.statusText);
-        return [];
-      }
-
-      const data = await response.json();
-      return data.events as AguiEvent[];
-    } catch (error) {
-      console.error("Failed to load session history:", error);
-      return [];
+    const response = await bridgeFetch(`/v2/tasks/${taskId}/messages`);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to load history for task ${taskId}: ${response.status} ${response.statusText}`,
+      );
     }
+
+    const data: unknown = await response.json();
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      !Array.isArray((data as { events?: unknown }).events)
+    ) {
+      throw new Error(`Invalid history response for task ${taskId}`);
+    }
+    return (data as { events: AguiEvent[] }).events;
+  }
+
+  override abortRun(): void {
+    const taskId = this.threadId;
+    if (taskId) {
+      const request = cancelTask(taskId)
+        .catch((error) => {
+          console.error(`Failed to cancel backend run for task ${taskId}:`, error);
+        })
+        .finally(() => {
+          if (this.pendingCancel === request) {
+            this.pendingCancel = null;
+          }
+        });
+      this.pendingCancel = request;
+    }
+    super.abortRun();
+  }
+
+  override async runAgent(
+    ...args: Parameters<HttpAgent["runAgent"]>
+  ): Promise<Awaited<ReturnType<HttpAgent["runAgent"]>>> {
+    // A new send after Stop waits until the backend has emitted and persisted the
+    // cancelled terminal event. The server also rejects overlapping runs.
+    await this.pendingCancel;
+    return super.runAgent(...args);
   }
 
   protected prepareRunAgentInput(

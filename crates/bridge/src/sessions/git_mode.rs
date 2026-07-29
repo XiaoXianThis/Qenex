@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum GitSessionMode {
     Off,
     Inplace,
-    Worktree,
     #[default]
+    Worktree,
     Snapshot,
 }
 
@@ -61,6 +61,6 @@ mod tests {
         assert_eq!(GitSessionMode::parse("inplace"), Some(GitSessionMode::Inplace));
         assert_eq!(GitSessionMode::parse("off"), Some(GitSessionMode::Off));
         assert_eq!(GitSessionMode::parse("nope"), None);
-        assert_eq!(GitSessionMode::parse_or_default(None), GitSessionMode::Snapshot);
+        assert_eq!(GitSessionMode::parse_or_default(None), GitSessionMode::Worktree);
     }
 }

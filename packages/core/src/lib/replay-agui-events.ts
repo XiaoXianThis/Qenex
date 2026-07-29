@@ -745,6 +745,72 @@ export function hasIncompleteRun(events: AguiEvent[]): boolean {
 }
 
 export function splitIntoRuns(events: AguiEvent[]): AguiEvent[][] {
+  const explicitUserRunId = (event: AguiEvent): string | undefined => {
+    if (!isUserMessageEvent(event)) return undefined;
+    const value = event.value;
+    if (typeof value !== "object" || value === null) return undefined;
+    const runId = (value as { runId?: unknown }).runId;
+    return typeof runId === "string" && runId ? runId : undefined;
+  };
+  const hasExplicitUserRunIds = events.some(
+    (event) => explicitUserRunId(event) !== undefined,
+  );
+
+  // New persisted user_message events carry runId. Group those events and
+  // lifecycle events by identity instead of trusting global row adjacency, so
+  // legacy/out-of-order writes cannot move a following user turn before the
+  // previous assistant response.
+  if (hasExplicitUserRunIds) {
+    const runs: AguiEvent[][] = [];
+    const byRunId = new Map<string, AguiEvent[]>();
+    let activeRunId: string | undefined;
+    let pendingPrefix: AguiEvent[] = [];
+
+    const bucket = (runId: string) => {
+      let run = byRunId.get(runId);
+      if (!run) {
+        run = pendingPrefix;
+        pendingPrefix = [];
+        byRunId.set(runId, run);
+        runs.push(run);
+      }
+      return run;
+    };
+
+    for (const event of events) {
+      const lifecycleRunId =
+        (event.type === "RUN_STARTED" ||
+          event.type === "RUN_FINISHED" ||
+          event.type === "RUN_ERROR") &&
+        typeof event.runId === "string"
+          ? event.runId
+          : undefined;
+      const userRunId = explicitUserRunId(event);
+
+      if (lifecycleRunId) {
+        bucket(lifecycleRunId).push(event);
+        if (event.type === "RUN_STARTED") {
+          activeRunId = lifecycleRunId;
+        } else if (activeRunId === lifecycleRunId) {
+          activeRunId = undefined;
+        }
+      } else if (userRunId) {
+        bucket(userRunId).push(event);
+      } else if (activeRunId) {
+        bucket(activeRunId).push(event);
+      } else {
+        pendingPrefix.push(event);
+      }
+    }
+
+    if (pendingPrefix.length > 0) {
+      const last = runs.at(-1);
+      if (last) last.push(...pendingPrefix);
+      else runs.push(pendingPrefix);
+    }
+    return runs.filter((run) => run.length > 0);
+  }
+
   const runs: AguiEvent[][] = [];
   let pendingPrefix: AguiEvent[] = [];
   let current: AguiEvent[] = [];

@@ -114,5 +114,8 @@ pub fn apply_augmented_path() {
     unsafe {
         std::env::set_var("PATH", &next);
     }
-    tracing::debug!("PATH augmented for agent discovery ({} entries)", next.matches(':').count() + 1);
+    tracing::debug!(
+        "PATH augmented for agent discovery ({} entries)",
+        next.matches(':').count() + 1
+    );
 }

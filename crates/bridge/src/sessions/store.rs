@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
+use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use thiserror::Error;
 
@@ -336,7 +337,7 @@ impl SessionStore {
     pub async fn get_events_for_task(&self, task_id: &str) -> Result<Vec<AguiEvent>, StoreError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT event_data FROM events WHERE task_id = ? ORDER BY id ASC",
+            "SELECT run_id, event_data FROM events WHERE task_id = ? ORDER BY id ASC",
         )
         .bind(task_id)
         .fetch_all(pool)
@@ -344,8 +345,21 @@ impl SessionStore {
 
         let mut events = Vec::new();
         for row in rows {
+            let run_id: String = row.get("run_id");
             let event_data: String = row.get("event_data");
-            if let Ok(event) = serde_json::from_str::<AguiEvent>(&event_data) {
+            if let Ok(mut event) = serde_json::from_str::<AguiEvent>(&event_data) {
+                // Older user_message rows predate the embedded runId. Restore it
+                // from the normalized DB column so replay can repair interleaved
+                // lifecycle writes from those versions.
+                if let AguiEvent::Custom { name, value, .. } = &mut event {
+                    if name == "user_message" {
+                        if let Some(object) = value.as_object_mut() {
+                            object
+                                .entry("runId".to_string())
+                                .or_insert_with(|| Value::String(run_id));
+                        }
+                    }
+                }
                 events.push(event);
             } else {
                 tracing::warn!("failed to deserialize event: {}", event_data);
@@ -538,6 +552,26 @@ impl SessionStore {
                 mode,
             }
         }))
+    }
+
+    pub async fn has_other_enabled_snapshot_binding(
+        &self,
+        task_id: &str,
+        repo_root: &str,
+    ) -> Result<bool, StoreError> {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            r#"
+            SELECT 1 FROM git_bindings
+            WHERE task_id <> ? AND repo_root = ? AND enabled = 1 AND mode = 'snapshot'
+            LIMIT 1
+            "#,
+        )
+        .bind(task_id)
+        .bind(repo_root)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.is_some())
     }
 
     pub async fn insert_git_turn_commit(

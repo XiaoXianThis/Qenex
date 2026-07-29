@@ -103,15 +103,34 @@ export function listAgentPresets(): AgentPreset[] {
 }
 
 export function getAgentPreset(id: string): AgentPreset {
-  const found =
-    agentsStore.agents.find((agent) => agent.id === id) ??
+  const normalizedId = id.trim();
+  const found = agentsStore.agents.find(
+    (agent) =>
+      agent.id === normalizedId || agent.registryId === normalizedId,
+  );
+
+  if (!found && normalizedId) {
+    // Agent discovery is asynchronous during startup. Preserve the persisted
+    // identity instead of silently turning an unknown/restored tab into the
+    // default OpenCode agent.
+    return {
+      id: normalizedId,
+      name: normalizedId,
+      command: [],
+      source: "detected",
+      registryId: normalizedId,
+    };
+  }
+
+  const fallback =
+    found ??
     agentsStore.agents.find(
       (agent) => agent.id === agentsStore.defaultAgentId,
     ) ??
     agentsStore.agents[0] ??
     DEFAULT_AGENTS_CONFIG.agents.find((agent) => agent.id === DEFAULT_AGENT_ID)!;
 
-  return cloneAgentPreset(found);
+  return cloneAgentPreset(fallback);
 }
 
 export function getAgentsConfigDocument(): AgentsConfigDocument {

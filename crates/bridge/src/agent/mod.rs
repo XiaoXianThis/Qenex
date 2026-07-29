@@ -4,6 +4,7 @@ pub mod connection;
 pub mod detect;
 pub mod download;
 pub mod ensure;
+pub mod host;
 pub mod http;
 pub mod install;
 pub mod path_env;

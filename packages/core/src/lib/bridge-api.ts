@@ -313,6 +313,12 @@ export async function getTaskStatus(taskId: string): Promise<TaskSummary> {
   return fetchJson<TaskSummary>(`/v2/tasks/${taskId}/status`);
 }
 
+export async function cancelTask(taskId: string): Promise<void> {
+  await fetchJson(`/v2/tasks/${taskId}/cancel`, {
+    method: "POST",
+  });
+}
+
 export async function pollTaskEvents(
   taskId: string,
   options?: { runId?: string; afterId?: number },
@@ -379,6 +385,36 @@ export type AgentReadiness =
   | "unavailable";
 export type AgentDistributionClass = "native" | "adapter";
 export type AgentDetectedSource = "path" | "vendor" | "managed" | "none";
+export type AgentHostSource = "path" | "bundled" | "managed" | "none";
+
+export type AgentHostCandidate = {
+  source: AgentHostSource;
+  version?: string | null;
+  command: string;
+  selected: boolean;
+};
+
+export type AgentHostStatus = {
+  id: string;
+  name: string;
+  source: AgentHostSource;
+  version?: string | null;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  installable: boolean;
+  command?: string | null;
+  detail: string;
+  candidates: AgentHostCandidate[];
+};
+
+export type InstalledAgentHostInfo = {
+  hostId: string;
+  name: string;
+  version: string;
+  command: string;
+  installPath: string;
+  installedAt: number;
+};
 
 export type InstalledAgentInfo = {
   agentId: string;
@@ -412,6 +448,7 @@ export type RegistryAgentEntry = {
   authHint?: string | null;
   installed?: InstalledAgentInfo | null;
   updateAvailable: boolean;
+  host?: AgentHostStatus | null;
 };
 
 export type DiscoveredAgentEntry = {
@@ -490,6 +527,7 @@ export type InstallProgressEvent =
       type: "done";
       agent?: InstalledAgentInfo;
       result?: EnsureReadyResult;
+      host?: InstalledAgentHostInfo;
     }
   | {
       type: "error";
@@ -672,6 +710,18 @@ export async function ensureAgentReadyWithProgress(
     }
     throw error;
   }
+}
+
+export async function installAgentHostWithProgress(
+  agentId: string,
+  onProgress?: (event: InstallProgressEvent) => void,
+): Promise<InstalledAgentHostInfo> {
+  const path = `/v2/agents/host/install/stream?agentId=${encodeURIComponent(agentId)}`;
+  const done = await readInstallProgressStream(path, onProgress);
+  if (done.host) {
+    return done.host;
+  }
+  throw new Error("Host install stream ended without a host payload");
 }
 
 /** True when ensureSession / spawn failed because the agent binary is missing. */

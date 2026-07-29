@@ -80,8 +80,7 @@ fn is_model_option(opt: &SessionConfigOption) -> bool {
 }
 
 fn is_mode_option(opt: &SessionConfigOption) -> bool {
-    matches!(opt.category, Some(SessionConfigOptionCategory::Mode))
-        || opt.id.to_string() == "mode"
+    matches!(opt.category, Some(SessionConfigOptionCategory::Mode)) || opt.id.to_string() == "mode"
 }
 
 fn is_thought_level_option(opt: &SessionConfigOption) -> bool {
@@ -154,9 +153,7 @@ pub struct ParsedConfigOptions {
     pub fast_config_id: Option<String>,
 }
 
-pub fn parse_config_options(
-    config_options: Option<&[SessionConfigOption]>,
-) -> ParsedConfigOptions {
+pub fn parse_config_options(config_options: Option<&[SessionConfigOption]>) -> ParsedConfigOptions {
     let model = extract_select_config(config_options, is_model_option);
     let mode = extract_select_config(config_options, is_mode_option);
     let thought = extract_select_config(config_options, is_thought_level_option);
@@ -165,18 +162,20 @@ pub fn parse_config_options(
     ParsedConfigOptions {
         from_full_config: config_options.is_some(),
         models: model.as_ref().map(|snapshot| snapshot.options.clone()),
-        current_model_id: model.as_ref().and_then(|snapshot| snapshot.current_value.clone()),
+        current_model_id: model
+            .as_ref()
+            .and_then(|snapshot| snapshot.current_value.clone()),
         model_config_id: model.as_ref().map(|snapshot| snapshot.config_id.clone()),
         modes: mode.as_ref().map(|snapshot| snapshot.options.clone()),
-        current_mode_id: mode.as_ref().and_then(|snapshot| snapshot.current_value.clone()),
+        current_mode_id: mode
+            .as_ref()
+            .and_then(|snapshot| snapshot.current_value.clone()),
         mode_config_id: mode.as_ref().map(|snapshot| snapshot.config_id.clone()),
         thought_levels: thought.as_ref().map(|snapshot| snapshot.options.clone()),
         current_thought_level_id: thought
             .as_ref()
             .and_then(|snapshot| snapshot.current_value.clone()),
-        thought_level_config_id: thought
-            .as_ref()
-            .map(|snapshot| snapshot.config_id.clone()),
+        thought_level_config_id: thought.as_ref().map(|snapshot| snapshot.config_id.clone()),
         fast_options: fast.as_ref().map(|snapshot| snapshot.options.clone()),
         current_fast_id: fast
             .as_ref()
@@ -267,7 +266,9 @@ pub fn modes_to_json(
     })
 }
 
-pub fn current_mode_id(modes: Option<&agent_client_protocol::schema::v1::SessionModeState>) -> Option<String> {
+pub fn current_mode_id(
+    modes: Option<&agent_client_protocol::schema::v1::SessionModeState>,
+) -> Option<String> {
     modes.map(|m| m.current_mode_id.to_string())
 }
 

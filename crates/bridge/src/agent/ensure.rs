@@ -93,14 +93,9 @@ pub async fn ensure_agent_ready_opts(
     );
 
     let registry_agent = registry::find_registry_agent(&id).await.ok();
-    let status = registry_agent
-        .as_ref()
-        .map(evaluate_agent_status);
+    let status = registry_agent.as_ref().map(evaluate_agent_status);
 
-    let update_available = status
-        .as_ref()
-        .map(|s| s.update_available)
-        .unwrap_or(false);
+    let update_available = status.as_ref().map(|s| s.update_available).unwrap_or(false);
 
     // Already launchable and not forcing an update/install.
     if !prefer_update && !force_install {
@@ -137,15 +132,7 @@ pub async fn ensure_agent_ready_opts(
                 .map(|s| source_from_status(s.detected))
                 .unwrap_or(DetectedSource::Managed);
             let installed = install::get_installed(&id);
-            return finalize_ready(
-                &id,
-                cmd,
-                source,
-                true,
-                false,
-                installed,
-                progress,
-            );
+            return finalize_ready(&id, cmd, source, true, false, installed, progress);
         }
     } else if prefer_update && update_available {
         progress::stage(

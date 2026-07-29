@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   agentsActions,
   agentsStore,
+  getAgentPreset,
 } from "../store/agents-store.ts";
 import { DEFAULT_AGENT_ID } from "./agents.ts";
 
@@ -87,5 +88,13 @@ describe("agentsActions modes", () => {
     expect(agentsStore.mode).toBe("off");
     expect(agentsStore.overlay).toEqual([]);
     expect(agentsStore.agents.map((a) => a.id)).toEqual(["opencode"]);
+  });
+
+  test("unknown restored agent identity does not fall back to OpenCode", () => {
+    const restored = getAgentPreset("claude-acp");
+
+    expect(restored.id).toBe("claude-acp");
+    expect(restored.registryId).toBe("claude-acp");
+    expect(restored.command).toEqual([]);
   });
 });

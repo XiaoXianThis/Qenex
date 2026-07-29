@@ -53,7 +53,7 @@ fn default_event_ttl_days() -> u32 {
     30
 }
 fn default_git_session_mode() -> String {
-    "snapshot".to_string()
+    "worktree".to_string()
 }
 
 #[derive(Debug, Clone)]

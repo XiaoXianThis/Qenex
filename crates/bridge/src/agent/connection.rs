@@ -4,17 +4,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, ClientRequest, ContentBlock,
-    CreateTerminalResponse, ExtRequest, Implementation, InitializeRequest,
-    KillTerminalResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
-    ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, TerminalExitStatus, TerminalOutputResponse,
-    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
+    CreateTerminalResponse, ExtRequest, Implementation, InitializeRequest, KillTerminalResponse,
+    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, TerminalExitStatus,
+    TerminalOutputResponse, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo, Responder};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
@@ -74,9 +74,7 @@ fn append_stderr_line(buf: &SharedStderr, line: &str) {
 }
 
 fn take_stderr(buf: &SharedStderr) -> String {
-    buf.lock()
-        .map(|g| g.trim().to_string())
-        .unwrap_or_default()
+    buf.lock().map(|g| g.trim().to_string()).unwrap_or_default()
 }
 
 fn format_spawn_failure(summary: &str, command: &str, stderr: &str) -> String {
@@ -128,7 +126,7 @@ impl agent_client_protocol::ConnectTo<agent_client_protocol::Client> for Spawned
         client: impl agent_client_protocol::ConnectTo<agent_client_protocol::Agent>,
     ) -> Result<(), agent_client_protocol::Error> {
         use futures::io::BufReader;
-        use futures::{AsyncBufReadExt, StreamExt, AsyncWriteExt};
+        use futures::{AsyncBufReadExt, AsyncWriteExt, StreamExt};
 
         let child_stdin = self.stdin;
         let child_stdout = self.stdout;
@@ -165,10 +163,11 @@ impl agent_client_protocol::ConnectTo<agent_client_protocol::Client> for Spawned
         ));
 
         // Set up the protocol connection
-        let protocol_future = agent_client_protocol::ConnectTo::<agent_client_protocol::Client>::connect_to(
-            agent_client_protocol::Lines::new(outgoing_sink, incoming_lines),
-            client,
-        );
+        let protocol_future =
+            agent_client_protocol::ConnectTo::<agent_client_protocol::Client>::connect_to(
+                agent_client_protocol::Lines::new(outgoing_sink, incoming_lines),
+                client,
+            );
 
         use futures::pin_mut;
         pin_mut!(stderr_future);
@@ -204,7 +203,11 @@ pub struct SessionInitParams {
 }
 
 impl SessionInitParams {
-    pub fn from_api(cwd: &str, resume_session_id: Option<&str>, mcp_servers: Option<&Value>) -> Self {
+    pub fn from_api(
+        cwd: &str,
+        resume_session_id: Option<&str>,
+        mcp_servers: Option<&Value>,
+    ) -> Self {
         Self {
             cwd: canonicalize_cwd(cwd),
             resume_session_id: resume_session_id.map(str::to_string),
@@ -597,11 +600,7 @@ async fn init_session(
         let load_req = LoadSessionRequest::new(SessionId::new(resume_id.clone()), init.cwd.clone())
             .mcp_servers(init.mcp_servers.clone());
 
-        match connection
-            .send_request(load_req)
-            .block_task()
-            .await
-        {
+        match connection.send_request(load_req).block_task().await {
             Ok(resp) => {
                 return Ok(session_result_from_load(resume_id.clone(), resp));
             }
@@ -700,11 +699,7 @@ async fn set_session_config_option(
     value: &str,
 ) -> Result<ParsedConfigOptions, String> {
     let config_id = config_id.to_string();
-    let req = SetSessionConfigOptionRequest::new(
-        session_id.clone(),
-        config_id,
-        value,
-    );
+    let req = SetSessionConfigOptionRequest::new(session_id.clone(), config_id, value);
 
     connection
         .send_request(req)
@@ -1145,10 +1140,7 @@ mod tests {
 
     #[test]
     fn auth_timeout_longer_for_browser_oauth() {
-        assert_eq!(
-            auth_timeout_for("devin-browser"),
-            AUTH_TIMEOUT_BROWSER
-        );
+        assert_eq!(auth_timeout_for("devin-browser"), AUTH_TIMEOUT_BROWSER);
         assert_eq!(auth_timeout_for("cursor_login"), AUTH_TIMEOUT_DEFAULT);
         assert_eq!(auth_timeout_for("qoder-oauth"), AUTH_TIMEOUT_BROWSER);
     }

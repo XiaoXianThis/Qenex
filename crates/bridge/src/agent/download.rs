@@ -50,6 +50,12 @@ pub async fn download_file_with_progress(
     }
     file.flush()
         .map_err(|e| format!("flush {}: {e}", dest.display()))?;
-    progress::download(progress, label, Some(url), downloaded, total.or(Some(downloaded)));
+    progress::download(
+        progress,
+        label,
+        Some(url),
+        downloaded,
+        total.or(Some(downloaded)),
+    );
     Ok(())
 }

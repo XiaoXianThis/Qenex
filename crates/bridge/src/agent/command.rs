@@ -36,8 +36,7 @@ pub fn resolve_agent_command(command: &[String]) -> Vec<String> {
     }
 
     // Bypass broken Cursor Windows launcher when a versioned install exists.
-    let mut resolved =
-        resolve_cursor_agent_direct(command).unwrap_or_else(|| command.to_vec());
+    let mut resolved = resolve_cursor_agent_direct(command).unwrap_or_else(|| command.to_vec());
 
     let env_prefix_len = resolved
         .iter()
@@ -252,7 +251,9 @@ pub fn is_env_assignment(s: &str) -> bool {
 fn command_mentions_codex(command: &[String]) -> bool {
     command.iter().any(|part| {
         let lower = part.to_ascii_lowercase();
-        lower.contains("codex-acp") || lower.ends_with("codex-acp.cmd") || lower.ends_with("\\codex-acp")
+        lower.contains("codex-acp")
+            || lower.ends_with("codex-acp.cmd")
+            || lower.ends_with("\\codex-acp")
     })
 }
 
@@ -272,13 +273,25 @@ fn command_mentions_cursor_agent(command: &[String]) -> bool {
             || Path::new(part)
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .is_some_and(|s| s.eq_ignore_ascii_case("agent") || s.eq_ignore_ascii_case("cursor-agent"))
+                .is_some_and(|s| {
+                    s.eq_ignore_ascii_case("agent") || s.eq_ignore_ascii_case("cursor-agent")
+                })
     })
 }
 
 fn has_env(command: &[String], key: &str) -> bool {
     let prefix = format!("{key}=");
     command.iter().any(|part| part.starts_with(&prefix))
+}
+
+fn command_has_bundled_codex(command: &[String]) -> bool {
+    command.iter().any(|part| {
+        let path = Path::new(part);
+        path.ancestors().any(|ancestor| {
+            ancestor.join("node_modules").is_dir()
+                && crate::agent::install::find_openai_codex_native(ancestor).is_some()
+        })
+    })
 }
 
 /// Locate a usable Codex CLI binary on this machine.
@@ -292,7 +305,10 @@ pub fn find_system_codex_executable() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let local = std::env::var_os("LOCALAPPDATA")?;
-        let root = PathBuf::from(local).join("OpenAI").join("Codex").join("bin");
+        let root = PathBuf::from(local)
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin");
         if root.is_dir() {
             // Prefer newest nested version directory that contains codex.exe.
             let mut candidates: Vec<PathBuf> = Vec::new();
@@ -329,11 +345,10 @@ pub fn find_system_pi_executable() -> Option<PathBuf> {
         }
     }
     if let Some(home) = dirs::home_dir() {
-        let bun_pi = home.join(".bun").join("bin").join(if cfg!(windows) {
-            "pi.exe"
-        } else {
-            "pi"
-        });
+        let bun_pi =
+            home.join(".bun")
+                .join("bin")
+                .join(if cfg!(windows) { "pi.exe" } else { "pi" });
         if bun_pi.is_file() {
             return Some(bun_pi);
         }
@@ -358,6 +373,22 @@ pub fn augment_codex_env(command: &[String]) -> Vec<String> {
     if has_env(command, "CODEX_PATH") || std::env::var_os("CODEX_PATH").is_some() {
         return command.to_vec();
     }
+
+    // An independently managed host is an explicit user choice and wins over
+    // both the adapter bundle and PATH.
+    if let Some(codex) = crate::agent::host::managed_codex_executable() {
+        let mut out = vec![format!("CODEX_PATH={}", codex.display())];
+        out.extend(command.iter().cloned());
+        return out;
+    }
+
+    // codex-acp ships a compatible @openai/codex dependency. Do not replace it
+    // with an arbitrary (and often older) system CLI merely because `codex`
+    // exists on PATH.
+    if command_has_bundled_codex(command) {
+        return command.to_vec();
+    }
+
     let Some(codex) = find_system_codex_executable() else {
         return command.to_vec();
     };
@@ -441,12 +472,7 @@ fn find_latest_cursor_agent_version() -> Option<PathBuf> {
             continue;
         };
         // Accept both YYYY.MM.DD-hash and YYYY.MM.DD-HH-MM-SS-hash.
-        if !name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-            || !name.contains('.')
-        {
+        if !name.chars().next().is_some_and(|c| c.is_ascii_digit()) || !name.contains('.') {
             continue;
         }
         if !path.join("node.exe").is_file() || !path.join("index.js").is_file() {
@@ -520,7 +546,10 @@ mod tests {
         assert!(resolved[0].ends_with("node.exe"));
         assert!(resolved[1].ends_with("index.js"));
         assert_eq!(resolved[2], "acp");
-        assert!(resolved[0].contains(&dir.to_string_lossy().to_string()) || Path::new(&resolved[0]).starts_with(&dir));
+        assert!(
+            resolved[0].contains(&dir.to_string_lossy().to_string())
+                || Path::new(&resolved[0]).starts_with(&dir)
+        );
     }
 
     #[test]
@@ -542,5 +571,47 @@ mod tests {
     fn augment_pi_env_skips_unrelated_commands() {
         let cmd = vec!["opencode".into(), "acp".into()];
         assert_eq!(augment_pi_env(&cmd), cmd);
+    }
+
+    #[test]
+    fn detects_codex_bundled_with_adapter() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = root.path();
+        let adapter = prefix
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("codex-acp")
+            .join("dist");
+        std::fs::create_dir_all(&adapter).unwrap();
+        let entry = adapter.join("index.js");
+        std::fs::write(&entry, "").unwrap();
+
+        let platform_pkg = super::super::install::openai_codex_platform_spec()
+            .expect("supported test platform")
+            .trim_start_matches("@openai/");
+        let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+            ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+            ("macos", "x86_64") => "x86_64-apple-darwin",
+            ("macos", "aarch64") => "aarch64-apple-darwin",
+            ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+            ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+            _ => return,
+        };
+        let native = prefix
+            .join("node_modules")
+            .join("@openai")
+            .join(platform_pkg)
+            .join("vendor")
+            .join(target)
+            .join("bin")
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+        std::fs::write(&native, "").unwrap();
+
+        assert!(command_has_bundled_codex(&[
+            "bun".into(),
+            entry.to_string_lossy().into_owned(),
+        ]));
     }
 }

@@ -189,6 +189,38 @@ describe("replayAgUiEvents preserveRunning", () => {
   });
 });
 
+describe("replayAgUiEvents run ordering", () => {
+  test("keeps the next user turn after the previous assistant when rows interleave", () => {
+    const events: AguiEvent[] = [
+      ev({
+        type: "CUSTOM",
+        name: "user_message",
+        value: { content: "u1", runId: "r1" },
+      }),
+      ev({ type: "RUN_STARTED", runId: "r1", taskId: "t", threadId: "t" }),
+      ev({ type: "TEXT_MESSAGE_START", messageId: "a1" }),
+      ev({ type: "TEXT_MESSAGE_CONTENT", messageId: "a1", delta: "a1" }),
+      // Simulates the old mixed persistence paths: the following user row
+      // landed before r1's terminal event.
+      ev({
+        type: "CUSTOM",
+        name: "user_message",
+        value: { content: "u2", runId: "r2" },
+      }),
+      ev({ type: "TEXT_MESSAGE_END", messageId: "a1" }),
+      ev({ type: "RUN_FINISHED", runId: "r1", taskId: "t" }),
+      ev({ type: "RUN_STARTED", runId: "r2", taskId: "t", threadId: "t" }),
+    ];
+
+    const repo = replayAgUiEvents(events);
+    expect(repo.messages.map((item) => item.message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
+});
+
 describe("replayAgUiEvents unique ids", () => {
   test("remints when persisted user message ids collide", () => {
     const events: AguiEvent[] = [

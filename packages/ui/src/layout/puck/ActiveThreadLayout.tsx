@@ -36,6 +36,7 @@ import {
 } from "@/layout/puck/config";
 import { LayoutContainerSlot } from "@/layout/puck/LayoutContainerSlot";
 import { LayoutEditLabel } from "@/layout/puck/LayoutEditLabel";
+import { useSmoothScrollbar } from "@/hooks/use-smooth-scrollbar";
 
 const OVERLAY_INSET_VAR = "--thread-overlay-inset";
 
@@ -110,6 +111,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useSmoothScrollbar(layoutEditing);
 
   useEffect(() => {
     if (!layoutEditing) return;
@@ -200,11 +202,12 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
       ) : null}
 
       <ThreadPrimitive.Viewport
+        ref={viewportRef}
         turnAnchor={layoutEditing ? "bottom" : "top"}
         autoScroll={!layoutEditing}
         data-slot="aui_thread-viewport"
         className={cn(
-          "relative min-h-0 flex-1 overflow-x-hidden scroll-smooth",
+          "relative min-h-0 flex-1 overflow-x-hidden",
           layoutEditing
             ? "overflow-hidden pointer-events-none"
             : "overflow-y-scroll-stable",

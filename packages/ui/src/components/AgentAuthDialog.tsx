@@ -24,13 +24,17 @@ type AgentAuthDialogProps = {
 
 function primaryMethod(methods: AuthMethodInfo[]): AuthMethodInfo | null {
   if (methods.length === 0) return null;
-  const preferred = methods.find((m) => m.id === "cursor_login");
+  const preferredIds = ["cursor_login", "chat-gpt", "agent-login", "login"];
+  const preferred = preferredIds
+    .map((id) => methods.find((method) => method.id === id))
+    .find((method) => method !== undefined);
   return preferred ?? methods[0]!;
 }
 
 function cliCommandFor(method: AuthMethodInfo | null): string | null {
   if (!method) return null;
   if (method.id === "cursor_login") return "agent login";
+  if (method.id === "chat-gpt") return "codex login";
   if (method.id.includes("claude")) return "claude";
   if (method.id.includes("codex")) return "codex login";
   return null;

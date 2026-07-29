@@ -79,6 +79,6 @@ describe("git session mode preference", () => {
     expect(parseGitSessionMode("snapshot")).toBe("snapshot");
     expect(parseGitSessionMode("WORKTREE")).toBe("worktree");
     expect(parseGitSessionMode("nope")).toBeNull();
-    expect(DEFAULT_GIT_SESSION_MODE).toBe("snapshot");
+    expect(DEFAULT_GIT_SESSION_MODE).toBe("worktree");
   });
 });

@@ -6,19 +6,20 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
-use axum::{Json, Router, routing::any};
+use axum::{routing::any, Json, Router};
 use futures::stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::agui::events::AguiEvent;
 use crate::agent::detect::{self, evaluate_agent_status};
 use crate::agent::ensure::{self, EnsureReadyResult};
+use crate::agent::host;
 use crate::agent::install::{self, InstalledAgent};
 use crate::agent::progress::InstallProgressEvent;
 use crate::agent::registry;
+use crate::agui::events::AguiEvent;
 use crate::sessions::{
     ApprovalRequest, ApprovalResponse, CreateTaskRequest, CreateTaskResponse, ManagerError,
     PollEventsResponse, SessionConfigResponse, SetConfigOptionRequest, StartRunRequest,
@@ -37,14 +38,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ag-ui", post(ag_ui_run))
         .route("/v2/tasks", post(create_task).get(list_tasks))
         .route("/v2/tasks/resumable", get(list_tasks))
-        .route("/v2/tasks/{task_id}", patch(update_task).delete(delete_task))
+        .route(
+            "/v2/tasks/{task_id}",
+            patch(update_task).delete(delete_task),
+        )
         .route("/v2/tasks/{task_id}/cancel", post(cancel_task))
         .route("/v2/tasks/{task_id}/stop", post(stop_task))
         .route("/v2/tasks/{task_id}/run", post(start_run))
         .route("/v2/tasks/{task_id}/events", get(stream_events))
         .route("/v2/tasks/{task_id}/events/poll", get(poll_events))
         .route("/v2/tasks/{task_id}/status", get(get_task_status))
-        .route("/v2/tasks/{task_id}/approval", get(get_approval).post(handle_approval))
+        .route(
+            "/v2/tasks/{task_id}/approval",
+            get(get_approval).post(handle_approval),
+        )
         .route("/v2/tasks/{task_id}/messages", get(get_messages))
         .route("/v2/tasks/{task_id}/mode", post(set_mode))
         .route("/v2/tasks/{task_id}/model", post(set_model))
@@ -91,8 +98,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/agents/install", post(install_agent))
         .route("/v2/agents/install/stream", get(install_agent_stream))
         .route("/v2/agents/install/{agent_id}", delete(uninstall_agent))
+        .route("/v2/agents/host/install/stream", get(install_host_stream))
         .route("/v2/agents/ensure-ready", post(ensure_agent_ready))
-        .route("/v2/agents/ensure-ready/stream", get(ensure_agent_ready_stream))
+        .route(
+            "/v2/agents/ensure-ready/stream",
+            get(ensure_agent_ready_stream),
+        )
         .route(
             "/api/files",
             get(api::files::list_files)
@@ -138,8 +149,7 @@ struct RunAgentInput {
 
 fn extract_user_message(messages: &[Value]) -> Option<&Value> {
     messages.iter().rev().find(|msg| {
-        msg.get("role").and_then(|v| v.as_str()) == Some("user")
-            && user_message_has_content(msg)
+        msg.get("role").and_then(|v| v.as_str()) == Some("user") && user_message_has_content(msg)
     })
 }
 
@@ -148,14 +158,16 @@ fn user_message_has_content(msg: &Value) -> bool {
         return !text.is_empty();
     }
     if let Some(parts) = msg.get("content").and_then(|v| v.as_array()) {
-        return parts.iter().any(|part| match part.get("type").and_then(|t| t.as_str()) {
-            Some("text") => part
-                .get("text")
-                .and_then(|t| t.as_str())
-                .is_some_and(|t| !t.is_empty()),
-            Some("image" | "file" | "document" | "audio" | "video" | "binary") => true,
-            _ => false,
-        });
+        return parts
+            .iter()
+            .any(|part| match part.get("type").and_then(|t| t.as_str()) {
+                Some("text") => part
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| !t.is_empty()),
+                Some("image" | "file" | "document" | "audio" | "video" | "binary") => true,
+                _ => false,
+            });
     }
     if msg
         .get("attachments")
@@ -198,13 +210,8 @@ fn user_message_preview(msg: &Value) -> String {
     "[attachment]".to_string()
 }
 
-async fn ag_ui_run(
-    State(state): State<AppState>,
-    Json(body): Json<RunAgentInput>,
-) -> Response {
-    let thread_id = body
-        .thread_id
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+async fn ag_ui_run(State(state): State<AppState>, Json(body): Json<RunAgentInput>) -> Response {
+    let thread_id = body.thread_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
     if !state.session_manager.has_session(&thread_id).await {
         let cwd = body
@@ -260,7 +267,10 @@ async fn ag_ui_run(
     }
 
     let Some(user_message) = extract_user_message(&body.messages) else {
-        tracing::warn!("ag-ui: no user message in {} message(s)", body.messages.len());
+        tracing::warn!(
+            "ag-ui: no user message in {} message(s)",
+            body.messages.len()
+        );
         return error_sse("No user message provided", Some(&thread_id));
     };
 
@@ -272,11 +282,7 @@ async fn ag_ui_run(
 
     let run_id = match state
         .session_manager
-        .start_run(
-            &thread_id,
-            &json!({ "messages": [user_message] }),
-            None,
-        )
+        .start_run(&thread_id, &json!({ "messages": [user_message] }), None)
         .await
     {
         Ok(id) => id,
@@ -341,6 +347,20 @@ fn task_response_from_active(active: &crate::sessions::ActiveSession) -> CreateT
 }
 
 async fn list_tasks(State(state): State<AppState>) -> Result<Json<TaskListResponse>, StatusCode> {
+    let initial = state
+        .session_store
+        .lock()
+        .await
+        .list_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    for task in initial.iter().filter(|task| task.status == "running") {
+        state
+            .session_manager
+            .reconcile_task_status(&task.task_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     let tasks = state
         .session_store
         .lock()
@@ -406,7 +426,9 @@ async fn stop_task(
         .stop(&task_id)
         .await
         .map_err(manager_status)?;
-    Ok(Json(json!({ "success": true, "taskId": task_id, "wasStopped": was_stopped })))
+    Ok(Json(
+        json!({ "success": true, "taskId": task_id, "wasStopped": was_stopped }),
+    ))
 }
 
 async fn delete_task(
@@ -516,6 +538,14 @@ async fn poll_events(
     Path(task_id): Path<String>,
     Query(q): Query<PollEventsQuery>,
 ) -> Result<Json<PollEventsResponse>, StatusCode> {
+    state
+        .session_manager
+        .reconcile_task_status(&task_id)
+        .await
+        .map_err(|error| match error {
+            ManagerError::NoSession(_) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
     let task = state
         .session_store
         .lock()
@@ -584,6 +614,14 @@ async fn get_task_status(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
 ) -> Result<Json<TaskSummary>, StatusCode> {
+    state
+        .session_manager
+        .reconcile_task_status(&task_id)
+        .await
+        .map_err(|error| match error {
+            ManagerError::NoSession(_) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
     let mut task = state
         .session_store
         .lock()
@@ -608,6 +646,13 @@ async fn get_task_status(
             if complete {
                 task.status = "idle".to_string();
                 task.current_run_id = None;
+                state
+                    .session_store
+                    .lock()
+                    .await
+                    .update(&task_id, None, Some("idle"))
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             } else {
                 task.current_run_id = run_id;
             }
@@ -615,6 +660,13 @@ async fn get_task_status(
             // Marked running but no run to attach — treat as idle.
             task.status = "idle".to_string();
             task.current_run_id = None;
+            state
+                .session_store
+                .lock()
+                .await
+                .update(&task_id, None, Some("idle"))
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
     }
 
@@ -899,6 +951,7 @@ async fn list_registry(
         .iter()
         .map(|agent| {
             let status = evaluate_agent_status(agent);
+            let host = host::detect_host_status(&agent.id);
             json!({
                 "id": agent.id,
                 "name": agent.name,
@@ -920,6 +973,7 @@ async fn list_registry(
                 "authHint": status.auth_hint,
                 "installed": status.managed.as_ref().map(installed_json),
                 "updateAvailable": status.update_available,
+                "host": host,
             })
         })
         .collect();
@@ -1020,6 +1074,62 @@ async fn install_agent_stream(
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
+async fn install_host_stream(
+    Query(query): Query<InstallStreamQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)>
+{
+    let agent_id = query.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "agentId is required" })),
+        ));
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel::<Value>();
+    tokio::spawn(async move {
+        let progress_tx = tx.clone();
+        let progress = move |event: InstallProgressEvent| {
+            if let Ok(value) = serde_json::to_value(&event) {
+                let _ = progress_tx.send(value);
+            }
+        };
+        match host::install_host_with_progress(&agent_id, Some(&progress)).await {
+            Ok(installed) => {
+                let _ = tx.send(json!({
+                    "type": "done",
+                    "host": installed,
+                }));
+            }
+            Err(detail) => {
+                let _ = tx.send(json!({
+                    "type": "error",
+                    "detail": detail,
+                }));
+            }
+        }
+    });
+
+    let stream = stream::unfold(Some(rx), |state| async move {
+        let mut rx = state?;
+        match rx.recv().await {
+            Some(value) => {
+                let terminal = value
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|kind| kind == "done" || kind == "error");
+                let item = Ok::<Event, Infallible>(
+                    Event::default().event("progress").data(value.to_string()),
+                );
+                Some((item, (!terminal).then_some(rx)))
+            }
+            None => None,
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
 async fn uninstall_agent(
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -1088,14 +1198,10 @@ async fn ensure_agent_ready(
             Json(json!({ "detail": "agentId is required" })),
         ));
     }
-    let result = ensure::ensure_agent_ready_opts(
-        agent_id,
-        body.prefer_update,
-        body.force_install,
-        None,
-    )
-        .await
-        .map_err(|detail| (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail }))))?;
+    let result =
+        ensure::ensure_agent_ready_opts(agent_id, body.prefer_update, body.force_install, None)
+            .await
+            .map_err(|detail| (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail }))))?;
     Ok(Json(ensure_ready_json(&result)))
 }
 
@@ -1182,11 +1288,18 @@ fn manager_status(err: ManagerError) -> (StatusCode, Json<Value>) {
             }
             (StatusCode::CONFLICT, Json(body))
         }
-        ManagerError::NoSession(_) => (StatusCode::CONFLICT, Json(json!({ "detail": err.to_string() }))),
-        ManagerError::Busy(_) => (StatusCode::CONFLICT, Json(json!({ "detail": err.to_string() }))),
-        ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => {
-            (StatusCode::NOT_FOUND, Json(json!({ "detail": err.to_string() })))
-        }
+        ManagerError::NoSession(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "detail": err.to_string() })),
+        ),
+        ManagerError::Busy(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "detail": err.to_string() })),
+        ),
+        ManagerError::NoRun(_) | ManagerError::ApprovalNotFound(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": err.to_string() })),
+        ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "detail": err.to_string() })),
@@ -1217,21 +1330,13 @@ fn sse_response(rx: mpsc::UnboundedReceiver<AguiEvent>) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
-    headers.insert(
-        "X-Accel-Buffering",
-        HeaderValue::from_static("no"),
-    );
+    headers.insert("X-Accel-Buffering", HeaderValue::from_static("no"));
     response
 }
 
 fn error_sse(message: &str, thread_id: Option<&str>) -> Response {
     let thread = thread_id.unwrap_or("error").to_string();
-    let event = AguiEvent::run_error(
-        Uuid::new_v4().to_string(),
-        thread.clone(),
-        message,
-        None,
-    );
+    let event = AguiEvent::run_error(Uuid::new_v4().to_string(), thread.clone(), message, None);
     let event_name = event.event_type().as_str();
     let json = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
     let mut response = Sse::new(futures::stream::once(async move {
@@ -1241,9 +1346,6 @@ fn error_sse(message: &str, thread_id: Option<&str>) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
-    headers.insert(
-        "X-Accel-Buffering",
-        HeaderValue::from_static("no"),
-    );
+    headers.insert("X-Accel-Buffering", HeaderValue::from_static("no"));
     response
 }

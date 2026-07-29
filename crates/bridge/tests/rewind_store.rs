@@ -68,6 +68,13 @@ async fn find_user_message_boundary_and_truncate() {
             .unwrap();
     }
 
+    let hydrated = store.get_events_for_task("task-1").await.unwrap();
+    assert!(matches!(
+        hydrated.first(),
+        Some(AguiEvent::Custom { value, .. })
+            if value.get("runId").and_then(|value| value.as_str()) == Some("run-a")
+    ));
+
     let (id, run_id) = store
         .find_user_message_boundary("task-1", 1)
         .await

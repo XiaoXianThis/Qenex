@@ -77,7 +77,7 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
       src={src}
       alt="Attachment preview"
       className={cn(
-        "block h-auto max-h-[80vh] w-auto max-w-full object-contain",
+        "block h-auto max-h-[80vh] w-auto max-w-full rounded-lg object-contain",
         isLoaded
           ? "aui-attachment-preview-image-loaded"
           : "aui-attachment-preview-image-loading invisible",
@@ -104,7 +104,7 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
         <DialogTitle className="aui-sr-only sr-only">
           Image Attachment Preview
         </DialogTitle>
-        <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden">
+        <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-xl">
           <AttachmentPreview src={src} />
         </div>
       </DialogContent>
@@ -174,6 +174,7 @@ const AttachmentUI: FC = () => {
             <div
               className={cn(
                 "aui-attachment-tile bg-muted relative size-14 cursor-pointer overflow-hidden rounded-[calc(var(--composer-radius)-var(--composer-padding))] border transition-opacity hover:opacity-75",
+                isImage && !isComposer && "rounded-xl",
                 isError && "border-destructive",
               )}
               role="button"

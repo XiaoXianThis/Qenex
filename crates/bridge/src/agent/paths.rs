@@ -21,6 +21,18 @@ pub fn agents_dir() -> PathBuf {
     qenex_home().join("agents")
 }
 
+pub fn hosts_dir() -> PathBuf {
+    qenex_home().join("hosts")
+}
+
+pub fn host_version_dir(host_id: &str, version: &str) -> PathBuf {
+    hosts_dir().join(host_id).join(version)
+}
+
+pub fn installed_hosts_db_path() -> PathBuf {
+    hosts_dir().join("installed.json")
+}
+
 pub fn agent_version_dir(agent_id: &str, version: &str) -> PathBuf {
     agents_dir().join(agent_id).join(version)
 }
@@ -39,6 +51,7 @@ pub fn ensure_qenex_dirs() -> Result<(), String> {
         runtime_bun_dir(),
         runtime_uv_dir(),
         agents_dir(),
+        hosts_dir(),
     ] {
         fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }

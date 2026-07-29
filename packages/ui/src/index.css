@@ -107,6 +107,37 @@
   .overflow-y-scroll-stable {
     overflow-y: scroll;
   }
+
+  [data-slot="aui_thread-viewport"][data-scrollbar] > .scrollbar-track-x {
+    display: none !important;
+  }
+
+  [data-slot="aui_thread-viewport"][data-scrollbar] > .scrollbar-track-y {
+    z-index: 30;
+    width: var(--scrollbar-size);
+    background: transparent !important;
+  }
+
+  [data-slot="aui_thread-viewport"][data-scrollbar]
+    > .scrollbar-track-y
+    > .scrollbar-thumb {
+    width: var(--scrollbar-size);
+    background: color-mix(
+      in oklab,
+      var(--background) 88%,
+      var(--muted-foreground)
+    ) !important;
+  }
+
+  [data-slot="aui_thread-viewport"][data-scrollbar]
+    > .scrollbar-track-y:hover
+    > .scrollbar-thumb {
+    background: color-mix(
+      in oklab,
+      var(--background) 78%,
+      var(--muted-foreground)
+    ) !important;
+  }
   /**
    * 非编辑态：行/列内没有任何已挂载面板时隐藏容器
    *（含 renderPanel 恒为 null、或全部 visible:false 的情况）。
@@ -158,13 +189,21 @@
 
 ::-webkit-scrollbar-thumb,
 .scroll-x-match::-webkit-scrollbar-thumb {
-  background: color-mix(in oklab, var(--muted-foreground) 35%, transparent) !important;
+  background: color-mix(
+    in oklab,
+    var(--background) 88%,
+    var(--muted-foreground)
+  ) !important;
   border-radius: 3px !important;
 }
 
 ::-webkit-scrollbar-thumb:hover,
 .scroll-x-match::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklab, var(--muted-foreground) 55%, transparent) !important;
+  background: color-mix(
+    in oklab,
+    var(--background) 78%,
+    var(--muted-foreground)
+  ) !important;
 }
 
 ::-webkit-scrollbar-corner,
@@ -176,7 +215,11 @@
   *,
   .scroll-x-match {
     scrollbar-width: var(--scrollbar-size) !important;
-    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
+    scrollbar-color: color-mix(
+        in oklab,
+        var(--background) 88%,
+        var(--muted-foreground)
+      )
       transparent !important;
   }
 }

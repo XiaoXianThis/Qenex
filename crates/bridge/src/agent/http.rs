@@ -14,8 +14,8 @@ pub fn http_client(timeout: Duration) -> Result<reqwest::Client, String> {
         .ok();
 
     if let Some(url) = proxy_url {
-        let proxy = reqwest::Proxy::all(url.trim())
-            .map_err(|e| format!("invalid proxy URL: {e}"))?;
+        let proxy =
+            reqwest::Proxy::all(url.trim()).map_err(|e| format!("invalid proxy URL: {e}"))?;
         builder = builder.proxy(proxy);
     }
 

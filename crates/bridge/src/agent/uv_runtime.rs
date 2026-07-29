@@ -33,10 +33,7 @@ fn system_uv() -> Option<UvRuntime> {
     if !probe_uv(&uv) {
         return None;
     }
-    Some(UvRuntime {
-        uv,
-        managed: false,
-    })
+    Some(UvRuntime { uv, managed: false })
 }
 
 fn managed_uv_paths() -> Option<UvRuntime> {
@@ -50,10 +47,7 @@ fn managed_uv_paths() -> Option<UvRuntime> {
     if !probe_uv(&uv) {
         return None;
     }
-    Some(UvRuntime {
-        uv,
-        managed: true,
-    })
+    Some(UvRuntime { uv, managed: true })
 }
 
 fn platform_archive_name() -> Result<&'static str, String> {
@@ -74,7 +68,9 @@ fn download_urls(archive: &str) -> Vec<String> {
     let ver = MANAGED_UV_VERSION;
     vec![
         format!("https://github.com/astral-sh/uv/releases/download/{ver}/{archive}"),
-        format!("https://ghproxy.net/https://github.com/astral-sh/uv/releases/download/{ver}/{archive}"),
+        format!(
+            "https://ghproxy.net/https://github.com/astral-sh/uv/releases/download/{ver}/{archive}"
+        ),
     ]
 }
 

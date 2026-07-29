@@ -50,10 +50,7 @@ fn managed_bun_paths() -> Option<BunRuntime> {
     if !probe_bun(&bun) {
         return None;
     }
-    Some(BunRuntime {
-        bun,
-        managed: true,
-    })
+    Some(BunRuntime { bun, managed: true })
 }
 
 fn platform_archive_name() -> Result<&'static str, String> {
@@ -247,8 +244,6 @@ pub fn resolve_js_runtime() -> String {
             }
         })
         .map(|p| p.to_string_lossy().into_owned())
-        .or_else(|_| {
-            which::which("node").map(|p| p.to_string_lossy().into_owned())
-        })
+        .or_else(|_| which::which("node").map(|p| p.to_string_lossy().into_owned()))
         .unwrap_or_else(|_| "bun".into())
 }

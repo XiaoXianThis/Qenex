@@ -159,6 +159,18 @@ const defaultComponents = memoizeMarkdownComponents({
       rel="noopener noreferrer"
     />
   ),
+  img: ({ className, alt, ...props }) => (
+    <img
+      className={cn(
+        "aui-md-img my-3 block h-auto max-h-[70vh] max-w-full rounded-xl object-contain first:mt-0 last:mb-0",
+        className,
+      )}
+      alt={alt ?? ""}
+      loading="lazy"
+      decoding="async"
+      {...props}
+    />
+  ),
   blockquote: ({ className, ...props }) => (
     <blockquote
       className={cn(

@@ -15,9 +15,15 @@ import {
   ReasoningTrigger,
 } from "@/components/assistant-ui/reasoning";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
+import {
+  ToolGroupContent,
+  ToolGroupRoot,
+  ToolGroupTrigger,
+} from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { AgentIcon } from "@/components/AgentIcon";
+import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import {
   cn,
   changesActions,
@@ -36,6 +42,7 @@ import {
   ComposerPrimitive,
   ErrorPrimitive,
   groupPartByType,
+  MessagePartPrimitive,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
@@ -70,6 +77,46 @@ import {
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
+
+const ChatMessageImage: FC = () => (
+  <MessagePartPrimitive.Image
+    alt="Chat image"
+    className="aui-message-image my-3 block h-auto max-h-[70vh] max-w-full rounded-xl object-contain first:mt-0 last:mb-0"
+  />
+);
+
+const ToolSequenceGroup: FC<
+  PropsWithChildren<{ group: ThreadGroupPart }>
+> = ({ group, children }) => {
+  const toolCount = useAuiState((s) =>
+    group.indices.reduce(
+      (count, index) =>
+        count + (s.message.parts[index]?.type === "tool-call" ? 1 : 0),
+      0,
+    ),
+  );
+  const active = useAuiState((s) =>
+    group.indices.some((index) => {
+      const part = s.message.parts[index];
+      return (
+        part?.type === "tool-call" &&
+        (part.status?.type === "running" ||
+          part.status?.type === "requires-action")
+      );
+    }),
+  );
+
+  if (toolCount < 2) {
+    return <div data-slot="aui_chain-of-thought">{children}</div>;
+  }
+
+  return (
+    <ToolGroupRoot>
+      <ToolGroupTrigger count={toolCount} active={active} />
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
+  );
+};
 
 /**
  * Optional component overrides for the thread. `AssistantMessage` and
@@ -275,46 +322,49 @@ export const ThreadComposer: FC = () => {
   const layoutEditing = useLayoutStore((s) => s.editMode);
 
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-foreground/25 data-[dragging=true]:border-ring focus-within:border-foreground/25 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border-[0.25px] bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [[data-composer-overlay]_&]:bg-background/55 [[data-composer-overlay]_&]:backdrop-blur-xl [[data-composer-overlay]_&]:supports-backdrop-filter:bg-background/40"
-        >
-          <div className="flex min-h-8 flex-col gap-1">
-            <ComposerAttachments />
-            <ComposerAutocomplete>
-              <ComposerPrimitive.Input
-                placeholder="发消息… 输入 @ 引用文件"
-                className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
-                rows={1}
-                autoFocus={!layoutEditing}
-                enterKeyHint="send"
-                aria-label="Message input"
-              />
-            </ComposerAutocomplete>
+    <div className="flex w-full flex-col gap-2">
+      <ChangesPanel />
+      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+        <ComposerPrimitive.AttachmentDropzone asChild disabled={layoutEditing}>
+          <div
+            data-slot="aui_composer-shell"
+            className="border-foreground/25 data-[dragging=true]:border-ring focus-within:border-foreground/25 flex w-full flex-col gap-1.5 rounded-(--composer-radius) border-[0.25px] bg-(--composer-bg) p-(--composer-padding) shadow-(--composer-shadow) transition-colors data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [[data-composer-overlay]_&]:bg-background/55 [[data-composer-overlay]_&]:backdrop-blur-xl [[data-composer-overlay]_&]:supports-backdrop-filter:bg-background/40"
+          >
+            <div className="flex min-h-8 flex-col gap-1">
+              <ComposerAttachments />
+              <ComposerAutocomplete>
+                <ComposerPrimitive.Input
+                  placeholder="发消息… 输入 @ 引用文件"
+                  className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none"
+                  rows={1}
+                  autoFocus={!layoutEditing}
+                  enterKeyHint="send"
+                  aria-label="Message input"
+                />
+              </ComposerAutocomplete>
+            </div>
+            <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
+              {showSessionConfig && !layoutEditing ? (
+                <SessionConfigBar
+                  className="px-0"
+                  trailing={
+                    <>
+                      <ComposerAddAttachment />
+                      <ComposerSendActions />
+                    </>
+                  }
+                />
+              ) : (
+                <div className="ms-auto flex items-center gap-2">
+                  <ComposerAddAttachment />
+                  <ComposerSendActions />
+                </div>
+              )}
+            </div>
           </div>
-          <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
-            {showSessionConfig && !layoutEditing ? (
-              <SessionConfigBar
-                className="px-0"
-                trailing={
-                  <>
-                    <ComposerAddAttachment />
-                    <ComposerSendActions />
-                  </>
-                }
-              />
-            ) : (
-              <div className="ms-auto flex items-center gap-2">
-                <ComposerAddAttachment />
-                <ComposerSendActions />
-              </div>
-            )}
-          </div>
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
-    </ComposerPrimitive.Root>
+        </ComposerPrimitive.AttachmentDropzone>
+      </ComposerPrimitive.Root>
+    </div>
   );
 };
 
@@ -421,14 +471,16 @@ const AssistantMessage: FC = () => {
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
-            // 工具调用保持最外层独立渲染，不并入 group-tool 折叠
-            "tool-call": [],
+            "tool-call": ["group-chainOfThought"],
+            "standalone-tool-call": [],
           })}
         >
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                return <div data-slot="aui_chain-of-thought">{children}</div>;
+                return (
+                  <ToolSequenceGroup group={part}>{children}</ToolSequenceGroup>
+                );
               case "group-reasoning": {
                 if (ReasoningGroup) {
                   return (
@@ -447,6 +499,8 @@ const AssistantMessage: FC = () => {
               }
               case "text":
                 return <MarkdownText />;
+              case "image":
+                return <ChatMessageImage />;
               case "reasoning":
                 return <Reasoning {...part} />;
               case "tool-call":
@@ -542,7 +596,9 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-card text-card-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
-          <MessagePrimitive.Parts />
+          <MessagePrimitive.Parts
+            components={{ Image: ChatMessageImage }}
+          />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />
@@ -585,6 +641,7 @@ const UserActionBar: FC = () => {
         .slice(0, idx + 1)
         .filter((m) => m.message.role === "user").length - 1;
     if (userMessageIndex < 0) return;
+    setBusy(true);
 
     const textParts = Array.isArray(messageContent)
       ? messageContent
@@ -595,6 +652,9 @@ const UserActionBar: FC = () => {
           .map((p) => p.text)
       : [];
     const restoreText = textParts.join("\n");
+    const sourceMessage = exported.messages[idx]?.message;
+    const restoreAttachments =
+      sourceMessage?.role === "user" ? sourceMessage.attachments : [];
 
     const kept = exported.messages.slice(0, idx);
     const remapped = kept.map((item, i) => ({
@@ -602,18 +662,26 @@ const UserActionBar: FC = () => {
       parentId: i === 0 ? null : kept[i - 1]!.message.id,
     }));
 
-    // Optimistic: update UI immediately; backend rewind is now fast (agent warms async).
-    threadRuntime.import({
-      messages: remapped,
-      headId: remapped.at(-1)?.message.id ?? null,
-    });
-    if (restoreText) {
-      threadRuntime.composer.setText(restoreText);
-    }
-    changesActions.bumpAfterRun(taskId);
-
-    setBusy(true);
     try {
+      // Optimistic: update UI immediately; backend rewind is now fast (agent warms async).
+      threadRuntime.import({
+        messages: remapped,
+        headId: remapped.at(-1)?.message.id ?? null,
+      });
+      if (restoreText) {
+        threadRuntime.composer.setText(restoreText);
+      }
+      for (const attachment of restoreAttachments) {
+        await threadRuntime.composer.addAttachment({
+          id: attachment.id,
+          type: attachment.type,
+          name: attachment.name,
+          contentType: attachment.contentType,
+          content: [...attachment.content],
+        });
+      }
+      changesActions.bumpAfterRun(taskId);
+
       const result = await rewindTask(taskId, { userMessageIndex });
       changesActions.bumpAfterRun(taskId);
       if (result.agentReset === false) {
@@ -678,6 +746,7 @@ const EditComposer: FC = () => {
       className="flex flex-col px-4"
     >
       <ComposerPrimitive.Root className="aui-edit-composer-root border-border/60 dark:border-muted-foreground/15 ms-auto flex w-full max-w-[85%] flex-col rounded-(--composer-radius) border bg-(--composer-bg)">
+        <ComposerAttachments />
         <ComposerPrimitive.Input
           className="aui-edit-composer-input text-foreground min-h-12 w-full resize-none bg-transparent px-4 pt-2 pb-1 text-sm outline-none"
           autoFocus

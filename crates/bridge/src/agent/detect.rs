@@ -6,14 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::agent::command::{
-    augment_host_env, find_system_codex_executable, prefer_node_entry,
-    resolve_agent_command,
+    augment_host_env, find_system_codex_executable, prefer_node_entry, resolve_agent_command,
 };
 use crate::agent::install::{self, rebuild_managed_package_command, InstalledAgent};
 use crate::agent::paths::agents_dir;
-use crate::agent::registry::{
-    resolve_install_plan, Distribution, InstallKind, RegistryAgent,
-};
+use crate::agent::registry::{resolve_install_plan, Distribution, InstallKind, RegistryAgent};
 
 /// How the agent is distributed relative to the host CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -160,9 +157,7 @@ pub fn auth_hint_for(agent_id: &str) -> Option<String> {
             if env_nonempty("ANTHROPIC_API_KEY") || claude_login_present() {
                 None
             } else {
-                Some(
-                    "Claude 可能需要登录或设置 ANTHROPIC_API_KEY 后才能对话".into(),
-                )
+                Some("Claude 可能需要登录或设置 ANTHROPIC_API_KEY 后才能对话".into())
             }
         }
         "codex-acp" => {
@@ -172,10 +167,7 @@ pub fn auth_hint_for(agent_id: &str) -> Option<String> {
             {
                 None
             } else {
-                Some(
-                    "Codex 可能需要登录或设置 OPENAI_API_KEY / CODEX_API_KEY 后才能对话"
-                        .into(),
-                )
+                Some("Codex 可能需要登录或设置 OPENAI_API_KEY / CODEX_API_KEY 后才能对话".into())
             }
         }
         "cursor" | "cursor-agent" => {
@@ -185,10 +177,7 @@ pub fn auth_hint_for(agent_id: &str) -> Option<String> {
             {
                 None
             } else {
-                Some(
-                    "Cursor 需要先执行 `agent login`（或设置 CURSOR_API_KEY）后再创建会话"
-                        .into(),
-                )
+                Some("Cursor 需要先执行 `agent login`（或设置 CURSOR_API_KEY）后再创建会话".into())
             }
         }
         _ => None,
@@ -496,10 +485,8 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
     let preferred_kind = plan.as_ref().map(|p| p.kind);
     let installable = plan.is_some();
     let distribution_class = distribution_class_for_kind(preferred_kind);
-    let managed = install::get_installed(&agent.id).filter(|rec| {
-        command_is_launchable(&rec.command)
-            || Path::new(&rec.install_path).is_dir()
-    });
+    let managed = install::get_installed(&agent.id)
+        .filter(|rec| command_is_launchable(&rec.command) || Path::new(&rec.install_path).is_dir());
     let update_available = managed
         .as_ref()
         .map(|m| m.version != agent.version)
@@ -517,13 +504,12 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
     });
 
     if let Some(cmd) = resolved.clone() {
-        let detected = if managed
-            .as_ref()
-            .is_some_and(|m| command_is_launchable(&m.command) || Path::new(&m.install_path).is_dir())
-            && scrape_version_dirs(&agent.id)
-                .iter()
-                .any(|d| cmd.iter().any(|p| p.contains(&d.to_string_lossy().to_string())))
-        {
+        let detected = if managed.as_ref().is_some_and(|m| {
+            command_is_launchable(&m.command) || Path::new(&m.install_path).is_dir()
+        }) && scrape_version_dirs(&agent.id).iter().any(|d| {
+            cmd.iter()
+                .any(|p| p.contains(&d.to_string_lossy().to_string()))
+        }) {
             DetectedSource::Managed
         } else if which_bin(cmd.first().map(|s| s.as_str()).unwrap_or("")).is_some()
             || Path::new(cmd.first().map(|s| s.as_str()).unwrap_or("")).is_file()
@@ -543,9 +529,7 @@ pub fn evaluate_agent_status(agent: &RegistryAgent) -> AgentStatus {
             AgentReadiness::Ready
         };
         let detail = match detected {
-            DetectedSource::Path | DetectedSource::Vendor => {
-                Some("本机已有，可跳过下载".into())
-            }
+            DetectedSource::Path | DetectedSource::Vendor => Some("本机已有，可跳过下载".into()),
             DetectedSource::Managed if update_available => {
                 Some("托管安装可更新到 Registry 最新版本".into())
             }
@@ -637,9 +621,7 @@ pub async fn discover_local_agents(refresh: bool) -> Result<Vec<DiscoveredAgent>
     for agent in &doc.agents {
         let status = evaluate_agent_status(agent);
         match status.readiness {
-            AgentReadiness::Ready
-            | AgentReadiness::NeedAuth
-            | AgentReadiness::NeedAdapter => {
+            AgentReadiness::Ready | AgentReadiness::NeedAuth | AgentReadiness::NeedAdapter => {
                 out.push(DiscoveredAgent {
                     id: agent.id.clone(),
                     name: agent.name.clone(),

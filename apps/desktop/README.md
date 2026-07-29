@@ -39,9 +39,11 @@ bun run verify:desktop
 ## 开发调试
 
 ```bash
-bun run build:desktop    # 首次需构建 sidecar
-bun run dev:desktop      # Tauri dev（Vite :1420 + sidecar）
+bun run dev:desktop      # 自动增量构建/同步 sidecar，再启动 Tauri + Vite :1420
 ```
+
+`dev:desktop` 每次启动都会先编译当前 bridge 源码并覆盖 host 平台
+sidecar，避免桌面端误用旧二进制造成 API、会话恢复或 Agent 身份串线。
 
 ## 架构
 
