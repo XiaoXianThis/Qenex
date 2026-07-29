@@ -13,6 +13,10 @@ type QenexBridge = {
 
 type HostToWebviewMessage =
   | {
+      type: "bridge-error";
+      message: string;
+    }
+  | {
       type: "bridge-ready";
       url: string;
       defaultWorkspace: string | null;

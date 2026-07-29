@@ -166,7 +166,7 @@ const defaultComponents = memoizeMarkdownComponents({
         className,
       )}
       alt={alt ?? ""}
-      loading="lazy"
+      loading="eager"
       decoding="async"
       {...props}
     />

@@ -2,11 +2,11 @@
 
 **统一的 AI 编码 Agent 工作台** — 一套界面，连接多种 ACP Agent，随处可用。
 
-当前版本：**v0.2.2**
+当前版本：**v0.2.3**
 
 用现代化对话 UI 驱动任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent（OpenCode、Kiro、Claude、Codex、Cursor 等）。同一套体验覆盖 Web、VS Code、JetBrains 与桌面端：多会话并行、可编辑布局与主题、工具审批、历史回放与断线恢复。
 
-## 特性（v0.2.2）
+## 特性（v0.2.3）
 
 - **Agent 无关** — 标准 ACP 接入，每 Tab 可独立选择 Agent / 模型 / 工作目录；Registry 发现与一键安装
 - **多会话** — 最多 5 个活跃 Tab，归档与恢复，状态本地持久化（Valtio）
@@ -146,8 +146,8 @@ bun run build:jetbrains && bun run package:jetbrains
 推送代码**不会**自动构建。打 `v*` tag 才会触发多平台 Release：
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 也可在 Actions → Release → Run workflow 手动跑（仅 Artifacts，不创建 Release）。轻量 CI 需手动触发：Actions → CI → Run workflow。

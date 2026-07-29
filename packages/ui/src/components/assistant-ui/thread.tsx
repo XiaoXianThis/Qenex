@@ -81,9 +81,24 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 const ChatMessageImage: FC = () => (
   <MessagePartPrimitive.Image
     alt="Chat image"
+    loading="eager"
+    decoding="async"
     className="aui-message-image my-3 block h-auto max-h-[70vh] max-w-full rounded-xl object-contain first:mt-0 last:mb-0"
   />
 );
+
+const MARKDOWN_IMAGE_PATTERN =
+  /!\[[^\]]*]\s*(?:\([^)]*\)|\[[^\]]*])|<img\b/i;
+
+const messageContainsImage = (
+  parts: readonly { type: string; text?: string }[],
+) =>
+  parts.some(
+    (part) =>
+      part.type === "image" ||
+      (part.type === "text" &&
+        MARKDOWN_IMAGE_PATTERN.test(part.text ?? "")),
+  );
 
 const ToolSequenceGroup: FC<
   PropsWithChildren<{ group: ThreadGroupPart }>
@@ -450,6 +465,9 @@ const AssistantMessage: FC = () => {
     ToolFallback: ToolFallbackComponent = ToolFallback,
     ReasoningGroup,
   } = useContext(ThreadComponentsContext);
+  const containsImage = useAuiState((s) =>
+    messageContainsImage(s.message.parts),
+  );
 
   // reserves space for action bar and compensates with `-mb` for consistent msg spacing
   // keeps hovered action bar from shifting layout (autohide doesn't support absolute positioning well)
@@ -465,8 +483,13 @@ const AssistantMessage: FC = () => {
     >
       <div
         data-slot="aui_assistant-message-content"
-        // [contain-intrinsic-size:auto_24px] fixes issue #4104, don't change without checking for regressions
-        className="text-foreground px-4 leading-relaxed wrap-break-word [contain-intrinsic-size:auto_24px] [content-visibility:auto]"
+        // Keep the #4104 optimization for text-only messages. Image messages
+        // need eager layout so their real height is known before scrolling in.
+        className={cn(
+          "text-foreground px-4 leading-relaxed wrap-break-word",
+          !containsImage &&
+            "[contain-intrinsic-size:auto_24px] [content-visibility:auto]",
+        )}
       >
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
@@ -586,10 +609,18 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const containsImage = useAuiState((s) =>
+    messageContainsImage(s.message.parts),
+  );
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-4 duration-150 [contain-intrinsic-size:auto_60px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className={cn(
+        "fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-4 duration-150 [&:where(>*)]:col-start-2",
+        !containsImage &&
+          "[contain-intrinsic-size:auto_60px] [content-visibility:auto]",
+      )}
       data-role="user"
     >
       <UserMessageAttachments />

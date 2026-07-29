@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-29 - v0.2.3 Agent Lifecycle, Recovery, and Chat Rendering
+
+### Added
+
+- Managed Agent host inspection and update support, with richer install, authentication, and launch diagnostics
+- Grouped tool-call presentation, restored image attachments, and a smooth custom thread scrollbar
+- Bridge lifecycle tests for cancellation, interrupted-task recovery, history failures, event ordering, and attachment replay
+
+### Changed
+
+- New Git-backed tasks use isolated worktrees by default; task run, rewind, cancellation, checkpoint, and persistence operations are serialized
+- Agent settings expose installed and latest versions, update actions, and clearer ready / auth / failure states
+- Desktop development and verification scripts now keep the Bridge sidecar synchronized with Rust sources
+
+### Fixed
+
+- Recover orphaned running tasks as interrupted and avoid presenting failed history requests as empty conversations
+- Preserve resumable Agent session identity across failed startup or authentication and flush terminal task status after persisted events
+- Replay interleaved runs, duplicate message IDs, multimodal images, and restored composer attachments correctly
+- Eagerly lay out image-bearing messages to prevent delayed image loading from shifting the thread scroll position
+- Keep VS Code test files out of production type-checking and type JetBrains Bridge startup errors correctly
+
+### Breaking Changes
+None.
+
 ## 2026-07-15 - v0.2.2 Default Theme Follow Host / System
 
 ### Changed
