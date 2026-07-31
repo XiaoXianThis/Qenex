@@ -9,6 +9,7 @@
 - [x] Phase 1 Bridge — `apps/bridge/`
 - [x] Phase 2 Web + Assistant-UI — `apps/web/` + `packages/ui/`
 - [x] Phase 3 Ask / Auto 审批 — Bridge ACP permission 胶水 + 线程内审批卡片
+- [x] Phase 4 体验增强 — plan/diff/terminal 只读 + 错误态 + 多 session
 
 ## 快速开始（Bridge）
 
@@ -18,8 +19,8 @@ bun run --filter @qenex/bridge start
 # http://127.0.0.1:8000/health
 ```
 
-完整 Phase 3 回归（需要本机已登录 OpenCode）：
+完整 Phase 4 回归（需要本机已登录 OpenCode）：
 
 ```bash
-bun run test:phase3
+bun run test:phase4
 ```

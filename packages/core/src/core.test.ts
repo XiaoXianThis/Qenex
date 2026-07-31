@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BridgeClientError,
   createSession,
   deleteSession,
+  formatBridgeError,
   healthCheck,
-  loadLastCwd,
-  saveLastCwd,
-  loadTheme,
-  saveTheme,
+  listSessions,
   loadApprovalMode,
+  loadLastCwd,
+  loadTheme,
+  parseMessageMetadata,
   saveApprovalMode,
+  saveLastCwd,
+  saveTheme,
   type QenexHost,
 } from "./index.ts";
 import { startBridgeServer } from "../../../apps/bridge/src/server.ts";
@@ -49,9 +53,45 @@ describe("@qenex/core prefs", () => {
   });
 });
 
+describe("@qenex/core errors + metadata", () => {
+  test("formatBridgeError maps known codes", () => {
+    expect(
+      formatBridgeError(
+        new BridgeClientError("opencode_not_found", "missing", 503),
+      ),
+    ).toContain("安装 OpenCode");
+    expect(
+      formatBridgeError(
+        new BridgeClientError("opencode_auth_required", "auth", 401),
+      ),
+    ).toContain("登录");
+    expect(
+      formatBridgeError(
+        new BridgeClientError("opencode_spawn_failed", "spawn", 502),
+      ),
+    ).toContain("启动 OpenCode");
+  });
+
+  test("parseMessageMetadata is defensive", () => {
+    expect(parseMessageMetadata(null)).toBeUndefined();
+    expect(parseMessageMetadata({ plan: [{ nope: true }] })).toBeUndefined();
+    const parsed = parseMessageMetadata({
+      plan: [{ content: "step", status: "pending", priority: "high" }],
+      diffs: [
+        { path: "a.ts", newText: "x", oldText: null, toolCallId: "t1" },
+        { path: 1, newText: "bad" },
+      ],
+      terminals: [{ terminalId: "term" }, { terminalId: 2 }],
+    });
+    expect(parsed?.plan).toHaveLength(1);
+    expect(parsed?.diffs).toHaveLength(1);
+    expect(parsed?.terminals).toHaveLength(1);
+  });
+});
+
 describe("@qenex/core bridge client", () => {
   test(
-    "health + createSession + deleteSession against live bridge",
+    "health + create/list/delete sessions against live bridge",
     async () => {
       const server = startBridgeServer({ hostname: "127.0.0.1", port: 0 });
       const host = memoryHost(server.url);
@@ -64,11 +104,39 @@ describe("@qenex/core bridge client", () => {
         expect(session.sessionId).toBeTruthy();
         expect(session.agent).toBe("opencode");
 
+        const listed = await listSessions(host);
+        expect(listed.some((s) => s.sessionId === session.sessionId)).toBe(true);
+
         await deleteSession(host, session.sessionId);
+        const after = await listSessions(host);
+        expect(after.some((s) => s.sessionId === session.sessionId)).toBe(false);
       } finally {
         server.stop();
       }
     },
     120_000,
+  );
+
+  test(
+    "createSession preserves BridgeClientError.code",
+    async () => {
+      const prev = process.env.QENEX_OPENCODE_BIN;
+      process.env.QENEX_OPENCODE_BIN = "/missing/opencode-core-test";
+      const isolated = startBridgeServer({ hostname: "127.0.0.1", port: 0 });
+      const host = memoryHost(isolated.url);
+      try {
+        await createSession(host, fixture);
+        throw new Error("expected createSession to fail");
+      } catch (err) {
+        expect(err).toBeInstanceOf(BridgeClientError);
+        expect((err as BridgeClientError).code).toBe("opencode_not_found");
+        expect(formatBridgeError(err)).toContain("安装 OpenCode");
+      } finally {
+        isolated.stop();
+        if (prev === undefined) delete process.env.QENEX_OPENCODE_BIN;
+        else process.env.QENEX_OPENCODE_BIN = prev;
+      }
+    },
+    30_000,
   );
 });

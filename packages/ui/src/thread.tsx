@@ -13,11 +13,13 @@ import remarkGfm from "remark-gfm";
 import {
   listPendingApprovals,
   respondToApproval,
+  formatBridgeError,
   type ApprovalMode,
   type ApprovalOption,
   type PendingApproval,
 } from "@qenex/core";
 import { useQenexHost } from "./host.tsx";
+import { MessageArtifacts } from "./message-artifacts.tsx";
 
 function rejectOption(options: ApprovalOption[]): ApprovalOption | undefined {
   return options.find((option) => /^reject/i.test(option.kind ?? "")) ??
@@ -334,6 +336,10 @@ export function Thread({
 }) {
   const chat = useAISDKChat();
   const messages = chat?.messages ?? [];
+  const streamError =
+    chat?.error != null
+      ? formatBridgeError(chat.error, String(chat.error))
+      : null;
 
   return (
     <ThreadPrimitive.Root className="qenex-thread">
@@ -359,6 +365,7 @@ export function Thread({
             return (
               <div key={message.id} className="qenex-msg assistant">
                 <div className="qenex-bubble assistant">
+                  <MessageArtifacts metadata={message.metadata} />
                   <AssistantParts parts={message.parts ?? []} />
                 </div>
               </div>
@@ -366,6 +373,12 @@ export function Thread({
           }
           return null;
         })}
+
+        {streamError ? (
+          <p className="qenex-error qenex-stream-error" role="alert">
+            对话出错：{streamError}
+          </p>
+        ) : null}
 
         <ThreadPrimitive.ViewportFooter className="qenex-thread-footer">
           <ThreadPrimitive.ScrollToBottom className="qenex-scroll-bottom">

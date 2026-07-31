@@ -178,6 +178,19 @@ try {
       throw new Error(`built JS missing Phase 3 approval marker: ${marker}`);
     }
   }
+  for (const marker of [
+    "新建会话",
+    "关闭全部",
+    "安装 OpenCode",
+    "Plan",
+    "Diff",
+    "Terminal",
+    "对话出错",
+  ]) {
+    if (!js.includes(marker)) {
+      throw new Error(`built JS missing Phase 4 marker: ${marker}`);
+    }
+  }
 
   // Cleanup session
   await fetch(`${webUrl}/api/sessions/${createJson.sessionId}`, {

@@ -15,6 +15,7 @@ import {
   type PermissionResponse,
 } from "./approval-manager.ts";
 import { buildOpenCodeConfigContent } from "./opencode-config.ts";
+import { classifySessionInitError } from "./session-errors.ts";
 
 export type SessionInfo = {
   sessionId: string;
@@ -274,13 +275,7 @@ export class SessionStore {
       } catch {
         /* ignore */
       }
-      if (err instanceof BridgeError) throw err;
-      throw new BridgeError(
-        "session_init_failed",
-        err instanceof Error ? err.message : String(err),
-        502,
-        { cause: String(err) },
-      );
+      throw classifySessionInitError(err);
     }
   }
 

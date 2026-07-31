@@ -9,6 +9,7 @@
     "test:web": "bun run --filter @qenex/web test",
     "test:phase0": "bun run --cwd scratch/phase0 test",
     "test:phase2": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run --cwd apps/web test && bun run --cwd apps/web test:e2e",
-    "test:phase3": "bun run --cwd apps/bridge test && bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run --cwd apps/web test && bun run --cwd apps/bridge test:phase3 && bun run --cwd apps/web test:e2e"
+    "test:phase3": "bun run --cwd apps/bridge test && bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run --cwd apps/web test && bun run --cwd apps/bridge test:phase3 && bun run --cwd apps/web test:e2e",
+    "test:phase4": "bun run --cwd apps/bridge test && bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run --cwd apps/web test && bun run --cwd apps/bridge test:phase4 && bun run --cwd apps/web test:e2e"
   }
 }

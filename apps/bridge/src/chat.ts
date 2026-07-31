@@ -6,6 +6,7 @@ import {
 import { BridgeError } from "./errors.ts";
 import type { SessionStore } from "./session-store.ts";
 import { isApprovalMode } from "./approval-manager.ts";
+import { MessageMetadataAccumulator } from "./message-metadata.ts";
 
 export type ChatRequestBody = {
   sessionId?: string;
@@ -51,6 +52,7 @@ export async function handleChat(
   const provider = entry.provider;
 
   const modelMessages = await convertToModelMessages(body.messages);
+  const metadata = new MessageMetadataAccumulator();
 
   const result = streamText({
     model: provider.languageModel(),
@@ -67,24 +69,6 @@ export async function handleChat(
       "x-qenex-session-id": sessionId,
       "x-qenex-agent": "opencode",
     },
-    messageMetadata: ({ part }) => {
-      if (part.type === "raw" && "rawValue" in part && part.rawValue) {
-        try {
-          const raw =
-            typeof part.rawValue === "string"
-              ? JSON.parse(part.rawValue)
-              : part.rawValue;
-          if (raw && typeof raw === "object" && "type" in raw) {
-            const t = (raw as { type: string }).type;
-            if (t === "plan") return { plan: (raw as { entries?: unknown }).entries };
-            if (t === "diff") return { diffs: [raw] };
-            if (t === "terminal") return { terminals: [raw] };
-          }
-        } catch {
-          /* ignore malformed raw */
-        }
-      }
-      return undefined;
-    },
+    messageMetadata: ({ part }) => metadata.ingest(part),
   });
 }

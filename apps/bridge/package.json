@@ -9,7 +9,8 @@
     "start": "bun run src/index.ts",
     "test": "bun test ./test",
     "test:acceptance": "bun run test/acceptance-curl.ts",
-    "test:phase3": "bun run test/phase3-acceptance.ts"
+    "test:phase3": "bun run test/phase3-acceptance.ts",
+    "test:phase4": "bun run test/phase4-acceptance.ts"
   },
   "dependencies": {
     "@mcpc-tech/acp-ai-provider": "^0.3.4",
