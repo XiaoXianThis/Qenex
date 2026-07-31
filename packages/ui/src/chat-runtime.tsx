@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import {
   AssistantChatTransport,
@@ -7,6 +7,11 @@ import {
 import { useChat } from "@ai-sdk/react";
 import { useQenexHost } from "./host.tsx";
 import { Thread } from "./thread.tsx";
+import {
+  loadApprovalMode,
+  saveApprovalMode,
+  type ApprovalMode,
+} from "@qenex/core";
 
 function resolveChatUrl(base: string, input: string | URL | Request): string {
   const normalizedBase = base.replace(/\/$/, "");
@@ -21,19 +26,27 @@ function resolveChatUrl(base: string, input: string | URL | Request): string {
 
 export function ChatRuntime({ sessionId }: { sessionId: string }) {
   const host = useQenexHost();
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>(() =>
+    loadApprovalMode(host),
+  );
+
+  function changeApprovalMode(mode: ApprovalMode) {
+    saveApprovalMode(host, mode);
+    setApprovalMode(mode);
+  }
 
   const transport = useMemo(() => {
     return new AssistantChatTransport({
       api: "/api/chat",
-      body: { sessionId },
+      body: { sessionId, approvalMode },
       headers: { "x-qenex-session-id": sessionId },
-      fetch: async (input, init) => {
+      fetch: (async (input, init) => {
         const base = await host.getBridgeBaseUrl();
         const url = resolveChatUrl(base, input);
         return host.fetch(url, init);
-      },
+      }) as typeof fetch,
     });
-  }, [host, sessionId]);
+  }, [approvalMode, host, sessionId]);
 
   // Prefer useChat + useAISDKRuntime over useChatRuntime so the thread
   // composer stays in editing mode (isEditing=true). useChatRuntime's remote
@@ -44,7 +57,11 @@ export function ChatRuntime({ sessionId }: { sessionId: string }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread />
+      <Thread
+        sessionId={sessionId}
+        approvalMode={approvalMode}
+        onApprovalModeChange={changeApprovalMode}
+      />
     </AssistantRuntimeProvider>
   );
 }

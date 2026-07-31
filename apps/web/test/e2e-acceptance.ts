@@ -173,6 +173,11 @@ try {
   if (!js.includes("停止")) {
     throw new Error("built JS missing cancel label");
   }
+  for (const marker of ["Ask", "Auto", "需要审批", "本次会话始终允许"]) {
+    if (!js.includes(marker)) {
+      throw new Error(`built JS missing Phase 3 approval marker: ${marker}`);
+    }
+  }
 
   // Cleanup session
   await fetch(`${webUrl}/api/sessions/${createJson.sessionId}`, {

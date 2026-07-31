@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "bun test ./test/bridge.test.ts",
-    "test:acceptance": "bun run test/acceptance-curl.ts"
+    "test": "bun test ./test",
+    "test:acceptance": "bun run test/acceptance-curl.ts",
+    "test:phase3": "bun run test/phase3-acceptance.ts"
   },
   "dependencies": {
     "@mcpc-tech/acp-ai-provider": "^0.3.4",

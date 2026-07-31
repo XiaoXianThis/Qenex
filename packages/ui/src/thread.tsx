@@ -2,6 +2,7 @@ import { ThreadPrimitive, useAuiState } from "@assistant-ui/react";
 import { useAISDKChat } from "@assistant-ui/react-ai-sdk";
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import {
+  useEffect,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -9,6 +10,157 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  listPendingApprovals,
+  respondToApproval,
+  type ApprovalMode,
+  type ApprovalOption,
+  type PendingApproval,
+} from "@qenex/core";
+import { useQenexHost } from "./host.tsx";
+
+function rejectOption(options: ApprovalOption[]): ApprovalOption | undefined {
+  return options.find((option) => /^reject/i.test(option.kind ?? "")) ??
+    options.find((option) =>
+      !option.kind &&
+      /reject|deny|cancel|no/i.test(`${option.optionId} ${option.name}`),
+    );
+}
+
+function allowOptions(options: ApprovalOption[]): ApprovalOption[] {
+  return options.filter(
+    (option) =>
+      /^allow/i.test(option.kind ?? "") ||
+      (!option.kind &&
+        (/allow|approve|yes/i.test(`${option.optionId} ${option.name}`) ||
+          /^(once|always)$/i.test(option.optionId))),
+  );
+}
+
+function ApprovalCard({
+  approval,
+  busy,
+  onDecide,
+}: {
+  approval: PendingApproval;
+  busy: boolean;
+  onDecide: (optionId: string) => void;
+}) {
+  const reject = rejectOption(approval.options);
+  const allow = allowOptions(approval.options);
+  const input = approval.toolCall.rawInput;
+  const inputText =
+    input === undefined
+      ? ""
+      : typeof input === "string"
+        ? input
+        : JSON.stringify(input, null, 2);
+
+  return (
+    <section className="qenex-approval" aria-live="polite">
+      <div className="qenex-approval-kicker">需要审批</div>
+      <div className="qenex-approval-title">
+        {approval.toolCall.title || approval.toolCall.kind || "敏感操作"}
+      </div>
+      {approval.toolCall.locations?.length ? (
+        <div className="qenex-approval-paths">
+          {approval.toolCall.locations.map((location, index) => (
+            <code key={`${location.path}-${index}`}>{location.path}</code>
+          ))}
+        </div>
+      ) : null}
+      {inputText ? <pre className="qenex-approval-input">{inputText}</pre> : null}
+      <div className="qenex-approval-actions">
+        {reject ? (
+          <button
+            type="button"
+            className="qenex-btn danger-outline"
+            disabled={busy}
+            onClick={() => onDecide(reject.optionId)}
+          >
+            拒绝
+          </button>
+        ) : null}
+        {allow.map((option) => (
+          <button
+            type="button"
+            className="qenex-btn primary"
+            disabled={busy}
+            key={option.optionId}
+            onClick={() => onDecide(option.optionId)}
+          >
+            {option.kind === "allow_always" ? "本次会话始终允许" : "批准"}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ApprovalPanel({ sessionId }: { sessionId: string }) {
+  const host = useQenexHost();
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const next = await listPendingApprovals(host, sessionId);
+        if (active) {
+          setApprovals(next);
+          setError(null);
+        }
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (active) timer = setTimeout(poll, 350);
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [host, sessionId]);
+
+  async function decide(approval: PendingApproval, optionId: string) {
+    setDeciding(approval.approvalId);
+    setError(null);
+    try {
+      await respondToApproval(
+        host,
+        sessionId,
+        approval.approvalId,
+        optionId,
+      );
+      setApprovals((current) =>
+        current.filter((item) => item.approvalId !== approval.approvalId),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeciding(null);
+    }
+  }
+
+  if (!approvals.length && !error) return null;
+  return (
+    <div className="qenex-approval-panel">
+      {approvals.map((approval) => (
+        <ApprovalCard
+          key={approval.approvalId}
+          approval={approval}
+          busy={deciding === approval.approvalId}
+          onDecide={(optionId) => void decide(approval, optionId)}
+        />
+      ))}
+      {error ? <p className="qenex-error">审批状态同步失败：{error}</p> : null}
+    </div>
+  );
+}
 
 function ToolFallback({
   toolName,
@@ -86,7 +238,13 @@ function AssistantParts({
  * With useChat + useAISDKRuntime that path does not persist text, so typing
  * appears impossible. Drive the textarea with React state and send via useChat.
  */
-function Composer() {
+function Composer({
+  approvalMode,
+  onApprovalModeChange,
+}: {
+  approvalMode: ApprovalMode;
+  onApprovalModeChange: (mode: ApprovalMode) => void;
+}) {
   const chat = useAISDKChat();
   const isRunning = useAuiState((s) => s.thread.isRunning);
   const [text, setText] = useState("");
@@ -111,42 +269,69 @@ function Composer() {
   }
 
   return (
-    <form className="qenex-composer" onSubmit={onSubmit}>
-      <textarea
-        className="qenex-composer-input"
-        placeholder="给 OpenCode 发送消息…"
-        rows={1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={!chat}
-      />
-      <div className="qenex-composer-actions">
-        {isRunning ? (
+    <div className="qenex-composer-wrap">
+      <div className="qenex-approval-mode" aria-label="审批模式">
+        {(["ask", "auto"] as const).map((mode) => (
           <button
             type="button"
-            className="qenex-icon-btn danger"
-            title="停止"
-            onClick={() => void chat?.stop()}
+            key={mode}
+            className={approvalMode === mode ? "active" : ""}
+            aria-pressed={approvalMode === mode}
+            disabled={isRunning}
+            onClick={() => onApprovalModeChange(mode)}
           >
-            <SquareIcon size={16} />
+            {mode === "ask" ? "Ask" : "Auto"}
           </button>
-        ) : (
-          <button
-            type="submit"
-            className="qenex-icon-btn"
-            title="发送"
-            disabled={!canSend}
-          >
-            <ArrowUpIcon size={18} />
-          </button>
-        )}
+        ))}
+        <span>
+          {approvalMode === "ask" ? "敏感操作先询问" : "自动批准可执行操作"}
+        </span>
       </div>
-    </form>
+      <form className="qenex-composer" onSubmit={onSubmit}>
+        <textarea
+          className="qenex-composer-input"
+          placeholder="给 OpenCode 发送消息…"
+          rows={1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={!chat}
+        />
+        <div className="qenex-composer-actions">
+          {isRunning ? (
+            <button
+              type="button"
+              className="qenex-icon-btn danger"
+              title="停止"
+              onClick={() => void chat?.stop()}
+            >
+              <SquareIcon size={16} />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="qenex-icon-btn"
+              title="发送"
+              disabled={!canSend}
+            >
+              <ArrowUpIcon size={18} />
+            </button>
+          )}
+        </div>
+      </form>
+    </div>
   );
 }
 
-export function Thread() {
+export function Thread({
+  sessionId,
+  approvalMode,
+  onApprovalModeChange,
+}: {
+  sessionId: string;
+  approvalMode: ApprovalMode;
+  onApprovalModeChange: (mode: ApprovalMode) => void;
+}) {
   const chat = useAISDKChat();
   const messages = chat?.messages ?? [];
 
@@ -186,7 +371,11 @@ export function Thread() {
           <ThreadPrimitive.ScrollToBottom className="qenex-scroll-bottom">
             滚动到底部
           </ThreadPrimitive.ScrollToBottom>
-          <Composer />
+          <ApprovalPanel sessionId={sessionId} />
+          <Composer
+            approvalMode={approvalMode}
+            onApprovalModeChange={onApprovalModeChange}
+          />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>

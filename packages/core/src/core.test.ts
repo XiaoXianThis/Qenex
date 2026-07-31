@@ -7,6 +7,8 @@ import {
   saveLastCwd,
   loadTheme,
   saveTheme,
+  loadApprovalMode,
+  saveApprovalMode,
   type QenexHost,
 } from "./index.ts";
 import { startBridgeServer } from "../../../apps/bridge/src/server.ts";
@@ -41,6 +43,9 @@ describe("@qenex/core prefs", () => {
     expect(loadTheme(host)).toBe("system");
     saveTheme(host, "dark");
     expect(loadTheme(host)).toBe("dark");
+    expect(loadApprovalMode(host)).toBe("ask");
+    saveApprovalMode(host, "auto");
+    expect(loadApprovalMode(host)).toBe("auto");
   });
 });
 

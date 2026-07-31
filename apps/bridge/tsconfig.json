@@ -6,7 +6,8 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["bun-types"],
+    "types": ["bun"],
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx"
   },
   "include": ["src/**/*", "test/**/*"]

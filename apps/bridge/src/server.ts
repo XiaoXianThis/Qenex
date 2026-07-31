@@ -81,6 +81,37 @@ export function createBridgeHandler(store: SessionStore) {
         }
       }
 
+      const approvalsMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/approvals$/,
+      );
+      if (approvalsMatch && req.method === "GET") {
+        const sessionId = decodeURIComponent(approvalsMatch[1]!);
+        const entry = store.get(sessionId);
+        return Response.json({
+          mode: entry.approvals.mode,
+          approvals: entry.approvals.list(),
+        });
+      }
+
+      const approvalMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/,
+      );
+      if (approvalMatch && req.method === "POST") {
+        const sessionId = decodeURIComponent(approvalMatch[1]!);
+        const approvalId = decodeURIComponent(approvalMatch[2]!);
+        const body = (await readJson(req)) as { optionId?: unknown };
+        if (typeof body.optionId !== "string" || !body.optionId) {
+          throw new BridgeError(
+            "missing_approval_option",
+            "Request body must include optionId: string",
+            400,
+          );
+        }
+        const entry = store.get(sessionId);
+        const approval = entry.approvals.decide(approvalId, body.optionId);
+        return Response.json({ ok: true, approvalId, optionId: body.optionId, approval });
+      }
+
       if (req.method === "POST" && pathname === "/api/chat") {
         const body = (await readJson(req)) as ChatRequestBody;
         return await handleChat(store, body, req);

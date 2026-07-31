@@ -5,13 +5,15 @@ import {
 } from "ai";
 import { BridgeError } from "./errors.ts";
 import type { SessionStore } from "./session-store.ts";
+import { isApprovalMode } from "./approval-manager.ts";
 
 export type ChatRequestBody = {
   sessionId?: string;
   messages?: UIMessage[];
-  /** Reserved for Phase 3 — accepted but unused in Phase 1. */
   approvalMode?: "ask" | "auto";
 };
+
+type StreamTextTools = Parameters<typeof streamText>[0]["tools"];
 
 export async function handleChat(
   store: SessionStore,
@@ -38,6 +40,14 @@ export async function handleChat(
   }
 
   const entry = store.get(sessionId);
+  if (body.approvalMode !== undefined && !isApprovalMode(body.approvalMode)) {
+    throw new BridgeError(
+      "invalid_approval_mode",
+      'approvalMode must be "ask" or "auto"',
+      400,
+    );
+  }
+  entry.approvals.setMode(body.approvalMode ?? "ask");
   const provider = entry.provider;
 
   const modelMessages = await convertToModelMessages(body.messages);
@@ -45,7 +55,9 @@ export async function handleChat(
   const result = streamText({
     model: provider.languageModel(),
     messages: modelMessages,
-    tools: provider.tools,
+    // Provider 0.3.x still publishes AI SDK 6 Tool types although its runtime
+    // stream is compatible with AI SDK 7 (verified in Phase 0).
+    tools: provider.tools as unknown as StreamTextTools,
     includeRawChunks: true,
     abortSignal: req.signal,
   });

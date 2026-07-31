@@ -8,6 +8,7 @@
   --qenex-accent: #0f766e;
   --qenex-accent-fg: #ecfdf5;
   --qenex-danger: #b91c1c;
+  --qenex-warning: #b45309;
   --qenex-user: #ecfdf5;
   --qenex-assistant: #ffffff;
   --qenex-shadow: 0 10px 30px rgba(28, 25, 23, 0.06);
@@ -176,6 +177,11 @@ body {
   border-color: transparent;
 }
 
+.qenex-btn.danger-outline {
+  color: var(--qenex-danger);
+  border-color: color-mix(in srgb, var(--qenex-danger) 45%, transparent);
+}
+
 .qenex-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -282,6 +288,105 @@ body {
   bottom: 0;
   padding-top: 0.5rem;
   background: linear-gradient(transparent, var(--qenex-bg) 30%);
+}
+
+.qenex-approval-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+
+.qenex-approval {
+  padding: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--qenex-warning) 45%, var(--qenex-border));
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--qenex-card) 92%, var(--qenex-warning) 8%);
+  box-shadow: var(--qenex-shadow);
+}
+
+.qenex-approval-kicker {
+  color: var(--qenex-warning);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.qenex-approval-title {
+  margin-top: 0.2rem;
+  font-weight: 650;
+  word-break: break-word;
+}
+
+.qenex-approval-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.45rem;
+  color: var(--qenex-muted);
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.qenex-approval-input {
+  max-height: 9rem;
+  overflow: auto;
+  margin: 0.55rem 0 0;
+  padding: 0.55rem;
+  border-radius: 0.55rem;
+  background: #0000000d;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.75rem;
+}
+
+.qenex-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.qenex-composer-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.qenex-approval-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem;
+  color: var(--qenex-muted);
+  font-size: 0.72rem;
+}
+
+.qenex-approval-mode button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.qenex-approval-mode button.active {
+  background: color-mix(in srgb, var(--qenex-accent) 18%, transparent);
+  color: var(--qenex-accent);
+}
+
+.qenex-approval-mode button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.qenex-approval-mode span {
+  margin-left: 0.2rem;
 }
 
 .qenex-composer {
