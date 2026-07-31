@@ -1,14 +1,13 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["bun-types"],
+    "jsx": "react-jsx"
   },
-  "include": ["src"]
+  "include": ["src/**/*", "test/**/*"]
 }

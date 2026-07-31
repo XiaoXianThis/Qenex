@@ -1,0 +1,331 @@
+:root {
+  color-scheme: light dark;
+  --qenex-bg: #f6f4ef;
+  --qenex-fg: #1c1917;
+  --qenex-muted: #78716c;
+  --qenex-card: #ffffffcc;
+  --qenex-border: #e7e5e4;
+  --qenex-accent: #0f766e;
+  --qenex-accent-fg: #ecfdf5;
+  --qenex-danger: #b91c1c;
+  --qenex-user: #ecfdf5;
+  --qenex-assistant: #ffffff;
+  --qenex-shadow: 0 10px 30px rgba(28, 25, 23, 0.06);
+  font-family:
+    "IBM Plex Sans",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --qenex-bg: #0c0a09;
+    --qenex-fg: #f5f5f4;
+    --qenex-muted: #a8a29e;
+    --qenex-card: #1c1917cc;
+    --qenex-border: #292524;
+    --qenex-accent: #2dd4bf;
+    --qenex-accent-fg: #042f2e;
+    --qenex-user: #134e4a;
+    --qenex-assistant: #1c1917;
+    --qenex-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #99f6e455, transparent),
+    radial-gradient(900px 500px at 100% 0%, #fde68a33, transparent),
+    var(--qenex-bg);
+  color: var(--qenex-fg);
+}
+
+.qenex-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 1.5rem;
+}
+
+.qenex-shell-chat {
+  max-width: 880px;
+}
+
+.qenex-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--qenex-border);
+}
+
+.qenex-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.qenex-logo {
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-size: 1.25rem;
+}
+
+.qenex-muted {
+  color: var(--qenex-muted);
+  font-size: 0.9rem;
+}
+
+.qenex-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.qenex-session-meta code {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 28rem;
+}
+
+.qenex-gate {
+  margin: auto 0;
+  padding: 2rem 0;
+  max-width: 34rem;
+}
+
+.qenex-gate h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.03em;
+}
+
+.qenex-gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--qenex-border);
+  border-radius: 1rem;
+  background: var(--qenex-card);
+  box-shadow: var(--qenex-shadow);
+  backdrop-filter: blur(8px);
+}
+
+.qenex-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.qenex-cwd-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.qenex-input,
+.qenex-composer-input {
+  width: 100%;
+  border: 1px solid var(--qenex-border);
+  border-radius: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.qenex-btn {
+  border: 1px solid var(--qenex-border);
+  background: transparent;
+  color: inherit;
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.qenex-btn.primary {
+  background: var(--qenex-accent);
+  border-color: transparent;
+  color: var(--qenex-accent-fg);
+  font-weight: 600;
+}
+
+.qenex-btn.ghost {
+  border-color: transparent;
+}
+
+.qenex-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.qenex-error {
+  color: var(--qenex-danger);
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.qenex-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  margin-top: 0.75rem;
+}
+
+.qenex-thread {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.qenex-thread-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.5rem 0.15rem 1rem;
+}
+
+.qenex-welcome {
+  margin: 3rem auto;
+  text-align: center;
+}
+
+.qenex-welcome h2 {
+  margin: 0 0 0.35rem;
+}
+
+.qenex-msg {
+  display: flex;
+}
+
+.qenex-msg.user {
+  justify-content: flex-end;
+}
+
+.qenex-bubble {
+  max-width: min(42rem, 92%);
+  padding: 0.85rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--qenex-border);
+  box-shadow: var(--qenex-shadow);
+  line-height: 1.5;
+}
+
+.qenex-bubble.user {
+  background: var(--qenex-user);
+}
+
+.qenex-bubble.assistant {
+  background: var(--qenex-assistant);
+}
+
+.qenex-markdown p {
+  margin: 0.35rem 0;
+}
+
+.qenex-markdown pre {
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  background: #0000000d;
+}
+
+.qenex-tool {
+  margin: 0.5rem 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.7rem;
+  border: 1px dashed var(--qenex-border);
+  font-size: 0.85rem;
+}
+
+.qenex-tool-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.qenex-tool-args,
+.qenex-tool-result {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+}
+
+.qenex-thread-footer {
+  position: sticky;
+  bottom: 0;
+  padding-top: 0.5rem;
+  background: linear-gradient(transparent, var(--qenex-bg) 30%);
+}
+
+.qenex-composer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  padding: 0.65rem;
+  border: 1px solid var(--qenex-border);
+  border-radius: 1rem;
+  background: var(--qenex-card);
+  box-shadow: var(--qenex-shadow);
+  backdrop-filter: blur(8px);
+}
+
+.qenex-composer-input {
+  border: none;
+  resize: none;
+  min-height: 2.6rem;
+  max-height: 10rem;
+  outline: none;
+}
+
+.qenex-composer-actions {
+  display: flex;
+  align-items: center;
+}
+
+.qenex-icon-btn {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  border: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: var(--qenex-accent);
+  color: var(--qenex-accent-fg);
+}
+
+.qenex-icon-btn.danger {
+  background: var(--qenex-danger);
+  color: white;
+}
+
+.qenex-scroll-bottom {
+  display: none;
+}

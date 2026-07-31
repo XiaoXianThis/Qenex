@@ -1,33 +1,13 @@
 {
   "name": "qenex",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "apps/*",
-    "apps/vscode/webview",
-    "apps/jetbrains/webview"
-  ],
+  "workspaces": ["apps/*", "packages/*", "scratch/*"],
   "scripts": {
-    "dev": "bun scripts/dev.mjs",
+    "dev:bridge": "bun run --filter @qenex/bridge start",
     "dev:web": "bun run --filter @qenex/web dev",
-    "dev:desktop": "bun scripts/dev-desktop.mjs",
-    "dev:jetbrains": "bun scripts/dev-jetbrains.mjs",
-    "dev:rust": "cargo run --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui -- --config crates/bridge/bridge.config.json",
-    "build": "bun scripts/build-all.mjs",
-    "build:web": "bun scripts/build-web.mjs",
-    "build:rust": "bun scripts/build-rust.mjs",
-    "build:vscode": "bun scripts/build-vscode.mjs",
-    "build:desktop": "bun scripts/build-desktop.mjs",
-    "build:jetbrains": "bun scripts/build-jetbrains.mjs",
-    "verify:vscode": "bun scripts/verify-vscode.mjs",
-    "verify:desktop": "bun scripts/verify-desktop.mjs",
-    "verify:jetbrains": "bun scripts/verify-jetbrains.mjs",
-    "package:vscode": "bun run build:vscode && cd apps/vscode && bun run package",
-    "package:desktop": "bun scripts/build-desktop.mjs --package",
-    "package:jetbrains": "bun run build:jetbrains && bun scripts/package-jetbrains.mjs",
-    "ci:release": "bun scripts/ci-release.mjs",
-    "verify:all": "bun run verify:vscode && bun run verify:desktop && bun run verify:jetbrains",
-    "start": "bun scripts/start-build.mjs",
-    "lint": "bun run --filter @qenex/web lint"
+    "test:bridge": "bun run --filter @qenex/bridge test",
+    "test:web": "bun run --filter @qenex/web test",
+    "test:phase0": "bun run --cwd scratch/phase0 test",
+    "test:phase2": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run --cwd apps/web test && bun run --cwd apps/web test:e2e"
   }
 }

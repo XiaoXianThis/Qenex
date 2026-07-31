@@ -1,63 +1,38 @@
-import path from "node:path";
-import fs from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import svgr from "vite-plugin-svgr";
+import { resolve } from "node:path";
 
-const agentTestWorkspace = path.resolve(__dirname, "../../agent-test");
-fs.mkdirSync(agentTestWorkspace, { recursive: true });
+const bridge =
+  process.env.QENEX_BRIDGE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
 
-export default defineConfig(({ mode }) => ({
-  plugins: [
-    react(),
-    svgr({
-      svgrOptions: {
-        svgoConfig: {
-          plugins: [
-            {
-              name: "preset-default",
-              params: { overrides: { removeViewBox: false } },
-            },
-            { name: "convertColors", params: { currentColor: true } },
-          ],
-        },
-      },
-    }),
-    tailwindcss(),
-  ],
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "../../packages/ui/src"),
+      "@qenex/ui/styles.css": resolve(
+        __dirname,
+        "../../packages/ui/src/styles.css",
+      ),
+      "@qenex/ui": resolve(__dirname, "../../packages/ui/src"),
+      "@qenex/core": resolve(__dirname, "../../packages/core/src"),
     },
   },
-  define:
-    mode === "development"
-      ? {
-          "import.meta.env.VITE_DEFAULT_WORKSPACE": JSON.stringify(
-            agentTestWorkspace,
-          ),
-        }
-      : undefined,
   server: {
     port: 3000,
+    strictPort: true,
     proxy: {
-      "/ag-ui": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/health": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/v2": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/api": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
+      "/api": { target: bridge, changeOrigin: true },
+      "/health": { target: bridge, changeOrigin: true },
+      "/ag-ui": { target: bridge, changeOrigin: true },
     },
   },
-}));
+  preview: {
+    port: 3000,
+    strictPort: true,
+    proxy: {
+      "/api": { target: bridge, changeOrigin: true },
+      "/health": { target: bridge, changeOrigin: true },
+    },
+  },
+});

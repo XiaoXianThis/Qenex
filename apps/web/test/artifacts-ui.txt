@@ -1,0 +1,28 @@
+bun test v1.3.14 (0d9b296a)
+
+src/platform-purity.test.ts:
+33 |       const text = readFileSync(file, "utf8");
+34 |       for (const re of FORBIDDEN) {
+35 |         if (re.test(text)) hits.push(`${file} matches ${re}`);
+36 |       }
+37 |     }
+38 |     expect(hits).toEqual([]);
+                      ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "/Users/mac/Documents/Code/Rust/Qenex/packages/ui/src/platform-purity.test.ts matches /acquireVsCodeApi/",
++   "/Users/mac/Documents/Code/Rust/Qenex/packages/ui/src/platform-purity.test.ts matches /__TAURI__/",
++ ]
+
+- Expected  - 1
++ Received  + 4
+
+      at <anonymous> (/Users/mac/Documents/Code/Rust/Qenex/packages/ui/src/platform-purity.test.ts:38:18)
+(fail) @qenex/ui platform purity > UI sources do not import desktop/IDE APIs [4.53ms]
+
+ 0 pass
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [18.00ms]

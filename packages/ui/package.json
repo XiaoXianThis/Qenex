@@ -1,47 +1,34 @@
 {
   "name": "@qenex/ui",
+  "version": "0.1.0",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/index.css"
+    "./styles.css": "./src/styles.css"
   },
-  "dependencies": {
-    "@ag-ui/client": "^0.0.57",
-    "@assistant-ui/react": "^0.14.26",
-    "@assistant-ui/react-ag-ui": "^0.0.44",
-    "@assistant-ui/react-markdown": "^0.14.5",
-    "@assistant-ui/store": "^0.2.19",
-    "@codemirror/lang-css": "^6.3.1",
-    "@codemirror/lang-json": "^6.0.2",
-    "@codemirror/state": "^6.7.1",
-    "@puckeditor/core": "^0.21.2",
-    "@qenex/core": "workspace:*",
-    "@uiw/codemirror-extensions-color": "^4.25.11",
-    "@uiw/react-codemirror": "^4.25.11",
-    "beautiful-mermaid": "^1.1.3",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "lucide-react": "^1.23.0",
-    "radix-ui": "^1.6.2",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-shiki": "^0.11.0",
-    "remark-gfm": "^4.0.1",
-    "smooth-scrollbar": "^8.8.4",
-    "tailwind-merge": "^3.6.0",
-    "tw-shimmer": "^0.4.11",
-    "zustand": "^5.0.14"
-  },
-  "devDependencies": {
-    "@qenex/tsconfig": "workspace:*",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "typescript": "~6.0.2"
+  "scripts": {
+    "test": "bun test ./src"
   },
   "peerDependencies": {
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^4",
+    "@assistant-ui/react": "^0.15.1",
+    "@assistant-ui/react-ai-sdk": "^1.4.2",
+    "@assistant-ui/react-markdown": "^0.14.8",
+    "@qenex/core": "workspace:*",
+    "ai": "^7",
+    "lucide-react": "^0.575.0",
+    "react-markdown": "^10",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5.9.3"
   }
 }

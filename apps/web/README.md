@@ -1,18 +1,26 @@
-# @qenex/web
+# @qenex/web — Phase 2
 
-浏览器开发壳，用于本地开发与调试共享 UI。
+React + Vite + Tailwind Web 壳，嵌入 `@qenex/ui`（Assistant-UI + AI SDK）。
+
+## 开发
+
+先起 Bridge，再起 Web：
 
 ```bash
-# 在仓库根目录
-bun install
-bun run dev
+# terminal 1
+bun run --filter @qenex/bridge start
+
+# terminal 2
+bun run --filter @qenex/web dev
+# http://localhost:3000
 ```
 
-默认 `http://localhost:3000`，Vite 将 `/ag-ui`、`/v2`、`/health` 代理到 `http://localhost:8000`。
+Vite 将 `/api`、`/health` 代理到 `http://127.0.0.1:8000`。
 
-需先启动后端：
+## 测试
 
 ```bash
-cd crates/bridge
-cargo run --features server --bin acp-to-agui
+cd apps/web
+bun test ./test/host.test.ts
+bun run test:e2e
 ```

@@ -1,8 +1,0 @@
-.vscode/**
-src/**
-webview/**
-esbuild.mjs
-tsconfig.json
-**/*.map
-**/*.ts
-!media/**

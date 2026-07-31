@@ -1,0 +1,10 @@
+bun test v1.3.14 (0d9b296a)
+
+test/host.test.ts:
+(pass) web host > kind is web and bridge base is same-origin empty [0.16ms]
+(pass) web host > main entry does not import IDE/desktop SDKs [0.40ms]
+
+ 2 pass
+ 0 fail
+ 5 expect() calls
+Ran 2 tests across 1 file. [14.00ms]

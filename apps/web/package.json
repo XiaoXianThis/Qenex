@@ -1,32 +1,28 @@
 {
   "name": "@qenex/web",
+  "version": "0.1.0",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "bun test ./test",
+    "test:e2e": "bun run test/e2e-acceptance.ts"
   },
   "dependencies": {
     "@qenex/core": "workspace:*",
-    "@qenex/platform": "workspace:*",
     "@qenex/ui": "workspace:*",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@qenex/tsconfig": "workspace:*",
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/node": "^26.1.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "oxlint": "^1.71.0",
-    "tailwindcss": "^4.3.2",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.1",
-    "vite-plugin-svgr": "^5.2.0"
+    "@tailwindcss/vite": "^4.1.11",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0"
   }
 }

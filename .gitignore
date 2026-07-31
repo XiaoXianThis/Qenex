@@ -1,48 +1,10 @@
-# Rust
-target/
-**/target/
-
-# Node
 node_modules/
-dist/
-dist-ssr/
-apps/*/dist/
-apps/vscode/media/
-apps/vscode/bin/
-apps/vscode/out/
-apps/vscode/*.vsix
-apps/vscode/webview/src/**/*.js
-apps/vscode/webview/node_modules/.tmp/
-apps/desktop/dist/
-apps/desktop/src-tauri/binaries/
-apps/desktop/src-tauri/target/
-apps/desktop/src-tauri/gen/
-apps/jetbrains/bin/
-apps/jetbrains/src/main/resources/webview/
-apps/jetbrains/build/
-apps/jetbrains/.gradle/
-apps/jetbrains/.intellijPlatform/
-build/
-dist-artifacts/
-
-# Python
-.venv/
-__pycache__/
-*.pyc
-*.egg-info/
-
-# Environment and secrets
-.env
-.env.*
-*.db
-
-# IDE / OS
-.DS_Store
-.idea/
-.vscode/
-!apps/vscode/.vscode/**
+scratch/**/node_modules/
+apps/**/node_modules/
+apps/**/dist/
+apps/**/artifacts/*
+!apps/**/artifacts/.gitkeep
 *.log
-.qoder/
-
-# Local Agent sandbox (independent git repo)
-/agent-test/
+.DS_Store
+.DS_Store?
+bun.lockb

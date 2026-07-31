@@ -1,0 +1,17 @@
+bun test v1.3.14 (0d9b296a)
+
+src/core.test.ts:
+(pass) @qenex/core prefs > cwd and theme round-trip [0.97ms]
+[acp-ai-provider] Warning: authMethodId is not configured. Lazy auth will default to the first auth method "opencode-login". [
+  {
+    "description": "Run `opencode auth login` in the terminal",
+    "name": "Login with opencode",
+    "id": "opencode-login"
+  }
+]
+(pass) @qenex/core bridge client > health + createSession + deleteSession against live bridge [1180.64ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [1362.00ms]
