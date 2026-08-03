@@ -38,17 +38,9 @@ function shutdown(code = 0) {
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-console.log("Starting backend (http://localhost:8000) and frontend (http://localhost:3000)...");
-run("backend", "cargo", [
-  "run",
-  "--manifest-path",
-  "crates/bridge/Cargo.toml",
-  "--features",
-  "server",
-  "--bin",
-  "acp-to-agui",
-  "--",
-  "--config",
-  "crates/bridge/bridge.config.json",
-]);
+// M0/M8: default stack is Bun Bridge (AI SDK / UIMessage).
+console.log(
+  "Starting Bun Bridge (http://127.0.0.1:8000) and Web (http://localhost:3000)...",
+);
+run("bridge", "bun", ["run", "--filter", "@qenex/bridge", "start"]);
 run("frontend", "bun", ["run", "--filter", "@qenex/web", "dev"]);

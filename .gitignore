@@ -47,7 +47,13 @@ __pycache__/
 # Local Agent sandbox (independent git repo)
 /agent-test/
 
-# Local phase / spike artifacts
-scratch/
+# Local phase / spike artifacts (sources stay tracked)
+scratch/**/node_modules/
+scratch/**/artifacts/*
+!scratch/**/artifacts/.gitkeep
+scratch/**/workspace/**
+!scratch/**/workspace/.gitkeep
+!scratch/**/workspace/README.md
 apps/**/artifacts/*
 !apps/**/artifacts/.gitkeep
+apps/**/node_modules/

@@ -18,15 +18,12 @@ import {
   cn,
   ensureAgentReadyWithProgress,
   fetchAgentRegistry,
-  GIT_SESSION_MODE_OPTIONS,
-  getPreferredGitSessionMode,
   installAgentHostWithProgress,
   legacyIdsForRegistry,
   mergeAgentsConfig,
   parseOverlayJson,
   probeAgent,
   selectActiveThemeCss,
-  setPreferredGitSessionMode,
   STYLE_THEME_PRESETS,
   tabsActions,
   uninstallAgent,
@@ -39,7 +36,6 @@ import {
   useTabsStore,
   type AgentPreset,
   type AgentsJsonMode,
-  type GitSessionMode,
   type InstallProgressEvent,
   type RegistryAgentEntry,
 } from "@qenex/core";
@@ -146,9 +142,6 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
     Record<string, InstallProgressState>
   >({});
   const [actionError, setActionError] = useState<string | null>(null);
-  const [gitSessionMode, setGitSessionMode] = useState<GitSessionMode>(() =>
-    getPreferredGitSessionMode(),
-  );
   const autoAllowApprovals = useApprovalPrefsStore((s) => s.autoAllow);
   const composerOverlay = useUiPrefsStore((s) => s.composerOverlay);
 
@@ -996,38 +989,6 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
               <div className="flex flex-col gap-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="git-session-mode"
-                >
-                  Git 检查点模式
-                </label>
-                <select
-                  id="git-session-mode"
-                  className="border-border bg-background max-w-md rounded-md border px-2 py-1.5 text-sm"
-                  value={gitSessionMode}
-                  onChange={(e) => {
-                    const next = e.target.value as GitSessionMode;
-                    setGitSessionMode(next);
-                    setPreferredGitSessionMode(next);
-                  }}
-                >
-                  {GIT_SESSION_MODE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-muted-foreground text-xs">
-                  {
-                    GIT_SESSION_MODE_OPTIONS.find(
-                      (o) => o.value === gitSessionMode,
-                    )?.description
-                  }{" "}
-                  仅影响之后新建的会话。
-                </p>
-              </div>
-              <div className="flex flex-col gap-1.5">
                 <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
                   <input
                     type="checkbox"
@@ -1037,10 +998,12 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                       approvalPrefsActions.setAutoAllow(e.target.checked)
                     }
                   />
-                  <span>无需审批，自动允许</span>
+                  <span>无需审批，自动允许（Auto）</span>
                 </label>
                 <p className="text-muted-foreground text-xs">
-                  开启后所有 Agent 的工具权限请求将自动放行（优先选「总是」选项），不再弹出审批面板。
+                  开启后聊天以 Bridge Auto 模式发送：敏感工具在服务端自动批准（优先
+                  allow_once），不再弹出审批卡片。也可在 Composer 用 Ask / Auto
+                  切换。
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">

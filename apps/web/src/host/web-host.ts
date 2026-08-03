@@ -58,8 +58,11 @@ export function createWebHost(): QenexHost {
         return null;
       }
 
-      const fallback = import.meta.env.VITE_DEFAULT_WORKSPACE ?? ".";
-      const input = window.prompt("工作目录路径", fallback);
+      const fallback = import.meta.env.VITE_DEFAULT_WORKSPACE ?? "";
+      const input = window.prompt(
+        "请输入本机已存在的项目目录绝对路径（例如 /Users/你/项目）",
+        fallback,
+      );
       if (!input?.trim()) {
         return null;
       }
@@ -67,7 +70,11 @@ export function createWebHost(): QenexHost {
     },
 
     async getDefaultWorkspace() {
-      return import.meta.env.VITE_DEFAULT_WORKSPACE ?? ".";
+      const fromEnv = import.meta.env.VITE_DEFAULT_WORKSPACE;
+      if (typeof fromEnv === "string" && fromEnv.trim()) {
+        return fromEnv.trim();
+      }
+      return null;
     },
 
     storage: {

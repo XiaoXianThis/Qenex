@@ -17,13 +17,13 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Rust
+      - name: Setup Rust (Desktop Tauri shell only)
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/bridge
+          workspaces: apps/desktop/src-tauri
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -31,14 +31,11 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Test Rust bridge
-        run: cargo test --manifest-path crates/bridge/Cargo.toml
-
-      - name: Test Rust bridge (server feature)
-        run: cargo test --manifest-path crates/bridge/Cargo.toml --features server
+      - name: Bridge + milestone guards
+        run: bun run test:bridge
 
       - name: Build web frontend
         run: bun run build:web
 
-      - name: Build Rust bridge binary
-        run: cargo build --release --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui
+      - name: Verify Desktop wiring
+        run: bun run verify:desktop

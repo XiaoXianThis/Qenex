@@ -7,16 +7,6 @@
     "core:default",
     "dialog:default",
     "store:default",
-    "shell:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "acp-to-agui",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    }
+    "shell:default"
   ]
 }

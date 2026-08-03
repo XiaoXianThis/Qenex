@@ -24,7 +24,7 @@ export default function App() {
     return activeTabs.map(
       (tab): RuntimeSessionConfig => ({
         tabId: tab.id,
-        threadId: tab.taskId,
+        threadId: tab.sessionId,
         agentId: tab.agentId,
         cwd: tab.cwd,
         agentCommand:

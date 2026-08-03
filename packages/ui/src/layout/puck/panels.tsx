@@ -9,7 +9,6 @@ import {
   ThreadSuggestions,
 } from "@/components/assistant-ui/thread";
 import { ApprovalPanel } from "@/layout/panels/ApprovalPanel";
-import { ChangesPanel } from "@/layout/panels/ChangesPanel";
 import type { PanelId } from "@qenex/core";
 import { AuiIf, useAuiState, type AssistantState } from "@assistant-ui/react";
 import type { PanelRenderContext } from "@/layout/puck/types";
@@ -111,7 +110,8 @@ export function renderPanel(
     case "tokenStats":
       return null;
     case "undoRedo":
-      return <ChangesPanel />;
+      // M8: Git checkpoint / Changes panel removed permanently.
+      return null;
     case "checklist":
       return null;
     case "approval":

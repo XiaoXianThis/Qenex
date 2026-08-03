@@ -1,7 +1,12 @@
 "use client";
 
-import { ThreadWelcome } from "@/components/assistant-ui/thread";
+import {
+  ChatStreamErrorBanner,
+  ChatRunStatusBanner,
+  ThreadWelcome,
+} from "@/components/assistant-ui/thread";
 import { ThreadMessagesArea, ThreadMessagesEditPreview } from "@/layout/puck/panels";
+import { useChatHelpers } from "@/components/ChatHelpersContext";
 import {
   cn,
   getPanelDefinition,
@@ -108,6 +113,9 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
   /** 毛玻璃叠层：仅底部输入带 + 非编辑态 */
   const composerOverlay =
     composerOverlayPref && flushBottomComposer && hasBottom && !layoutEditing;
+
+  const chat = useChatHelpers();
+  const hasChatMessages = (chat?.messages.length ?? 0) > 0;
 
   const rootRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
@@ -237,16 +245,19 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
             </>
           ) : (
             <>
-              <AuiIf condition={isNewChatView}>
-                <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
-                  <ThreadWelcome />
-                </div>
-              </AuiIf>
-              <AuiIf condition={(s) => !isNewChatView(s)}>
-                <div className="relative z-10 mx-auto w-full max-w-(--thread-max-width)">
-                  <ThreadMessagesArea />
-                </div>
-              </AuiIf>
+              {!hasChatMessages ? (
+                <AuiIf condition={isNewChatView}>
+                  <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
+                    <ThreadWelcome />
+                  </div>
+                </AuiIf>
+              ) : null}
+              <div className="relative z-10 mx-auto w-full max-w-(--thread-max-width)">
+                {/* Always mount: do not gate on thread isNewChatView (that delayed user bubbles). */}
+                <ThreadMessagesArea />
+                <ChatRunStatusBanner />
+                <ChatStreamErrorBanner />
+              </div>
             </>
           )}
         </div>

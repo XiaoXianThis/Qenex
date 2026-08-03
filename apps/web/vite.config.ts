@@ -8,7 +8,7 @@ import svgr from "vite-plugin-svgr";
 const agentTestWorkspace = path.resolve(__dirname, "../../agent-test");
 fs.mkdirSync(agentTestWorkspace, { recursive: true });
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
   plugins: [
     react(),
     svgr({
@@ -31,26 +31,14 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "../../packages/ui/src"),
     },
   },
-  define:
-    mode === "development"
-      ? {
-          "import.meta.env.VITE_DEFAULT_WORKSPACE": JSON.stringify(
-            agentTestWorkspace,
-          ),
-        }
-      : undefined,
+  define: {
+    "import.meta.env.VITE_DEFAULT_WORKSPACE": JSON.stringify(agentTestWorkspace),
+  },
   server: {
     port: 3000,
+    // Bun Bridge: /api + /health + /v2/agents (M6 registry/install/ensure).
     proxy: {
-      "/ag-ui": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
       "/health": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/v2": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },
@@ -58,6 +46,10 @@ export default defineConfig(({ mode }) => ({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      "/v2": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
-}));
+});

@@ -1,6 +1,10 @@
 import { proxy } from "valtio";
 import { useSnapshot } from "valtio/react";
-import { deleteTask as deleteTaskOnServer } from "../lib/bridge-api.ts";
+import {
+  deleteAisdkSession,
+  invalidateSessionBoot,
+  isAisdkSessionId,
+} from "../lib/aisdk-session.ts";
 import { getBridgeHost } from "../lib/bridge-client.ts";
 import {
   hydrateValtioStore,
@@ -18,7 +22,11 @@ const MAX_ACTIVE_TABS = 5;
 
 export type SessionTab = {
   id: string;
-  taskId: string;
+  /**
+   * Bridge session id (`ses_…`) once bound; placeholder UUID before bootstrap.
+   * M4: renamed from fusion `taskId`.
+   */
+  sessionId: string;
   agentSessionId?: string;
   title: string;
   agentId: string;
@@ -68,9 +76,13 @@ function removeTabLocally(tabId: string) {
   syncPreferredAgentFromActiveTab();
 }
 
-function deleteTaskInBackground(taskId: string) {
-  void deleteTaskOnServer(taskId).catch((error) => {
-    console.warn("Failed to delete task on server:", error);
+function deleteSessionInBackground(tab: SessionTab) {
+  invalidateSessionBoot(tab.id, tab.cwd, tab.agentId);
+  if (!isAisdkSessionId(tab.sessionId)) {
+    return;
+  }
+  void deleteAisdkSession(tab.sessionId, getBridgeHost()).catch((error) => {
+    console.warn("Failed to delete Bridge session:", error);
   });
 }
 
@@ -81,7 +93,7 @@ function dismissTab(tabId: string) {
 
   // 仅明确无聊天内容时丢弃；旧数据缺字段时仍归档
   if (tab.hasChatContent === false) {
-    deleteTaskInBackground(tab.taskId);
+    deleteSessionInBackground(tab);
     removeTabLocally(tabId);
     return;
   }
@@ -98,6 +110,34 @@ function dismissTab(tabId: string) {
   syncPreferredAgentFromActiveTab();
 }
 
+/** Migrate M1–M3 persisted tabs that still use `taskId`. */
+function migrateTab(raw: unknown): SessionTab | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<SessionTab> & { taskId?: string };
+  const sessionId =
+    (typeof row.sessionId === "string" && row.sessionId) ||
+    (typeof row.taskId === "string" && row.taskId) ||
+    "";
+  if (!row.id || !sessionId) return null;
+  const { taskId: _legacyTaskId, ...rest } = row as SessionTab & {
+    taskId?: string;
+  };
+  void _legacyTaskId;
+  return {
+    ...(rest as SessionTab),
+    id: row.id,
+    sessionId,
+    title: row.title || "新会话",
+    agentId: row.agentId || DEFAULT_AGENT_ID,
+    agentCommand: Array.isArray(row.agentCommand) ? row.agentCommand : [],
+    cwd: row.cwd || ".",
+    createdAt: typeof row.createdAt === "number" ? row.createdAt : Date.now(),
+    lastActiveAt:
+      typeof row.lastActiveAt === "number" ? row.lastActiveAt : Date.now(),
+    status: row.status === "archived" ? "archived" : "active",
+  };
+}
+
 export const tabsActions = {
   createTab(config: { agentId: string; cwd: string; title?: string }) {
     const now = Date.now();
@@ -106,7 +146,7 @@ export const tabsActions = {
 
     const newTab: SessionTab = {
       id: crypto.randomUUID(),
-      taskId: crypto.randomUUID(),
+      sessionId: `pending:${crypto.randomUUID()}`,
       title: config.title || "新会话",
       agentId: preset.registryId ?? preset.id,
       // Only persist explicit overrides; detect-first presets keep this empty.
@@ -176,9 +216,46 @@ export const tabsActions = {
   deleteTab(tabId: string) {
     const tab = tabsStore.tabs.find((t) => t.id === tabId);
     if (tab) {
-      deleteTaskInBackground(tab.taskId);
+      deleteSessionInBackground(tab);
     }
     removeTabLocally(tabId);
+  },
+
+  /** Update tab workspace; resets Bridge session binding so bootstrap recreates. */
+  setTabCwd(tabId: string, cwd: string) {
+    const next = cwd.trim();
+    if (!next) return;
+    const tab = tabsStore.tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    invalidateSessionBoot(tabId, tab.cwd, tab.agentId);
+    invalidateSessionBoot(tabId, next, tab.agentId);
+    tabsStore.tabs = tabsStore.tabs.map((t) =>
+      t.id === tabId
+        ? {
+            ...t,
+            cwd: next,
+            // Force create path (not soft-reuse of previous Bridge session).
+            sessionId: `pending:${crypto.randomUUID()}`,
+            agentLoading: true,
+            hasChatContent: false,
+          }
+        : t,
+    );
+  },
+
+  /** Bind Bun Bridge sessionId onto the tab. */
+  bindBridgeSession(tabId: string, sessionId: string, title?: string | null) {
+    tabsStore.tabs = tabsStore.tabs.map((t) =>
+      t.id === tabId
+        ? {
+            ...t,
+            sessionId,
+            ...(title && title.trim() ? { title: title.trim() } : {}),
+            agentLoading: false,
+            needsHistoryLoad: false,
+          }
+        : t,
+    );
   },
 
   updateTabTitle(tabId: string, title: string) {
@@ -226,8 +303,16 @@ export const tabsActions = {
       return;
     }
 
-    const defaultCwd =
-      (await getBridgeHost().getDefaultWorkspace()) ?? ".";
+    const host = getBridgeHost();
+    let defaultCwd = (await host.getDefaultWorkspace())?.trim() || "";
+    if (!defaultCwd || defaultCwd === ".") {
+      defaultCwd = (await host.pickWorkspace())?.trim() || "";
+    }
+    if (!defaultCwd) {
+      // Last resort: relative cwd is resolved by Bridge process — prefer prompting user
+      // via pickWorkspace above; only fall back when picker cancelled.
+      defaultCwd = ".";
+    }
 
     tabsActions.createTab({
       agentId: tabsStore.preferredAgentId,
@@ -242,12 +327,29 @@ export function useTabsStore<T>(selector: (state: TabsState) => T): T {
 }
 
 export async function hydrateTabsStore(): Promise<void> {
-  await hydrateValtioStore(TABS_PERSIST_KEY, tabsStore);
-  tabsStore.tabs = tabsStore.tabs.map((t) => ({
-    ...t,
-    // 已有 agent session 的视为已就绪；未启动的活跃会话进入加载态
-    agentLoading: t.status === "active" && !t.agentSessionId,
-  }));
+  await hydrateValtioStore(TABS_PERSIST_KEY, tabsStore, {
+    merge: (persisted, current) => {
+      if (!persisted || typeof persisted !== "object") return {};
+      const raw = persisted as Partial<TabsState> & {
+        tabs?: unknown[];
+      };
+      const tabs = Array.isArray(raw.tabs)
+        ? raw.tabs.map(migrateTab).filter((t): t is SessionTab => t != null)
+        : current.tabs;
+      return {
+        ...raw,
+        tabs,
+      };
+    },
+  });
+  tabsStore.tabs = tabsStore.tabs.map((t) => {
+    const migrated = migrateTab(t) ?? t;
+    return {
+      ...migrated,
+      // Bridge sessions are created/reopened on mount; mark active tabs loading until bind.
+      agentLoading: migrated.status === "active",
+    };
+  });
 }
 
 let unsubscribeTabsPersist: (() => void) | null = null;

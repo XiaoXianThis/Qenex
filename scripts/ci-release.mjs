@@ -39,7 +39,7 @@ function resolveVersion() {
   if (ref.startsWith("v")) {
     return ref.slice(1);
   }
-  return "0.2.3";
+  return "0.3.0";
 }
 
 function run(command, options = {}) {
@@ -126,7 +126,7 @@ function copyDesktopBundles(platform, version) {
 }
 
 function packageServer(platform, version) {
-  console.log("\n=== Building integrated server ===");
+  console.log("\n=== Building Bun Bridge server package ===");
   run("bun run build");
 
   const zipName = `qenex-server-${version}-${platform}.zip`;
@@ -136,35 +136,21 @@ function packageServer(platform, version) {
 }
 
 function packageVscode(platform, version) {
-  console.log("\n=== Building VS Code extension ===");
-  run("bun run package:vscode");
-
-  const vscodeDir = join(root, "apps", "vscode");
-  const vsixFiles = readdirSync(vscodeDir).filter((name) => name.endsWith(".vsix"));
-  if (vsixFiles.length === 0) {
-    throw new Error("VS Code package did not produce a .vsix file");
-  }
-
-  const sourceVsix = join(vscodeDir, vsixFiles[0]);
-  const destVsix = join(distArtifactsDir, `qenex-vscode-${version}-${platform}.vsix`);
-  copyFileSync(sourceVsix, destVsix);
-  console.log(`VS Code artifact: ${basename(destVsix)}`);
+  console.log("\n=== VS Code extension (deferred) ===");
+  console.log(
+    "[m8] Skipping VS Code package in v0.3.0 release (IDE Bun Bridge = 0.3.x; see apps/bridge/M7.md).",
+  );
+  void platform;
+  void version;
 }
 
 function packageJetbrains(platform, version) {
-  console.log("\n=== Building JetBrains plugin ===");
-  run("bun run package:jetbrains");
-
-  const distributionsDir = join(root, "apps", "jetbrains", "build", "distributions");
-  const pluginZips = readdirSync(distributionsDir).filter((name) => name.endsWith(".zip"));
-  if (pluginZips.length === 0) {
-    throw new Error(`No plugin zip found in ${distributionsDir}`);
-  }
-
-  const sourceZip = join(distributionsDir, pluginZips[0]);
-  const destZip = join(distArtifactsDir, `qenex-jetbrains-${version}-${platform}.zip`);
-  copyFileSync(sourceZip, destZip);
-  console.log(`JetBrains artifact: ${basename(destZip)}`);
+  console.log("\n=== JetBrains plugin (deferred) ===");
+  console.log(
+    "[m8] Skipping JetBrains package in v0.3.0 release (IDE Bun Bridge = 0.3.x; see apps/bridge/M7.md).",
+  );
+  void platform;
+  void version;
 }
 
 function packageDesktop(platform, version) {

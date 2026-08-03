@@ -11,6 +11,7 @@ import {
 import type { DraggablePanelId, LayoutPersistedState, LayoutPresetId } from "./types.ts";
 
 /** Stable id for classic checkpoint column — targeted by default custom CSS. */
+/** Legacy layout column id (classic preset). Name kept for persisted layout stability; checkpoint UI removed in v0.3. */
 export const CLASSIC_CHECKPOINT_COLUMN_ID = "LayoutColumn-checkpoint";
 
 function buildState(
@@ -28,17 +29,14 @@ function buildState(
 
 function classicPuckData() {
   resetPuckIdCounter();
-  const checkpointColumn = createLayoutColumn(
-    [
-      panelToComponentData("approval"),
-      panelToComponentData("undoRedo"),
-    ],
+  const approvalColumn = createLayoutColumn(
+    [panelToComponentData("approval")],
     CLASSIC_CHECKPOINT_COLUMN_ID,
   );
   return buildPuckData({
     top: [columnOfPanels(["tabBar"])],
     bottom: [
-      checkpointColumn,
+      approvalColumn,
       panelToComponentData("composer"),
     ],
   });
@@ -47,7 +45,7 @@ function classicPuckData() {
 function composerTopPuckData() {
   resetPuckIdCounter();
   return buildPuckData({
-    top: [columnOfPanels(["tabBar", "undoRedo", "composer"])],
+    top: [columnOfPanels(["tabBar", "composer"])],
     bottom: [
       columnOfPanels([
         "followupSuggestions",
@@ -69,7 +67,6 @@ function tabsBottomPuckData() {
         "followupSuggestions",
         "scrollToBottom",
         "approval",
-        "undoRedo",
         "composer",
         "welcomeSuggestions",
       ]),
@@ -81,7 +78,7 @@ function minimalPuckData() {
   resetPuckIdCounter();
   return buildPuckData({
     top: [columnOfPanels(["tabBar"])],
-    bottom: [columnOfPanels(["approval", "undoRedo", "composer"])],
+    bottom: [columnOfPanels(["approval", "composer"])],
   });
 }
 
@@ -90,7 +87,7 @@ function workspacePuckData() {
   return buildPuckData({
     top: [
       createLayoutRow([panelToComponentData("tabBar")]),
-      rowOfPanelColumns([[], ["undoRedo"], ["tokenStats"]]),
+      rowOfPanelColumns([[], [], ["tokenStats"]]),
     ],
     bottom: [
       columnOfPanels(["composer"]),
@@ -103,7 +100,7 @@ function workspacePuckData() {
 
 const COMPOSER_BAND = {
   approval: { visible: false, widthScope: "viewport" as const },
-  undoRedo: { visible: true, widthScope: "content" as const },
+  undoRedo: { visible: false, widthScope: "content" as const },
 };
 
 export const CLASSIC_LAYOUT: LayoutPersistedState = buildState(
@@ -141,7 +138,7 @@ export const LAYOUT_PRESETS: Record<
       welcomeSuggestions: { visible: false, widthScope: "content" },
       sessionConfigBar: { visible: false, widthScope: "content" },
       tokenStats: { visible: false, widthScope: "viewport" },
-      undoRedo: { visible: true, widthScope: "content" },
+      undoRedo: { visible: false, widthScope: "content" },
       checklist: { visible: false, widthScope: "viewport" },
       approval: { visible: false, widthScope: "viewport" },
     },
@@ -153,7 +150,7 @@ export const LAYOUT_PRESETS: Record<
       approval: { visible: false, widthScope: "viewport" },
       scrollToBottom: { visible: false, widthScope: "content" },
       welcomeSuggestions: { visible: false, widthScope: "content" },
-      undoRedo: { visible: true, widthScope: "viewport" },
+      undoRedo: { visible: false, widthScope: "viewport" },
     },
   ),
 };

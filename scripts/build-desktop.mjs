@@ -1,83 +1,49 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { execSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = join(root, "apps", "desktop");
-const binariesDir = join(desktopDir, "src-tauri", "binaries");
-const manifest = join(root, "crates", "bridge", "Cargo.toml");
-const isWin = process.platform === "win32";
-
-const ALL_TARGETS = [
-  "x86_64-pc-windows-msvc",
-  "x86_64-apple-darwin",
-  "aarch64-apple-darwin",
-  "x86_64-unknown-linux-gnu",
-];
+const bridgeDir = join(root, "apps", "bridge");
+const bridgeEntry = join(bridgeDir, "src", "index.ts");
 
 const args = process.argv.slice(2);
-const allTargets = args.includes("--all-targets");
 const shouldPackage = args.includes("--package");
+const allTargets = args.includes("--all-targets");
 const targetArgIndex = args.indexOf("--target");
 const explicitTargets =
-  targetArgIndex >= 0 ? args.slice(targetArgIndex + 1).filter((a) => !a.startsWith("--")) : [];
+  targetArgIndex >= 0
+    ? args.slice(targetArgIndex + 1).filter((a) => !a.startsWith("--"))
+    : [];
 
-function getHostTarget() {
-  return execSync("rustc -vV", { encoding: "utf8" })
-    .split("\n")
-    .find((line) => line.startsWith("host:"))
-    ?.slice("host:".length)
-    .trim();
+if (allTargets || explicitTargets.length > 0) {
+  console.log(
+    "Note: Desktop no longer builds per-target Rust sidecars (M7).",
+  );
+  console.log(
+    "Bun Bridge source is bundled as Tauri resources; runtime uses system Bun.",
+  );
 }
 
-function sidecarName(triple) {
-  const base = `acp-to-agui-${triple}`;
-  return triple.includes("windows") ? `${base}.exe` : base;
-}
-
-function buildTarget(triple) {
-  const binName = triple.includes("windows") ? "acp-to-agui.exe" : "acp-to-agui";
-  // `cargo --target` always writes under target/<triple>/, even for the host triple.
-  const releaseBin = join(root, "target", triple, "release", binName);
-
-  console.log(`Building bridge for ${triple}...`);
-  try {
-    execSync(
-      `cargo build --release --manifest-path "${manifest}" --features server --bin acp-to-agui --target ${triple}`,
-      { cwd: root, stdio: "inherit" },
-    );
-  } catch {
+function ensureBun() {
+  const found = spawnSync("bun", ["--version"], { encoding: "utf8" });
+  if (found.status !== 0) {
     throw new Error(
-      `Failed to build for ${triple}. Install the target with: rustup target add ${triple}`,
+      "Bun not found on PATH. Install Bun before building Desktop.",
     );
   }
-
-  if (!existsSync(releaseBin)) {
-    throw new Error(`Rust build failed: ${releaseBin} not found`);
-  }
-
-  mkdirSync(binariesDir, { recursive: true });
-  const dest = join(binariesDir, sidecarName(triple));
-  copyFileSync(releaseBin, dest);
-  if (!isWin) {
-    chmodSync(dest, 0o755);
-  }
-  console.log(`Sidecar copied to ${dest}`);
+  console.log(`Bun ${found.stdout.trim()}`);
 }
 
-const hostTarget = getHostTarget();
-const targets = explicitTargets.length
-  ? explicitTargets
-  : allTargets
-    ? ALL_TARGETS
-    : [hostTarget];
-
-console.log(`Sidecar targets: ${targets.join(", ")}`);
-
-for (const triple of targets) {
-  buildTarget(triple);
+if (!existsSync(bridgeEntry)) {
+  throw new Error(`Bun Bridge entry missing: ${bridgeEntry}`);
 }
+
+ensureBun();
+
+console.log("Ensuring Bun Bridge dependencies...");
+execSync("bun install", { cwd: bridgeDir, stdio: "inherit" });
 
 console.log("Building desktop frontend...");
 execSync("bun run build", { cwd: desktopDir, stdio: "inherit" });
@@ -85,7 +51,10 @@ execSync("bun run build", { cwd: desktopDir, stdio: "inherit" });
 ensureIcons(desktopDir);
 
 if (shouldPackage) {
-  console.log("Packaging Tauri app...");
+  console.log("Packaging Tauri app (bundles bridge/src + package.json)...");
+  console.log(
+    "Release still requires system Bun at runtime (embedding Bun = 0.3.x).",
+  );
   execSync("bun run tauri:build", { cwd: desktopDir, stdio: "inherit" });
 }
 
@@ -103,7 +72,9 @@ function ensureIcons(desktopPath) {
 
   const sourceIcon = join(desktopPath, "app-icon.svg");
   if (!existsSync(sourceIcon)) {
-    console.warn("Warning: app-icon.svg not found; run tauri icon manually before packaging");
+    console.warn(
+      "Warning: app-icon.svg not found; run tauri icon manually before packaging",
+    );
     return;
   }
 
@@ -114,6 +85,8 @@ function ensureIcons(desktopPath) {
       stdio: "inherit",
     });
   } catch {
-    console.warn("Warning: failed to generate icons; packaging may require manual icon setup");
+    console.warn(
+      "Warning: failed to generate icons; packaging may require manual icon setup",
+    );
   }
 }

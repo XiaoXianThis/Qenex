@@ -48,7 +48,7 @@ function sessionsFromTabs(
   tabs: Array<{
     id: string;
     status: string;
-    taskId: string;
+    sessionId: string;
     agentId: string;
     cwd: string;
     agentCommand?: string[];
@@ -60,7 +60,7 @@ function sessionsFromTabs(
     .filter((t) => t.status === "active")
     .map((tab) => ({
       tabId: tab.id,
-      threadId: tab.taskId,
+      threadId: tab.sessionId,
       agentId: tab.agentId,
       cwd: tab.cwd,
       agentCommand:

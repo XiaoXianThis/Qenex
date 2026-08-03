@@ -5,17 +5,17 @@
     "packages/*",
     "apps/*",
     "apps/vscode/webview",
-    "apps/jetbrains/webview"
+    "apps/jetbrains/webview",
+    "scratch/*"
   ],
   "scripts": {
     "dev": "bun scripts/dev.mjs",
+    "dev:bridge": "bun run --filter @qenex/bridge start",
     "dev:web": "bun run --filter @qenex/web dev",
     "dev:desktop": "bun scripts/dev-desktop.mjs",
     "dev:jetbrains": "bun scripts/dev-jetbrains.mjs",
-    "dev:rust": "cargo run --manifest-path crates/bridge/Cargo.toml --features server --bin acp-to-agui -- --config crates/bridge/bridge.config.json",
     "build": "bun scripts/build-all.mjs",
     "build:web": "bun scripts/build-web.mjs",
-    "build:rust": "bun scripts/build-rust.mjs",
     "build:vscode": "bun scripts/build-vscode.mjs",
     "build:desktop": "bun scripts/build-desktop.mjs",
     "build:jetbrains": "bun scripts/build-jetbrains.mjs",
@@ -28,6 +28,19 @@
     "ci:release": "bun scripts/ci-release.mjs",
     "verify:all": "bun run verify:vscode && bun run verify:desktop && bun run verify:jetbrains",
     "start": "bun scripts/start-build.mjs",
-    "lint": "bun run --filter @qenex/web lint"
+    "lint": "bun run --filter @qenex/web lint",
+    "test:bridge": "bun run --filter @qenex/bridge test",
+    "test:bridge:acceptance": "bun run --filter @qenex/bridge test:acceptance",
+    "test:phase0": "bun run --cwd scratch/phase0 test",
+    "test:m0": "bun run test:bridge && bun run test:bridge:acceptance",
+    "test:m1": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run test:bridge:acceptance && bun run --cwd apps/web test:m1",
+    "test:m2": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run --filter @qenex/bridge test:phase3 && bun run --cwd apps/web test:m2",
+    "test:m3": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run --cwd apps/web test:m3",
+    "test:m4": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run --filter @qenex/bridge test:m4 && bun run --cwd apps/web test:m4",
+    "test:m5": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run --filter @qenex/bridge test:m5 && bun run --cwd apps/web test:m5",
+    "test:m6": "bun run --cwd packages/core test && bun run --cwd packages/ui test && bun run test:bridge && bun run --filter @qenex/bridge test:m6 && bun run --cwd apps/web test:m6",
+    "test:m7": "bun run test:m1 && bun run test:m2 && bun run test:m3 && bun run test:m4 && bun run test:m5 && bun run test:m6 && bun run --filter @qenex/bridge test:m7 && bun run --cwd apps/web test:m7 && bun run verify:desktop",
+    "test:m8": "bun run test:m7 && bun run --filter @qenex/bridge test:m8 && bun run --cwd apps/web test:m8 && bun run verify:desktop",
+    "test:phase3": "bun run --filter @qenex/bridge test:phase3"
   }
 }

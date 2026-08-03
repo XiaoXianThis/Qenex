@@ -5,7 +5,6 @@ import { migrateLayoutToV4 } from "./migrate-v3.ts";
 import type { LayoutPersistedState, PanelId } from "./types.ts";
 import {
   columnOfPanels,
-  findPanelZone,
   getZoneNodes,
   panelToComponentData,
   type PuckRootProps,
@@ -45,25 +44,25 @@ export function migrateLayoutState(value: unknown): LayoutPersistedState {
       preset === "workspace"
         ? preset
         : "classic";
-    return ensureUndoRedoPanel(applyV1Overrides(getPresetState(basePreset), value));
+    return stripUndoRedoPanel(applyV1Overrides(getPresetState(basePreset), value));
   }
 
   if (
     "schemaVersion" in value &&
     (value as { schemaVersion: number }).schemaVersion === 3
   ) {
-    return ensureUndoRedoPanel(migrateLayoutToV4(value));
+    return stripUndoRedoPanel(migrateLayoutToV4(value));
   }
 
   if (
     "schemaVersion" in value &&
     (value as { schemaVersion: number }).schemaVersion === 4
   ) {
-    return ensureUndoRedoPanel(value as LayoutPersistedState);
+    return stripUndoRedoPanel(value as LayoutPersistedState);
   }
 
   const v3 = migrateLayoutToV3(value);
-  return ensureUndoRedoPanel(migrateLayoutToV4(v3));
+  return stripUndoRedoPanel(migrateLayoutToV4(v3));
 }
 
 function rootProps(state: LayoutPersistedState): PuckRootProps {
@@ -71,64 +70,25 @@ function rootProps(state: LayoutPersistedState): PuckRootProps {
 }
 
 /**
- * 检查点曾硬编码在输入框上方；拆成独立面板后，为缺省布局在 composer 前插入 undoRedo。
+ * M8: remove legacy Git checkpoint / Changes (`undoRedo`) panels from persisted layouts.
+ * Kept export alias `ensureUndoRedoPanel` for older imports.
  */
-export function ensureUndoRedoPanel(
+export function stripUndoRedoPanel(
   state: LayoutPersistedState,
 ): LayoutPersistedState {
-  if (findPanelZone(state.puckData, "undoRedo")) {
-    return state;
-  }
-  if (!findPanelZone(state.puckData, "composer")) {
-    return state;
-  }
-
   const next = structuredClone(state);
-  const insert = panelToComponentData("undoRedo");
-
-  for (const zone of ["top", "bottom"] as const) {
-    const nodes = getZoneNodes(next.puckData, zone);
-    const result = insertBeforeInTree(nodes, PUCK_PANEL_TYPE.composer, insert);
-    if (result.inserted) {
-      rootProps(next)[zone] = result.nodes;
-      break;
-    }
+  removePanelFromPuckData(next, "undoRedo");
+  if (next.panels.undoRedo) {
+    next.panels.undoRedo = { visible: false, widthScope: "content" };
   }
-
-  next.panels.undoRedo = {
-    visible: true,
-    widthScope: "content",
-  };
-
   return next;
 }
 
-function insertBeforeInTree(
-  nodes: ComponentData[],
-  beforeType: string,
-  insert: ComponentData,
-): { nodes: ComponentData[]; inserted: boolean } {
-  const directIdx = nodes.findIndex((n) => n.type === beforeType);
-  if (directIdx >= 0) {
-    const next = [...nodes];
-    next.splice(directIdx, 0, insert);
-    return { nodes: next, inserted: true };
-  }
-
-  let inserted = false;
-  const mapped = nodes.map((node) => {
-    if (inserted) return node;
-    const children = node.props?.children;
-    if (!Array.isArray(children) || children.length === 0) return node;
-    const nested = insertBeforeInTree(children, beforeType, insert);
-    if (!nested.inserted) return node;
-    inserted = true;
-    return {
-      ...node,
-      props: { ...node.props, children: nested.nodes },
-    };
-  });
-  return { nodes: mapped, inserted };
+/** @deprecated Use stripUndoRedoPanel — name retained for migration call sites. */
+export function ensureUndoRedoPanel(
+  state: LayoutPersistedState,
+): LayoutPersistedState {
+  return stripUndoRedoPanel(state);
 }
 
 function applyV1Overrides(

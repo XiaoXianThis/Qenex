@@ -1,0 +1,6 @@
+node_modules/
+artifacts/*
+!artifacts/.gitkeep
+workspace/spike-*.txt
+*.log
+.DS_Store

@@ -9,30 +9,26 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ensureAgentReadyWithProgress,
-  ensureSession,
-  getSessionConfig,
-  isAgentNotReadyError,
+  formatBridgeError,
+  getAisdkSessionConfig,
+  isAisdkSessionId,
+  setAisdkSessionMode,
+  setAisdkSessionModel,
+} from "../lib/aisdk-session.ts";
+import {
   probeModelConfig,
   probeModelsConfig,
   setConfigOption,
-  setMode,
-  setModel,
   type ModelConfigProbe,
 } from "../lib/bridge-api.ts";
-import { getPreferredGitSessionMode } from "../lib/git-session-mode.ts";
-import { isAuthRequiredError } from "../lib/bridge-client.ts";
-import { agentsActions } from "../store/agents-store.ts";
-import { isCursorAgentId, legacyIdsForRegistry } from "../config/agents.ts";
+import { isCursorAgentId } from "../config/agents.ts";
 import {
   EMPTY_SESSION_CONFIG,
-  type AuthChallenge,
   type SessionConfig,
   type SessionOption,
 } from "../lib/session-config.ts";
 import { modelConfigCacheActions } from "../store/model-config-cache-store.ts";
 import { modelThoughtPrefsActions } from "../store/model-thought-prefs-store.ts";
-import { tabsActions } from "../store/tabs-store.ts";
 
 type ModelConfigSnapshot = {
   thoughtLevels: SessionOption[];
@@ -77,17 +73,14 @@ type SessionConfigProviderProps = {
 };
 
 export function SessionConfigProvider({
-  tabId,
+  tabId: _tabId,
   threadId,
   agentId,
-  cwd,
-  agentCommand,
-  agentSessionId,
+  cwd: _cwd,
+  agentCommand: _agentCommand,
+  agentSessionId: _agentSessionId,
   children,
 }: SessionConfigProviderProps) {
-  const setAgentSessionId = tabsActions.setAgentSessionId;
-  const setAgentLoading = tabsActions.setAgentLoading;
-  const resumeSessionIdRef = useRef(agentSessionId);
   const usesPerModelConfigProbe = isCursorAgentId(agentId);
   const usesPerModelConfigProbeRef = useRef(usesPerModelConfigProbe);
   usesPerModelConfigProbeRef.current = usesPerModelConfigProbe;
@@ -182,28 +175,6 @@ export function SessionConfigProvider({
     [cacheThoughtLevels, cacheFastOptions],
   );
 
-  const seedFromPersistentCache = useCallback((forAgentId: string) => {
-    if (!isCursorAgentId(forAgentId)) {
-      setThoughtLevelsByModel({});
-      setFastOptionsByModel({});
-      thoughtLevelsByModelRef.current = {};
-      fastOptionsByModelRef.current = {};
-      return;
-    }
-    const thought: Record<string, SessionOption[]> = {};
-    const fast: Record<string, SessionOption[]> = {};
-    for (const [modelId, entry] of Object.entries(
-      modelConfigCacheActions.getAgent(forAgentId),
-    )) {
-      thought[modelId] = entry.thoughtLevels;
-      fast[modelId] = entry.fastOptions;
-    }
-    setThoughtLevelsByModel(thought);
-    setFastOptionsByModel(fast);
-    thoughtLevelsByModelRef.current = thought;
-    fastOptionsByModelRef.current = fast;
-  }, []);
-
   const applyProbePrefs = useCallback(
     (probe: ModelConfigProbe) => {
       const modelId = probe.modelId;
@@ -270,131 +241,28 @@ export function SessionConfigProvider({
   );
 
   const bootstrap = useCallback(async (signal?: AbortSignal): Promise<"ok" | "auth" | "error"> => {
+    // Wait until AgentRuntimeProvider binds a real Bridge sessionId (ses_…).
+    if (!isAisdkSessionId(threadId)) {
+      if (signal?.aborted) return "error";
+      setConfig({
+        ...EMPTY_SESSION_CONFIG,
+        loading: true,
+        error: null,
+        authChallenge: null,
+      });
+      return "ok";
+    }
+
     setConfig((current) => ({
       ...current,
       loading: true,
       error: null,
       authChallenge: null,
     }));
-    seedFromPersistentCache(agentId);
-    probeInFlightRef.current.clear();
-
-    const runEnsureSession = async () =>
-      ensureSession({
-        taskId: threadId,
-        cwd,
-        agentId,
-        agentCommand:
-          agentCommand && agentCommand.length > 0 ? agentCommand : undefined,
-        resumeSessionId: resumeSessionIdRef.current,
-        gitSessionMode: getPreferredGitSessionMode(),
-      });
 
     try {
-      let result;
-      try {
-        result = await runEnsureSession();
-      } catch (firstError) {
-        if (isAuthRequiredError(firstError)) {
-          throw firstError;
-        }
-        const message =
-          firstError instanceof Error ? firstError.message : String(firstError);
-        if (!isAgentNotReadyError(message) || signal?.aborted) {
-          throw firstError;
-        }
-        setConfig((current) => ({
-          ...current,
-          loading: true,
-          error: null,
-          authChallenge: null,
-        }));
-        const ensured = await ensureAgentReadyWithProgress(
-          agentId,
-          undefined,
-          (event) => {
-            if (signal?.aborted) return;
-            if (event.type === "stage" || event.type === "download") {
-              setConfig((current) => ({
-                ...current,
-                loading: true,
-                error: null,
-              }));
-            }
-          },
-        );
-        if (signal?.aborted) {
-          return "error";
-        }
-        agentsActions.upsertFromRegistry(
-          {
-            id: ensured.agentId,
-            name: ensured.installed?.name || ensured.agentId,
-            command: [],
-            source: ensured.skippedDownload ? "detected" : "registry",
-            registryId: ensured.agentId,
-          },
-          legacyIdsForRegistry(ensured.agentId),
-        );
-        result = await runEnsureSession();
-      }
-      if (signal?.aborted) {
-        return "error";
-      }
-
-      let next = result.config;
-
-      const preferredMode = modelThoughtPrefsActions.getPreferredMode(agentId);
-      const canRestoreMode =
-        !!preferredMode &&
-        preferredMode !== next.currentModeId &&
-        next.modes.some((mode) => mode.id === preferredMode);
-
-      if (canRestoreMode && preferredMode) {
-        next = await setMode(threadId, preferredMode);
-      } else if (next.currentModeId) {
-        modelThoughtPrefsActions.setPreferredMode(agentId, next.currentModeId);
-      }
-
-      const preferredModel =
-        modelThoughtPrefsActions.getPreferredModel(agentId);
-      const canRestoreModel =
-        !!preferredModel &&
-        preferredModel !== next.currentModelId &&
-        next.models.some((model) => model.id === preferredModel);
-
-      if (canRestoreModel && preferredModel) {
-        next = await setModel(threadId, preferredModel);
-      } else if (next.currentModelId) {
-        modelThoughtPrefsActions.setPreferredModel(agentId, next.currentModelId);
-      }
-
-      // Restore thought level even when the model did not need changing
-      // (e.g. Claude Code resets to Default on restart while OpenCode may not).
-      const modelIdForThought = next.currentModelId;
-      if (modelIdForThought) {
-        const preferredThought = modelThoughtPrefsActions.get(
-          agentId,
-          modelIdForThought,
-        );
-        const thoughtConfigId = next.thoughtLevelConfigId;
-        if (
-          preferredThought &&
-          thoughtConfigId &&
-          next.thoughtLevels.some((level) => level.id === preferredThought) &&
-          next.currentThoughtLevelId !== preferredThought
-        ) {
-          next = await setConfigOption(
-            threadId,
-            thoughtConfigId,
-            preferredThought,
-          );
-        }
-      }
-
-      if (signal?.aborted) {
-        return "error";
-      }
+      const next = await getAisdkSessionConfig(threadId);
+      if (signal?.aborted) return "error";
       if (next.currentModelId) {
         cacheModelConfig(
           next.currentModelId,
@@ -403,48 +271,19 @@ export function SessionConfigProvider({
         );
       }
       setConfig(next);
-      setAgentSessionId(tabId, result.agentSessionId);
-      setAgentLoading(tabId, false);
       return "ok";
     } catch (error) {
-      if (signal?.aborted) {
-        return "error";
-      }
-      if (isAuthRequiredError(error)) {
-        const challenge = error.asAuthRequired();
-        const authChallenge: AuthChallenge | null = challenge
-          ? {
-              detail: challenge.detail,
-              methods: challenge.methods,
-              agentName: challenge.agentName,
-            }
-          : null;
-        setConfig({
-          ...EMPTY_SESSION_CONFIG,
-          error: challenge?.detail ?? error.message,
-          authChallenge,
-        });
-        setAgentLoading(tabId, false);
-        return "auth";
-      }
+      if (signal?.aborted) return "error";
       setConfig({
         ...EMPTY_SESSION_CONFIG,
-        error: error instanceof Error ? error.message : "会话初始化失败",
+        loading: false,
+        ready: false,
+        error: formatBridgeError(error, "加载会话配置失败"),
+        authChallenge: null,
       });
-      setAgentLoading(tabId, false);
       return "error";
     }
-  }, [
-    threadId,
-    cwd,
-    agentCommand,
-    tabId,
-    agentId,
-    setAgentSessionId,
-    setAgentLoading,
-    cacheModelConfig,
-    seedFromPersistentCache,
-  ]);
+  }, [threadId, cacheModelConfig]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -521,8 +360,11 @@ export function SessionConfigProvider({
   ]);
 
   const refresh = useCallback(async () => {
+    if (!isAisdkSessionId(threadId)) {
+      return;
+    }
     try {
-      const next = await getSessionConfig(threadId);
+      const next = await getAisdkSessionConfig(threadId);
       if (next.currentModelId) {
         cacheModelConfig(
           next.currentModelId,
@@ -534,7 +376,8 @@ export function SessionConfigProvider({
     } catch (error) {
       setConfig((current) => ({
         ...current,
-        error: error instanceof Error ? error.message : "加载配置失败",
+        loading: false,
+        error: formatBridgeError(error, "加载配置失败"),
       }));
     }
   }, [threadId, cacheModelConfig]);
@@ -618,16 +461,19 @@ export function SessionConfigProvider({
 
   const changeMode = useCallback(
     async (modeId: string) => {
+      if (!isAisdkSessionId(threadId)) {
+        return;
+      }
       modelThoughtPrefsActions.setPreferredMode(agentId, modeId);
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
-        const next = await setMode(threadId, modeId);
+        const next = await setAisdkSessionMode(threadId, modeId);
         setConfig(next);
       } catch (error) {
         setConfig((current) => ({
           ...current,
           loading: false,
-          error: error instanceof Error ? error.message : "切换 Agent 模式失败",
+          error: formatBridgeError(error, "切换 Agent 模式失败"),
         }));
       }
     },
@@ -689,10 +535,13 @@ export function SessionConfigProvider({
 
   const changeModel = useCallback(
     async (modelId: string) => {
+      if (!isAisdkSessionId(threadId)) {
+        return;
+      }
       modelThoughtPrefsActions.setPreferredModel(agentId, modelId);
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
-        let next = await setModel(threadId, modelId);
+        let next = await setAisdkSessionModel(threadId, modelId);
 
         const preferredThought = modelThoughtPrefsActions.get(agentId, modelId);
         const thoughtConfigId = next.thoughtLevelConfigId;
@@ -756,7 +605,7 @@ export function SessionConfigProvider({
         setConfig((current) => ({
           ...current,
           loading: false,
-          error: error instanceof Error ? error.message : "切换模型失败",
+          error: formatBridgeError(error, "切换模型失败"),
         }));
       }
     },

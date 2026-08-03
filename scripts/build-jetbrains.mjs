@@ -1,29 +1,20 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
+/**
+ * JetBrains plugin build (0.3.0): webview + Kotlin only.
+ * Rust acp-to-agui sidecar removed; Bun Bridge host migration is 0.3.x.
+ */
+import { chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jetbrainsDir = join(root, "apps", "jetbrains");
-const binDir = join(jetbrainsDir, "bin");
 const isWin = process.platform === "win32";
-const binName = isWin ? "acp-to-agui.exe" : "acp-to-agui";
-const releaseBin = join(root, "target", "release", binName);
 const gradlew = isWin ? "gradlew.bat" : "./gradlew";
 
-console.log("Building Rust bridge...");
-execSync("bun scripts/build-rust.mjs", { cwd: root, stdio: "inherit" });
-
-if (!existsSync(releaseBin)) {
-  throw new Error(`Rust binary not found: ${releaseBin}`);
-}
-
-mkdirSync(binDir, { recursive: true });
-copyFileSync(releaseBin, join(binDir, binName));
-if (!isWin) {
-  chmodSync(join(binDir, binName), 0o755);
-}
-console.log(`Bridge binary copied to apps/jetbrains/bin/${binName}`);
+console.log(
+  "[m8] Skipping Rust acp-to-agui binary (removed). IDE Bun Bridge = 0.3.x.",
+);
 
 console.log("Building JetBrains webview...");
 execSync("bun run build", {
@@ -44,6 +35,4 @@ execSync(`${gradlew} compileKotlin`, {
 
 console.log("");
 console.log("JetBrains plugin build complete → apps/jetbrains/");
-console.log("  Verify: bun run verify:jetbrains");
-console.log("  Debug:  cd apps/jetbrains && ./gradlew runIde");
-console.log("  Package: bun run package:jetbrains");
+console.log("  Note: Bridge spawn still expects Bun migration (0.3.x).");

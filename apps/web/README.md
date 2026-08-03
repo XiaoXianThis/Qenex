@@ -8,11 +8,10 @@ bun install
 bun run dev
 ```
 
-默认 `http://localhost:3000`，Vite 将 `/ag-ui`、`/v2`、`/health` 代理到 `http://localhost:8000`。
+默认 `http://localhost:3000`，Vite 将 `/api`、`/v2`、`/health` 代理到 Bun Bridge `http://127.0.0.1:8000`。
 
-需先启动后端：
+Bridge 由 `bun run dev` 一并启动，或单独：
 
 ```bash
-cd crates/bridge
-cargo run --features server --bin acp-to-agui
+bun run dev:bridge
 ```

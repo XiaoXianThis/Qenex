@@ -4,7 +4,6 @@ import {
   type SessionConfig,
   type SessionOption,
 } from "./session-config.ts";
-import type { AguiEvent } from "./bridge-agent.ts";
 import type { ApprovalState } from "../store/approval-store.ts";
 
 export type ApprovalResponse = {
@@ -78,7 +77,7 @@ export type TaskListResponse = {
 };
 
 export type PollEventsResponse = {
-  events: AguiEvent[];
+  events: unknown[];
   afterId: number;
   done: boolean;
   runId?: string | null;
@@ -745,131 +744,6 @@ export async function uninstallAgent(
     `/v2/agents/install/${encodeURIComponent(agentId)}`,
     { method: "DELETE" },
   );
-}
-
-// --- Task-scoped git session (off / inplace / worktree / snapshot) ---
-
-export type { GitSessionMode } from "./git-session-mode.ts";
-
-export type GitSessionBinding = {
-  taskId: string;
-  cwd: string;
-  repoRoot: string;
-  baseBranch: string | null;
-  baseSha: string;
-  agentBranch: string;
-  tipSha: string | null;
-  enabled: boolean;
-  preRewindSha: string | null;
-  /** Isolated agent worktree; set in worktree mode. */
-  worktreePath: string | null;
-  /** External shadow git dir; set in snapshot mode. */
-  shadowGitDir: string | null;
-  mode: import("./git-session-mode.ts").GitSessionMode;
-};
-
-export type GitChangedFile = {
-  status: string;
-  path: string;
-  additions?: number | null;
-  deletions?: number | null;
-};
-
-export type GitTurnCommit = {
-  taskId: string;
-  runId: string;
-  commitSha: string;
-  parentSha: string;
-  message: string;
-  createdAt: string;
-};
-
-export type GitSessionStatus = {
-  binding: GitSessionBinding;
-  files: GitChangedFile[];
-  aheadOfBase: number;
-  dirty: boolean;
-};
-
-export type TaskGitResponse = GitSessionStatus & {
-  turns: GitTurnCommit[];
-};
-
-export async function getTaskGit(taskId: string): Promise<TaskGitResponse> {
-  return fetchJson<TaskGitResponse>(`/v2/tasks/${taskId}/git`);
-}
-
-export async function getTaskGitDiff(
-  taskId: string,
-  opts?: { from?: string; to?: string; file?: string },
-): Promise<{ diff: string }> {
-  const params = new URLSearchParams();
-  if (opts?.from) params.set("from", opts.from);
-  if (opts?.to) params.set("to", opts.to);
-  if (opts?.file) params.set("file", opts.file);
-  const query = params.toString();
-  return fetchJson<{ diff: string }>(
-    `/v2/tasks/${taskId}/git/diff${query ? `?${query}` : ""}`,
-  );
-}
-
-export async function rewindTaskGit(
-  taskId: string,
-  commitSha: string,
-): Promise<GitSessionBinding> {
-  return fetchJson<GitSessionBinding>(`/v2/tasks/${taskId}/git/rewind`, {
-    method: "POST",
-    body: JSON.stringify({ commitSha }),
-  });
-}
-
-export async function unrewindTaskGit(
-  taskId: string,
-): Promise<GitSessionBinding> {
-  return fetchJson<GitSessionBinding>(`/v2/tasks/${taskId}/git/unrewind`, {
-    method: "POST",
-  });
-}
-
-export async function mergeTaskGit(
-  taskId: string,
-): Promise<{ success: boolean; hash: string }> {
-  return fetchJson<{ success: boolean; hash: string }>(
-    `/v2/tasks/${taskId}/git/merge`,
-    { method: "POST" },
-  );
-}
-
-export async function undoAllTaskGit(
-  taskId: string,
-): Promise<GitSessionBinding> {
-  return fetchJson<GitSessionBinding>(`/v2/tasks/${taskId}/git/undo-all`, {
-    method: "POST",
-  });
-}
-
-export type RewindTaskResponse = {
-  runId: string;
-  targetSha: string | null;
-  deletedEvents: number;
-  deletedTurns: number;
-  binding: GitSessionBinding | null;
-  /** False when the live agent could not be invalidated; replacement warms in background. */
-  agentReset?: boolean;
-};
-
-/** Rewind conversation (+ git) to before a user message / run. */
-export async function rewindTask(
-  taskId: string,
-  opts: { runId?: string; userMessageIndex?: number },
-): Promise<RewindTaskResponse> {
-  return fetchJson<RewindTaskResponse>(`/v2/tasks/${taskId}/rewind`, {
-    method: "POST",
-    body: JSON.stringify({
-      runId: opts.runId,
-      userMessageIndex: opts.userMessageIndex,
-    }),
-  });
 }
 
 export type WorkspaceFileItem = {

@@ -8,16 +8,27 @@ import {
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
+import { useAuiState } from "@assistant-ui/react";
 import remarkGfm from "remark-gfm";
-import { type FC, memo, useState } from "react";
+import { type FC, type HTMLAttributes, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { SyntaxHighlighter } from "@/components/assistant-ui/shiki-highlighter";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
+import { useChatHelpers } from "@/components/ChatHelpersContext";
 import { cn } from "@qenex/core";
 
 const MarkdownTextImpl = () => {
+  // useSmooth can stall mid-reveal after the chat stream ends (text part left as
+  // state:"streaming" while useChat.status is already ready). Only animate while
+  // the turn is actually in flight so data-status / ● clear when ready.
+  const partRunning = useAuiState((s) => s.part.status?.type === "running");
+  const chat = useChatHelpers();
+  const chatBusy =
+    chat?.status === "submitted" || chat?.status === "streaming";
+  const smooth = Boolean(partRunning && chatBusy);
+
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
@@ -28,6 +39,14 @@ const MarkdownTextImpl = () => {
           SyntaxHighlighter: MermaidDiagram,
         },
       }}
+      // Force CSS cursor off when the turn is idle — part.status can lag behind
+      // useChat.status after the stream closes (data-status stuck on "running").
+      containerProps={
+        {
+          "data-status": smooth ? "running" : "complete",
+        } as HTMLAttributes<HTMLElement>
+      }
+      smooth={smooth}
       defer
     />
   );

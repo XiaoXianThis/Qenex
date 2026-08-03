@@ -206,7 +206,11 @@ export function TabBar({ position = "top" }: TabBarProps) {
       }
     }
 
-    const cwd = (await host.getDefaultWorkspace()) ?? ".";
+    const cwd =
+      (await host.getDefaultWorkspace())?.trim() ||
+      (await host.pickWorkspace())?.trim() ||
+      "";
+    if (!cwd) return;
     createTab({
       agentId: preset.id,
       cwd,

@@ -22,13 +22,15 @@ alwaysApply: true
 
 3. **Bridge 会话库**  
    删除：  
-   - `~/.agent-center/tasks.db`（及 `-wal`/`-shm`）  
+   - `~/.qenex/sessions.db`（及 `-wal`/`-shm`）— **M4 起主库**  
+   - `~/.agent-center/tasks.db`（及 `-wal`/`-shm`，遗留可删）  
    - `~/.acp-to-agui/tasks.db`（及 `-wal`/`-shm`，若存在）  
    **必须重启 Bridge**（或整份 `bun run dev`）：若在进程仍打开 DB 时删文件，会出现 `readonly database`（SQLite 1032）。
 
 4. **托管 Agent 安装元数据**（`~/.qenex`）  
    删除：`agents/`、`installed.json`、`registry-cache.json`  
-   **保留** `runtime/`（bun/uv），避免每次重下运行时。
+   **保留** `runtime/`（bun/uv），避免每次重下运行时。  
+   **注意**：重置会话时删 `sessions.db`，不要误删整个 `~/.qenex`（会丢掉 runtime）。
 
 ## 不要动
 
@@ -39,5 +41,5 @@ alwaysApply: true
 ## 收尾
 
 - 若 `bun run dev` 未跑：启动它（默认 `http://localhost:3000`）。  
-- Bridge 重启后可能**重建空的** `~/.agent-center/tasks.db` 与 `registry-cache.json`，这算正常，不算「有用户数据」。  
+- Bridge 重启后可能**重建空的** `~/.qenex/sessions.db` 与 `registry-cache.json`，这算正常，不算「有用户数据」。  
 - 用一两句话汇报已清项；提醒刷新后应只见出厂 OpenCode，JSON 模式为 off。

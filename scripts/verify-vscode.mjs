@@ -5,13 +5,10 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const vscodeDir = join(root, "apps", "vscode");
-const isWin = process.platform === "win32";
-const binName = isWin ? "acp-to-agui.exe" : "acp-to-agui";
 
 const required = [
   join(vscodeDir, "media", "index.html"),
   join(vscodeDir, "out", "extension.js"),
-  join(vscodeDir, "bin", binName),
 ];
 
 let failed = false;
@@ -24,6 +21,10 @@ for (const file of required) {
     failed = true;
   }
 }
+
+console.log(
+  "SKIP  apps/vscode/bin/acp-to-agui (Rust Bridge removed in v0.3.0; IDE Bun host = 0.3.x)",
+);
 
 console.log("Type-checking extension host...");
 execSync("bunx tsc --noEmit -p tsconfig.json", {
@@ -42,4 +43,4 @@ if (failed) {
 }
 
 console.log("");
-console.log("verify:vscode passed");
+console.log("verify:vscode passed (webview/host only; Bridge spawn deferred to 0.3.x)");

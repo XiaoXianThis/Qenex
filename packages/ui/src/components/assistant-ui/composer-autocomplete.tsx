@@ -5,7 +5,6 @@ import {
   useTabsStore,
   type WorkspaceFileItem,
 } from "@qenex/core";
-import { useComposerRuntime } from "@assistant-ui/react";
 import { FileIcon, FolderIcon } from "lucide-react";
 import {
   useCallback,
@@ -24,6 +23,8 @@ import {
 
 type ComposerAutocompleteProps = {
   children: ReactNode;
+  value: string;
+  onChange: (value: string) => void;
 };
 
 /** Detect `@query` at caret (word-boundary). Returns start index of `@`. */
@@ -62,8 +63,9 @@ function matchesQuery(item: WorkspaceFileItem, q: string): boolean {
 
 export const ComposerAutocomplete: FC<ComposerAutocompleteProps> = ({
   children,
+  value: composerText,
+  onChange: setText,
 }) => {
-  const composerRuntime = useComposerRuntime();
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const tabs = useTabsStore((s) => s.tabs);
   const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -80,7 +82,7 @@ export const ComposerAutocomplete: FC<ComposerAutocompleteProps> = ({
   const listRef = useRef<HTMLDivElement>(null);
 
   const refreshTrigger = useCallback(() => {
-    const text = composerRuntime.getState().text ?? "";
+    const text = composerText ?? "";
     const el = wrapRef.current?.querySelector(
       "textarea, [contenteditable=true]",
     ) as HTMLElement | null;
@@ -96,7 +98,7 @@ export const ComposerAutocomplete: FC<ComposerAutocompleteProps> = ({
     setStart(parsed.start);
     setOpen(true);
     setActiveIndex(0);
-  }, [composerRuntime]);
+  }, [composerText]);
 
   useEffect(() => {
     if (!open) {
@@ -143,13 +145,13 @@ export const ComposerAutocomplete: FC<ComposerAutocompleteProps> = ({
 
   const replaceMention = (insert: string, close: boolean) => {
     if (start < 0) return;
-    const text = composerRuntime.getState().text ?? "";
+    const text = composerText ?? "";
     const el = wrapRef.current?.querySelector(
       "textarea",
     ) as HTMLTextAreaElement | null;
     const caret = getCaret(el, text.length);
     const next = `${text.slice(0, start)}${insert}${text.slice(caret)}`;
-    composerRuntime.setText(next);
+    setText(next);
     if (close) {
       setOpen(false);
       setStart(-1);

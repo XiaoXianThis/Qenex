@@ -7,7 +7,15 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:m1": "bun run test/m1-acceptance.ts",
+    "test:m2": "bun run test/m2-acceptance.ts",
+    "test:m3": "bun run test/m3-acceptance.ts",
+    "test:m4": "bun run test/m4-acceptance.ts",
+    "test:m5": "bun run test/m5-acceptance.ts",
+    "test:m6": "bun run test/m6-acceptance.ts",
+    "test:m7": "bun run test/m7-acceptance.ts",
+    "test:m8": "bun run test/m8-acceptance.ts"
   },
   "dependencies": {
     "@qenex/core": "workspace:*",

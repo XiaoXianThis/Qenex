@@ -6,12 +6,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jetbrainsDir = join(root, "apps", "jetbrains");
 const isWin = process.platform === "win32";
-const binName = isWin ? "acp-to-agui.exe" : "acp-to-agui";
 const gradlew = isWin ? "gradlew.bat" : "./gradlew";
 
 const required = [
   join(jetbrainsDir, "src", "main", "resources", "webview", "index.html"),
-  join(jetbrainsDir, "bin", binName),
   join(jetbrainsDir, "src", "main", "resources", "META-INF", "plugin.xml"),
   join(jetbrainsDir, "src", "main", "kotlin", "com", "qenex", "BridgeProcessManager.kt"),
   join(jetbrainsDir, "src", "main", "kotlin", "com", "qenex", "QenexPanel.kt"),
@@ -28,6 +26,10 @@ for (const file of required) {
     failed = true;
   }
 }
+
+console.log(
+  "SKIP  apps/jetbrains/bin/acp-to-agui (Rust Bridge removed in v0.3.0; IDE Bun host = 0.3.x)",
+);
 
 console.log("Type-checking webview...");
 execSync("bunx tsc --noEmit -p tsconfig.json", {
@@ -51,4 +53,4 @@ if (failed) {
 }
 
 console.log("");
-console.log("verify:jetbrains passed");
+console.log("verify:jetbrains passed (Kotlin/webview only; Bridge spawn deferred to 0.3.x)");

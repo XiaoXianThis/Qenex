@@ -143,16 +143,16 @@ assert(
   "classic approval → bottom",
 );
 assert(
-  findPanelZone(LAYOUT_PRESETS.classic.puckData, "undoRedo") === "bottom",
-  "classic undoRedo → bottom",
+  findPanelZone(LAYOUT_PRESETS.classic.puckData, "undoRedo") === null,
+  "classic undoRedo removed (M1)",
 );
 assert(
   LAYOUT_PRESETS.classic.panels.approval.visible === false,
   "classic approval hidden by default",
 );
 assert(
-  LAYOUT_PRESETS.classic.panels.undoRedo.visible === true,
-  "classic undoRedo visible by default",
+  LAYOUT_PRESETS.classic.panels.undoRedo.visible === false,
+  "classic undoRedo hidden (M1)",
 );
 
 {
@@ -166,17 +166,16 @@ assert(
   );
   assert(
     Boolean(checkpointCol),
-    "classic has checkpoint column",
+    "classic has checkpoint column id (approval only after M1)",
   );
   const checkpointChildren = checkpointCol?.props?.children as
     | import("@puckeditor/core").ComponentData[]
     | undefined;
   assert(
     Array.isArray(checkpointChildren) &&
-      checkpointChildren.length === 2 &&
-      checkpointChildren[0]?.type === "Approval" &&
-      checkpointChildren[1]?.type === "UndoRedo",
-    "classic checkpoint column has approval then undoRedo",
+      checkpointChildren.length === 1 &&
+      checkpointChildren[0]?.type === "Approval",
+    "classic checkpoint column has approval only",
   );
   assert(
     bottom.some((n) => n.type === "Composer"),

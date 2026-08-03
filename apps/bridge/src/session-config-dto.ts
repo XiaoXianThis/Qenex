@@ -1,0 +1,57 @@
+/**
+ * Normalize SessionInfo → session config DTO for GET/POST mode|model.
+ */
+import type { SessionInfo } from "./session-store.ts";
+
+export type SessionConfigDto = {
+  sessionId: string;
+  modes: Array<{ id: string; name: string; description?: string }>;
+  models: Array<{ id: string; name: string; description?: string }>;
+  currentModeId: string | null;
+  currentModelId: string | null;
+  thoughtLevels: Array<{ id: string; name: string; description?: string }>;
+  fastOptions: Array<{ id: string; name: string }>;
+  thoughtLevelConfigId: string | null;
+  currentThoughtLevelId: string | null;
+  fastConfigId: string | null;
+  currentFastId: string | null;
+};
+
+export function sessionInfoToConfigDto(info: SessionInfo): SessionConfigDto {
+  const modes = (info.modes?.availableModes ?? [])
+    .filter((m) => typeof m.id === "string" && m.id.length > 0)
+    .map((m) => ({
+      id: m.id,
+      name: (m.name && m.name.trim()) || m.id,
+      ...(m.description ? { description: m.description } : {}),
+    }));
+
+  const models = (info.models?.availableModels ?? [])
+    .filter((m) => typeof m.modelId === "string" && m.modelId.length > 0)
+    .map((m) => ({
+      id: m.modelId,
+      name: (m.name && m.name.trim()) || m.modelId,
+      ...(m.description ? { description: m.description } : {}),
+    }));
+
+  const thoughtLevels = (info.thoughtLevels?.available ?? []).map((t) => ({
+    id: t.id,
+    name: (t.name && t.name.trim()) || t.id,
+    ...(t.description ? { description: t.description } : {}),
+  }));
+
+  return {
+    sessionId: info.sessionId,
+    modes,
+    models,
+    currentModeId: info.modes?.currentModeId ?? modes[0]?.id ?? null,
+    currentModelId: info.models?.currentModelId ?? models[0]?.id ?? null,
+    thoughtLevels,
+    fastOptions: [],
+    thoughtLevelConfigId: info.thoughtLevels?.configId ?? null,
+    currentThoughtLevelId:
+      info.thoughtLevels?.currentId ?? thoughtLevels[0]?.id ?? null,
+    fastConfigId: null,
+    currentFastId: null,
+  };
+}

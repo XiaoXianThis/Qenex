@@ -48,8 +48,9 @@ class TextFileAttachmentAdapter implements AttachmentAdapter {
 
 /**
  * Composer 附件适配器：图片（拖入/粘贴/点选）+ 常见文本文件。
- * 挂到 useAgUiRuntime({ adapters: { attachments } }) 后，
- * AttachmentDropzone / AddAttachment / Input 粘贴才会真正生效。
+ * M3：经 useAISDKRuntime({ adapters: { attachments } }) + ComposerPrimitive
+ * 附件条；发送时 ThreadComposer 用本地 draft → composer.setText + composer.send()
+ * 进入多模态 UIMessage parts（避免 ComposerPrimitive.Input 在 AI SDK Runtime 下丢字）。
  */
 export function createComposerAttachmentAdapter(): AttachmentAdapter {
   return new CompositeAttachmentAdapter([

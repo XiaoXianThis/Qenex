@@ -105,25 +105,21 @@ export async function fetchJson<T>(
       .catch(() => ({ detail: response.statusText }));
     const body =
       typeof error === "object" && error
-        ? (error as BridgeErrorBody)
+        ? (error as BridgeErrorBody & {
+            error?: { code?: string; message?: string };
+          })
         : { detail: response.statusText };
+    const nested = body.error;
     if (!body.detail) {
-      body.detail = response.statusText;
+      body.detail =
+        (typeof nested?.message === "string" && nested.message) ||
+        response.statusText;
+    }
+    if (!body.code && typeof nested?.code === "string") {
+      body.code = nested.code;
     }
     throw new BridgeApiError(response.status, body);
   }
 
   return response.json() as Promise<T>;
-}
-
-export function resolveAguiUrl(baseUrl: string): string {
-  if (!baseUrl) {
-    return import.meta.env.VITE_AGUI_URL ?? "/ag-ui";
-  }
-  return `${baseUrl.replace(/\/$/, "")}/ag-ui`;
-}
-
-export async function getAguiUrl(): Promise<string> {
-  const baseUrl = await getBridgeHost().getBridgeBaseUrl();
-  return resolveAguiUrl(baseUrl);
 }

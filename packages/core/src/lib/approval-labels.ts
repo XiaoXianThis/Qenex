@@ -11,8 +11,8 @@ export type ApprovalOptionLike = {
 const KIND_SHORT_LABEL: Record<string, string> = {
   allow_once: "允许",
   "allow-once": "允许",
-  allow_always: "总是",
-  "allow-always": "总是",
+  allow_always: "不再询问",
+  "allow-always": "不再询问",
   reject_once: "拒绝",
   "reject-once": "拒绝",
   reject_always: "始终拒绝",
@@ -58,13 +58,13 @@ export function displayApprovalOptionLabel(option: ApprovalOptionLike): string {
   }
 
   if (looksLikeEmbeddedCommand(full)) {
-    if (/don'?t ask|always|permanently/i.test(full)) return "总是";
+    if (/don'?t ask|always|permanently/i.test(full)) return "不再询问";
     if (/^(no|reject|deny)\b/i.test(full)) return "拒绝";
     return "允许";
   }
 
   if (/^yes\b/i.test(full) && /don'?t ask|always|permanently/i.test(full)) {
-    return "总是";
+    return "不再询问";
   }
   if (/^yes\b/i.test(full) && full.length > 16) {
     return "允许";
@@ -77,7 +77,7 @@ export function displayApprovalOptionLabel(option: ApprovalOptionLike): string {
     /^allow\s+always\b/i.test(full) ||
     /don'?t ask again/i.test(full)
   ) {
-    return "总是";
+    return "不再询问";
   }
   if (/^allow\b/i.test(full) && full.length <= 12) {
     return "允许";
@@ -100,8 +100,9 @@ export function isApprovalAlwaysAllowKind(kind: string | undefined): boolean {
 }
 
 /**
- * Pick the best allow option for auto-approve across agents.
- * Prefers allow_always when the agent offered it; otherwise allow_once / any allow.
+ * Pick the best allow option for client-side auto-approve fallbacks.
+ * Bridge Auto mode prefers allow_once server-side; this helper still prefers
+ * allow_always when the agent offered it (legacy / settings-path edge cases).
  */
 export function pickAutoAllowOption(options: ApprovalOptionLike[] | undefined): {
   optionId: string;

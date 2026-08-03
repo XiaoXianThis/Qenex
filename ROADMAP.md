@@ -1,35 +1,27 @@
-# Qenex 个人体验目标（收窄版）
+# Qenex 路线图
 
-> **定位**：先满足个人使用，不追求产品化。在 **Web / VS Code / JetBrains**（共享 UI）上，把交互做到接近 Cursor。  
-> **优先级**：交互与体验 ≫ 稳定性 / 分发 / 生态长尾。  
-> **Git**：检查点 + 一键还原是刚需；模式名称不重要（默认继续用检查点语义，如 `snapshot`）。
+> **v0.3.0（当前）**：fusion UI − Git 检查点；协议/后端 = **AI SDK + Bun + UIMessage**。  
+> 详见 [`重构指导.md`](./重构指导.md) 与 [`CHANGELOG.md`](./CHANGELOG.md)。
 
----
+## v0.3.0 已交付
 
-## 本轮落地状态
+| 项 | 状态 |
+|----|------|
+| Bun Bridge 替换 Rust / AG-UI | ✅ |
+| Web + Desktop 日常使用 | ✅ |
+| OpenCode：聊 / 停 / 错 / Ask·Auto / `@` / 附件 / 多 Tab / 历史 / mode·model | ✅ |
+| 多 Agent（Registry / 安装 / auth） | ✅ |
+| 删除 Git 检查点 / Changes | ✅ |
+| 旧会话库不迁移（`sessions.db`） | ✅ |
 
-| ID | 需求 | 状态 |
-|----|------|------|
-| CP-5 | 去掉 Changes 盲轮询；run 结束 / 还原后刷新 | ✅ |
-| CP-1/2 | 检查点文案；Composer 上方折叠条；还原/保留 | ✅ |
-| CP-4 | Diff +/- 着色与截断 | ✅ |
-| CP-3 | 消息级还原 + Changes 刷新 + `agentReset` 提示 | ✅ |
-| AP-1/2 | 审批短标签「允许一次 / 不再询问 / 拒绝」 | ✅ |
-| MD-1/2 | 模式中文映射 + `agent:mode_update` 同步 | ✅ |
-| IN-1 | 附件（已有，placeholder 提示保留） | ✅ 既有 |
-| IN-3 | `/` 斜杠命令 | ❌ 暂缓，已移除 |
-| IN-2 | `@` 文件引用（Popover） | ✅ |
-| — | 假面板 Token/CheckList 不再渲染 | ✅ |
+## 0.3.x（下一步）
 
-### 你需要手测（Push）
+- [ ] VS Code / JetBrains：spawn Bun Bridge（对齐 Desktop；见 `apps/bridge/M7.md`）
+- [ ] Desktop / 服务端：评估嵌入 Bun 运行时，离线安装包自洽
+- [ ] 打包固化 bridge `node_modules` / 发布物打磨
 
-1. 真实对话 → 改文件 → 检查点条出现 → **还原 / 保留**
-2. 消息旁还原后问 Agent 是否还记得（看是否弹出 agentReset 警告）
-3. 审批按钮文案是否够短
-4. 输入 `@` 弹出文件 Popover，选文件/进文件夹
+## 明确不做（v0.3）
 
----
-
-## 明确不做（暂缓）
-
-Marketplace、Agent 长尾、稳定性专项、四种 Git 模式产品化教育。
+- 旧 AG-UI / `tasks.db` 自动迁移
+- Git checkpoint / rewind / Changes
+- 公网 SaaS、`/` 斜杠命令（继续暂缓）

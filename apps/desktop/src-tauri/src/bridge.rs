@@ -2,15 +2,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
+use std::process::{Child, Command as StdCommand, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri::Manager;
-use tauri_plugin_shell::process::CommandChild;
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "qenex.json";
@@ -20,18 +18,14 @@ const HEALTH_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct BridgeConfigTemplate {
-    project_name: String,
-    display_title: String,
-    description: String,
-    agent_command: Vec<String>,
-    backend_port: u16,
+struct BridgeCorsTemplate {
+    #[serde(default)]
     cors_origins: Vec<String>,
 }
 
 pub struct BridgeState {
     pub base_url: String,
-    child: Mutex<Option<CommandChild>>,
+    child: Mutex<Option<Child>>,
     status: Mutex<BridgeStatus>,
 }
 
@@ -43,7 +37,7 @@ enum BridgeStatus {
 }
 
 impl BridgeState {
-    fn new(base_url: String, child: CommandChild) -> Self {
+    fn new(base_url: String, child: Child) -> Self {
         Self {
             base_url,
             child: Mutex::new(Some(child)),
@@ -66,8 +60,9 @@ impl BridgeState {
 
     pub fn stop(&self) {
         if let Ok(mut guard) = self.child.lock() {
-            if let Some(child) = guard.take() {
+            if let Some(mut child) = guard.take() {
                 let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }
@@ -75,24 +70,36 @@ impl BridgeState {
 
 pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
     let port = find_free_port()?;
-    let config_path = write_bridge_config(app, port)?;
     let base_url = format!("http://127.0.0.1:{port}");
-
-    // Packaged .app inherits a minimal GUI PATH and cannot find user-installed
-    // agents (e.g. ~/.bun/bin/opencode). Augment PATH before spawning the bridge.
+    let cors = resolve_cors_origins(app, port);
     let path = augmented_path();
+    let bun = find_bun(&path)?;
+    let entry = resolve_bridge_entry(app)?;
+
+    tracing_log(&format!(
+        "starting Bun Bridge: bun={bun} entry={entry} port={port}"
+    ));
     tracing_log(&format!("bridge PATH={path}"));
 
-    let sidecar = app
-        .shell()
-        .sidecar("acp-to-agui")
-        .map_err(|e| format!("sidecar not found: {e}"))?
+    let mut command = StdCommand::new(&bun);
+    command
+        .arg(&entry)
         .env("PATH", &path)
-        .args(["--config", config_path.to_string_lossy().as_ref()]);
+        .env("QENEX_BRIDGE_HOST", "127.0.0.1")
+        .env("QENEX_BRIDGE_PORT", port.to_string())
+        .env("QENEX_CORS_ORIGINS", cors.join(","))
+        .current_dir(
+            Path::new(&entry)
+                .parent()
+                .and_then(|p| p.parent()) // …/bridge/src → …/bridge
+                .unwrap_or(Path::new(".")),
+        )
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
 
-    let (_rx, child) = sidecar
+    let child = command
         .spawn()
-        .map_err(|e| format!("failed to spawn bridge sidecar: {e}"))?;
+        .map_err(|e| format!("failed to spawn Bun Bridge ({bun} {entry}): {e}"))?;
 
     app.manage(BridgeState::new(base_url.clone(), child));
 
@@ -143,7 +150,117 @@ fn tracing_log(message: &str) {
     eprintln!("[qenex-desktop] {message}");
 }
 
-/// Build a PATH suitable for spawning ACP agents from a packaged desktop app.
+fn find_bun(path: &str) -> Result<String, String> {
+    if let Ok(override_bin) = std::env::var("QENEX_BUN_BIN") {
+        let trimmed = override_bin.trim();
+        if !trimmed.is_empty() {
+            if Path::new(trimmed).is_file() || which_in_path(trimmed, path).is_some() {
+                return Ok(trimmed.to_string());
+            }
+            return Err(format!("QENEX_BUN_BIN not found: {trimmed}"));
+        }
+    }
+
+    if let Some(found) = which_in_path("bun", path) {
+        return Ok(found);
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let candidate = home.join(".bun/bin/bun");
+        if candidate.is_file() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    Err(
+        "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN."
+            .to_string(),
+    )
+}
+
+fn which_in_path(name: &str, path: &str) -> Option<String> {
+    for dir in path.split(':') {
+        let candidate = Path::new(dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+fn resolve_bridge_entry(app: &AppHandle) -> Result<String, String> {
+    if let Ok(override_entry) = std::env::var("QENEX_BRIDGE_ENTRY") {
+        let trimmed = override_entry.trim();
+        if !trimmed.is_empty() {
+            if Path::new(trimmed).is_file() {
+                return Ok(trimmed.to_string());
+            }
+            return Err(format!("QENEX_BRIDGE_ENTRY not found: {trimmed}"));
+        }
+    }
+
+    // Packaged app: resources/bridge/src/index.ts
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let packaged = resource_dir.join("bridge").join("src").join("index.ts");
+        if packaged.is_file() {
+            return Ok(packaged.to_string_lossy().into_owned());
+        }
+    }
+
+    // Dev: apps/desktop/src-tauri → ../../bridge/src/index.ts
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bridge/src/index.ts")
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve Bun Bridge entry: {e}"))?;
+    if dev.is_file() {
+        return Ok(dev.to_string_lossy().into_owned());
+    }
+
+    Err(format!(
+        "Bun Bridge entry not found at {}. Set QENEX_BRIDGE_ENTRY or bundle bridge/src.",
+        dev.display()
+    ))
+}
+
+fn resolve_cors_origins(app: &AppHandle, port: u16) -> Vec<String> {
+    let mut origins = vec![
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+        "http://localhost:1420".to_string(),
+        "https://tauri.localhost".to_string(),
+        "tauri://localhost".to_string(),
+    ];
+
+    // Optional template still supported for extra origins.
+    let template_path = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("bridge.config.json"));
+    let fallback_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("bridge.config.json");
+
+    let raw = template_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .or_else(|| fs::read_to_string(&fallback_path).ok());
+
+    if let Some(raw) = raw {
+        if let Ok(template) = serde_json::from_str::<BridgeCorsTemplate>(&raw) {
+            for origin in template.cors_origins {
+                if !origins.contains(&origin) {
+                    origins.push(origin);
+                }
+            }
+        }
+    }
+
+    origins
+}
+
+/// Build a PATH suitable for spawning Bun + ACP agents from a packaged desktop app.
 fn augmented_path() -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
@@ -211,44 +328,6 @@ fn login_shell_path() -> Option<String> {
     } else {
         Some(path)
     }
-}
-
-fn write_bridge_config(app: &AppHandle, port: u16) -> Result<PathBuf, String> {
-    let template_path = app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("bridge.config.json");
-
-    let fallback_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("bridge.config.json");
-
-    let template_raw = fs::read_to_string(&template_path)
-        .or_else(|_| fs::read_to_string(&fallback_path))
-        .map_err(|e| format!("failed to read bridge config template: {e}"))?;
-
-    let mut template: BridgeConfigTemplate =
-        serde_json::from_str(&template_raw).map_err(|e| e.to_string())?;
-
-    template.backend_port = port;
-    template.cors_origins = vec![
-        format!("http://127.0.0.1:{port}"),
-        format!("http://localhost:{port}"),
-        "http://localhost:1420".to_string(),
-        "https://tauri.localhost".to_string(),
-        "tauri://localhost".to_string(),
-    ];
-
-    let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-
-    let config_path = config_dir.join("bridge.config.json");
-    let config_json = serde_json::to_string_pretty(&template).map_err(|e| e.to_string())?;
-    fs::write(&config_path, config_json).map_err(|e| e.to_string())?;
-
-    Ok(config_path)
 }
 
 async fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> {

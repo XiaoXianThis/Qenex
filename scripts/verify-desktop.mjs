@@ -1,41 +1,21 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { execSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = join(root, "apps", "desktop");
 const tauriDir = join(desktopDir, "src-tauri");
-
-function getHostTarget() {
-  return execSync("rustc -vV", { encoding: "utf8" })
-    .split("\n")
-    .find((line) => line.startsWith("host:"))
-    ?.slice("host:".length)
-    .trim();
-}
-
-const hostTriple = getHostTarget();
-const isWin = hostTriple?.includes("windows");
-const sidecarName = isWin
-  ? `acp-to-agui-${hostTriple}.exe`
-  : `acp-to-agui-${hostTriple}`;
+const bridgeEntry = join(root, "apps", "bridge", "src", "index.ts");
 
 const required = [
-  join(desktopDir, "dist", "index.html"),
   join(desktopDir, "bridge.config.json"),
-  join(tauriDir, "binaries", sidecarName),
   join(tauriDir, "tauri.conf.json"),
   join(tauriDir, "src", "lib.rs"),
+  join(tauriDir, "src", "bridge.rs"),
   join(desktopDir, "src", "host", "tauri-host.ts"),
+  bridgeEntry,
 ];
-const sidecarPath = join(tauriDir, "binaries", sidecarName);
-const stagedDebugSidecarPath = join(
-  tauriDir,
-  "target",
-  "debug",
-  isWin ? "acp-to-agui.exe" : "acp-to-agui",
-);
 
 let failed = false;
 
@@ -48,43 +28,56 @@ for (const file of required) {
   }
 }
 
-function newestRustSourceMtime(directory) {
-  let newest = 0;
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      newest = Math.max(newest, newestRustSourceMtime(path));
-    } else if (entry.name.endsWith(".rs")) {
-      newest = Math.max(newest, statSync(path).mtimeMs);
-    }
-  }
-  return newest;
+const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+if (bun.status === 0) {
+  console.log(`OK  bun ${bun.stdout.trim()}`);
+} else {
+  console.error("MISSING  bun on PATH");
+  failed = true;
 }
 
-if (existsSync(sidecarPath)) {
-  const bridgeSourceMtime = Math.max(
-    newestRustSourceMtime(join(root, "crates", "bridge", "src")),
-    statSync(join(root, "crates", "bridge", "Cargo.toml")).mtimeMs,
+const tauriConf = readFileSync(join(tauriDir, "tauri.conf.json"), "utf8");
+if (tauriConf.includes("externalBin") || tauriConf.includes("acp-to-agui")) {
+  console.error(
+    "FAIL  tauri.conf.json still references Rust sidecar (externalBin / acp-to-agui)",
   );
-  const sidecarMtime = statSync(sidecarPath).mtimeMs;
-  if (sidecarMtime < bridgeSourceMtime) {
-    console.error(
-      `STALE  ${sidecarPath}\nRun "bun run dev:desktop" or "bun run build:desktop" to rebuild it.`,
-    );
-    failed = true;
-  } else {
-    console.log(`FRESH  ${sidecarPath}`);
-  }
+  failed = true;
+} else {
+  console.log("OK  tauri.conf.json has no Rust sidecar externalBin");
+}
 
-  if (
-    existsSync(stagedDebugSidecarPath) &&
-    statSync(stagedDebugSidecarPath).mtimeMs < sidecarMtime
-  ) {
-    console.error(
-      `STALE  ${stagedDebugSidecarPath}\nRun "bun run dev:desktop" to refresh Tauri's staged debug sidecar.`,
-    );
-    failed = true;
-  }
+const bridgeRs = readFileSync(join(tauriDir, "src", "bridge.rs"), "utf8");
+if (bridgeRs.includes("acp-to-agui") || bridgeRs.includes("sidecar(")) {
+  console.error("FAIL  bridge.rs still spawns Rust acp-to-agui sidecar");
+  failed = true;
+} else if (!bridgeRs.includes("QENEX_BRIDGE_PORT") || !bridgeRs.includes("bun")) {
+  console.error("FAIL  bridge.rs missing Bun Bridge spawn markers");
+  failed = true;
+} else {
+  console.log("OK  bridge.rs spawns Bun Bridge");
+}
+
+const hostTs = readFileSync(
+  join(desktopDir, "src", "host", "tauri-host.ts"),
+  "utf8",
+);
+if (!hostTs.includes("cmd_get_bridge_url") || !hostTs.includes("getBridgeBaseUrl")) {
+  console.error("FAIL  tauri-host Host.getBridgeBaseUrl contract broken");
+  failed = true;
+} else {
+  console.log("OK  Host.getBridgeBaseUrl → cmd_get_bridge_url");
+}
+
+// Frontend dist is optional for pure check; build if missing for packaging smoke.
+if (!existsSync(join(desktopDir, "dist", "index.html"))) {
+  console.log("Building desktop frontend for verify...");
+  execSync("bun run build", { cwd: desktopDir, stdio: "inherit" });
+}
+if (existsSync(join(desktopDir, "dist", "index.html"))) {
+  console.log(`OK  ${join(desktopDir, "dist", "index.html")}`);
+} else {
+  console.error("MISSING  desktop dist/index.html");
+  failed = true;
 }
 
 console.log("Type-checking desktop frontend...");

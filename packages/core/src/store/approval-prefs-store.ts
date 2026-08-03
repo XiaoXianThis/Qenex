@@ -9,8 +9,8 @@ export const APPROVAL_PREFS_KEY = "agent-center-approval-prefs";
 
 export type ApprovalPrefsState = {
   /**
-   * When true, automatically approve every permission request.
-   * Applies to all agents; optionId is picked per-request from that agent's options.
+   * When true → Bridge `approvalMode: "auto"` (server auto-picks allow_once).
+   * When false → `"ask"` and show pending approval cards.
    */
   autoAllow: boolean;
 };
