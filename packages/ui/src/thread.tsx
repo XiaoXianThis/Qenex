@@ -1,5 +1,6 @@
-import { ThreadPrimitive, useAuiState } from "@assistant-ui/react";
-import { useAISDKChat } from "@assistant-ui/react-ai-sdk";
+import { ThreadPrimitive } from "@assistant-ui/react";
+import type { UseChatHelpers } from "@ai-sdk/react";
+import type { UIMessage } from "ai";
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import {
   useEffect,
@@ -20,6 +21,8 @@ import {
 } from "@qenex/core";
 import { useQenexHost } from "./host.tsx";
 import { MessageArtifacts } from "./message-artifacts.tsx";
+
+type ChatHelpers = UseChatHelpers<UIMessage>;
 
 function rejectOption(options: ApprovalOption[]): ApprovalOption | undefined {
   return options.find((option) => /^reject/i.test(option.kind ?? "")) ??
@@ -239,22 +242,28 @@ function AssistantParts({
  * Assistant-UI ComposerPrimitive.Input is store-controlled via composer.setText.
  * With useChat + useAISDKRuntime that path does not persist text, so typing
  * appears impossible. Drive the textarea with React state and send via useChat.
+ *
+ * Use the live useChat helpers from ChatRuntime (not useAISDKChat): extras are
+ * synced through useEffect(setAdapter), so the list/composer would otherwise
+ * lag until streaming starts.
  */
 function Composer({
+  chat,
   approvalMode,
   onApprovalModeChange,
 }: {
+  chat: ChatHelpers;
   approvalMode: ApprovalMode;
   onApprovalModeChange: (mode: ApprovalMode) => void;
 }) {
-  const chat = useAISDKChat();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const isRunning =
+    chat.status === "submitted" || chat.status === "streaming";
   const [text, setText] = useState("");
-  const canSend = Boolean(chat) && text.trim().length > 0 && !isRunning;
+  const canSend = text.trim().length > 0 && !isRunning;
 
   async function submit() {
     const trimmed = text.trim();
-    if (!chat || !trimmed || isRunning) return;
+    if (!trimmed || isRunning) return;
     setText("");
     await chat.sendMessage({ text: trimmed });
   }
@@ -297,7 +306,6 @@ function Composer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={!chat}
         />
         <div className="qenex-composer-actions">
           {isRunning ? (
@@ -305,7 +313,7 @@ function Composer({
               type="button"
               className="qenex-icon-btn danger"
               title="停止"
-              onClick={() => void chat?.stop()}
+              onClick={() => void chat.stop()}
             >
               <SquareIcon size={16} />
             </button>
@@ -326,18 +334,19 @@ function Composer({
 }
 
 export function Thread({
+  chat,
   sessionId,
   approvalMode,
   onApprovalModeChange,
 }: {
+  chat: ChatHelpers;
   sessionId: string;
   approvalMode: ApprovalMode;
   onApprovalModeChange: (mode: ApprovalMode) => void;
 }) {
-  const chat = useAISDKChat();
-  const messages = chat?.messages ?? [];
+  const messages = chat.messages;
   const streamError =
-    chat?.error != null
+    chat.error != null
       ? formatBridgeError(chat.error, String(chat.error))
       : null;
 
@@ -386,6 +395,7 @@ export function Thread({
           </ThreadPrimitive.ScrollToBottom>
           <ApprovalPanel sessionId={sessionId} />
           <Composer
+            chat={chat}
             approvalMode={approvalMode}
             onApprovalModeChange={onApprovalModeChange}
           />

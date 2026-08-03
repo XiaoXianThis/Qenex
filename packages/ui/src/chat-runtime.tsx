@@ -58,6 +58,7 @@ export function ChatRuntime({ sessionId }: { sessionId: string }) {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Thread
+        chat={chat}
         sessionId={sessionId}
         approvalMode={approvalMode}
         onApprovalModeChange={changeApprovalMode}
