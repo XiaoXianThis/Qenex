@@ -1,22 +1,41 @@
 # VS Code Extension
 
-Activity Bar 侧边栏 Webview，加载 `@qenex/ui`。
+Activity Bar 侧边栏 Webview，加载 `@qenex/ui`，宿主 spawn **本机 Bun + Bridge**（M9，与 Desktop / JetBrains 同契约）。
 
-> **v0.3.0**：Rust `acp-to-agui` 已从仓库删除。扩展宿主迁 **Bun Bridge** 见 [`apps/bridge/M7.md`](../bridge/M7.md) IDE checklist（**0.3.x**）。本版不将可用 VS Code 包作为发布门禁。
+## 前置
+
+- 本机已安装 [Bun](https://bun.sh)（或 `QENEX_BUN_BIN`）
+- VS Code / Cursor 用于 F5 调试扩展
 
 ## 开发
 
 ```bash
-bun run build:vscode   # webview + extension host（无 Bridge 二进制）
+bun run build:vscode   # 暂存 bridge/ + webview + extension host
 ```
 
-F5：用 VS Code 打开 `apps/vscode` 启动扩展（Bridge 需 0.3.x 迁移后才能完整开聊）。
+用 VS Code 打开 `apps/vscode`，F5 启动扩展开发宿主。
 
-## 架构（目标态 0.3.x）
+可选：
+
+```bash
+export QENEX_BRIDGE_ENTRY=/绝对路径/apps/bridge/src/index.ts
+export QENEX_BUN_BIN=$HOME/.bun/bin/bun
+```
+
+## 架构
 
 ```
 Extension Host                    Webview (@qenex/ui)
-├── spawn bun apps/bridge         ├── createVscodeHost()
-│   (待实现)                      │   ├── getBridgeBaseUrl()
-└── …                             └── fetch → localhost Bridge
+├── spawn bun bridge/src/index.ts ├── createVscodeHost()
+│   env: QENEX_BRIDGE_PORT / CORS │   ├── getBridgeBaseUrl()
+└── bridge-ready { url }          └── fetch → localhost Bridge
+```
+
+打包：`apps/vscode/bridge/` 随扩展发布（`vsce`）；`.vscodeignore` 保留 `bridge/**` 的 `.ts`。
+
+## 验收
+
+```bash
+bun run verify:vscode
+bun run --filter @qenex/bridge test:m9
 ```

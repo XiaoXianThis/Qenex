@@ -9,6 +9,7 @@ dist-ssr/
 apps/*/dist/
 apps/vscode/media/
 apps/vscode/bin/
+apps/vscode/bridge/
 apps/vscode/out/
 apps/vscode/*.vsix
 apps/vscode/webview/src/**/*.js

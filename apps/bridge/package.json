@@ -15,7 +15,8 @@
     "test:m5": "bun run test/m5-acceptance.ts",
     "test:m6": "bun run test/m6-acceptance.ts",
     "test:m7": "bun run test/m7-acceptance.ts",
-    "test:m8": "bun run test/m8-acceptance.ts"
+    "test:m8": "bun run test/m8-acceptance.ts",
+    "test:m9": "bun run test/m9-acceptance.ts"
   },
   "dependencies": {
     "@mcpc-tech/acp-ai-provider": "^0.3.4",

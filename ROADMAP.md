@@ -14,12 +14,10 @@
 | 删除 Git 检查点 / Changes | ✅ |
 | 旧会话库不迁移（`sessions.db`） | ✅ |
 
-## 0.3.x（下一步）
+## 0.3.x
 
-- [ ] VS Code / JetBrains：spawn Bun Bridge（对齐 Desktop；见 `apps/bridge/M7.md`）
-- [ ] Desktop / 服务端：评估嵌入 Bun 运行时，离线安装包自洽
-- [ ] 打包固化 bridge `node_modules` / 发布物打磨
-
+- [x] **M9 IDE**：JetBrains → VS Code spawn Bun Bridge（本机 Bun；见 [`重构指导.md`](./重构指导.md) §M9 / [`apps/bridge/M9.md`](./apps/bridge/M9.md)）
+- [ ] 嵌入 Bun / 离线安装包自洽（另立项）；打包固化 bridge `node_modules` / 发布物打磨
 ## 明确不做（v0.3）
 
 - 旧 AG-UI / `tasks.db` 自动迁移
