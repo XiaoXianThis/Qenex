@@ -1,20 +1,6 @@
 # Changelog
 
-## Unreleased — release pipeline + IDE packages
-
-### Added
-
-- GitHub Actions Release：tag `v*` 构建 **server / VS Code / JetBrains / Desktop** 并上传 GitHub Release（见 [`RELEASE.md`](./RELEASE.md)）
-- Server 包一体启动：`build/run.mjs`（Web `:3000` 代理 Bridge `:8000`）
-- `ci:release --products` 可按产物拆分矩阵构建
-
-### Changed
-
-- VS Code / JetBrains 插件版本对齐 **0.3.0**；Release 说明不再跳过 IDE
-
----
-
-## 2026-08-03 - v0.3.0 Bun Bridge + AI SDK（breaking）
+## 2026-08-05 - v0.3.0 Bun Bridge + AI SDK（breaking）
 
 ### Breaking Changes
 
@@ -28,11 +14,15 @@
 - Bun Bridge：会话 / 聊天 / 审批 / files / mode·model / 多 Agent（`/v2/agents/*`）
 - Desktop / VS Code / JetBrains 通过系统 Bun spawn Bridge；`Host.getBridgeBaseUrl()` 契约不变
 - 里程碑验收：`bun run test:m0` … `test:m9`
+- GitHub Actions Release：tag `v*` 构建 **server / VS Code / JetBrains / Desktop** 并上传 GitHub Release（见 [`RELEASE.md`](./RELEASE.md)）
+- Server 包一体启动：`build/run.mjs`（Web `:3000` 代理 Bridge `:8000`）
+- `ci:release --products` 可按产物拆分矩阵构建
 
 ### Changed
 
 - 默认 `bun run dev` → Bun Bridge `:8000` + Web `:3000`
 - `bun run build` / `start` → 打包并启动 **Bun Bridge + Web**（需本机 Bun）
+- VS Code / JetBrains 插件版本对齐 **0.3.0**；四端均可从 GitHub Release 安装
 
 ### Migration
 
