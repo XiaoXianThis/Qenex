@@ -13,7 +13,12 @@ Activity Bar 侧边栏 Webview，加载 `@qenex/ui`，宿主 spawn **本机 Bun 
 bun run build:vscode   # 暂存 bridge/ + webview + extension host
 ```
 
-用 VS Code 打开 `apps/vscode`，F5 启动扩展开发宿主。
+用 VS Code 打开 `apps/vscode`，选配置 **Run Qenex Extension** 后 F5；或：
+
+```bash
+bun run build:vscode
+code --extensionDevelopmentPath="$(pwd)/apps/vscode" .
+```
 
 可选：
 

@@ -74,12 +74,18 @@ pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
     let cors = resolve_cors_origins(app, port);
     let path = augmented_path();
     let bun = find_bun(&path)?;
-    let entry = resolve_bridge_entry(app)?;
+    let entry = resolve_bridge_entry(app, &bun, &path)?;
+    let bridge_cwd = Path::new(&entry)
+        .parent()
+        .and_then(|p| p.parent()) // …/bridge/src → …/bridge
+        .unwrap_or(Path::new("."));
 
     tracing_log(&format!(
-        "starting Bun Bridge: bun={bun} entry={entry} port={port}"
+        "starting Bun Bridge: bun={bun} entry={entry} port={port} cwd={}",
+        bridge_cwd.display()
     ));
     tracing_log(&format!("bridge PATH={path}"));
+    tracing_log(&format!("QENEX_CORS_ORIGINS={}", cors.join(",")));
 
     let mut command = StdCommand::new(&bun);
     command
@@ -88,12 +94,7 @@ pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
         .env("QENEX_BRIDGE_HOST", "127.0.0.1")
         .env("QENEX_BRIDGE_PORT", port.to_string())
         .env("QENEX_CORS_ORIGINS", cors.join(","))
-        .current_dir(
-            Path::new(&entry)
-                .parent()
-                .and_then(|p| p.parent()) // …/bridge/src → …/bridge
-                .unwrap_or(Path::new(".")),
-        )
+        .current_dir(bridge_cwd)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
@@ -105,7 +106,7 @@ pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
 
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let status = match wait_for_health(&base_url, HEALTH_TIMEOUT_MS).await {
+        let status = match wait_for_health(&app_handle, &base_url, HEALTH_TIMEOUT_MS).await {
             Ok(()) => BridgeStatus::Ready,
             Err(error) => {
                 tracing_log(&error);
@@ -188,14 +189,29 @@ fn which_in_path(name: &str, path: &str) -> Option<String> {
     None
 }
 
-fn resolve_bridge_entry(app: &AppHandle) -> Result<String, String> {
+fn resolve_bridge_entry(app: &AppHandle, bun: &str, path_env: &str) -> Result<String, String> {
     if let Ok(override_entry) = std::env::var("QENEX_BRIDGE_ENTRY") {
         let trimmed = override_entry.trim();
         if !trimmed.is_empty() {
             if Path::new(trimmed).is_file() {
+                tracing_log(&format!("using QENEX_BRIDGE_ENTRY={trimmed}"));
                 return Ok(trimmed.to_string());
             }
             return Err(format!("QENEX_BRIDGE_ENTRY not found: {trimmed}"));
+        }
+    }
+
+    // Dev first: monorepo apps/bridge (has workspace-local node_modules).
+    // Tauri copies bridge/src into target/*/bridge without deps; preferring that
+    // path makes `bun` fail with "Cannot find package 'ai'".
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bridge/src/index.ts");
+    if let Ok(canonical) = dev.canonicalize() {
+        if canonical.is_file() {
+            tracing_log(&format!(
+                "using repo Bun Bridge entry: {}",
+                canonical.display()
+            ));
+            return Ok(canonical.to_string_lossy().into_owned());
         }
     }
 
@@ -203,23 +219,61 @@ fn resolve_bridge_entry(app: &AppHandle) -> Result<String, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let packaged = resource_dir.join("bridge").join("src").join("index.ts");
         if packaged.is_file() {
+            let bridge_root = resource_dir.join("bridge");
+            ensure_packaged_bridge_deps(&bridge_root, bun, path_env)?;
+            tracing_log(&format!(
+                "using packaged Bun Bridge entry: {}",
+                packaged.display()
+            ));
             return Ok(packaged.to_string_lossy().into_owned());
         }
     }
 
-    // Dev: apps/desktop/src-tauri → ../../bridge/src/index.ts
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../bridge/src/index.ts")
-        .canonicalize()
-        .map_err(|e| format!("failed to resolve Bun Bridge entry: {e}"))?;
-    if dev.is_file() {
-        return Ok(dev.to_string_lossy().into_owned());
+    Err(
+        "Bun Bridge entry not found. Set QENEX_BRIDGE_ENTRY or run from the Qenex repo / install a build that bundles bridge/src."
+            .to_string(),
+    )
+}
+
+fn has_local_bridge_deps(bridge_root: &Path) -> bool {
+    bridge_root
+        .join("node_modules")
+        .join("ai")
+        .join("package.json")
+        .is_file()
+}
+
+fn ensure_packaged_bridge_deps(bridge_root: &Path, bun: &str, path_env: &str) -> Result<(), String> {
+    if has_local_bridge_deps(bridge_root) {
+        return Ok(());
+    }
+    if !bridge_root.join("package.json").is_file() {
+        return Err(format!(
+            "packaged bridge missing package.json at {}",
+            bridge_root.display()
+        ));
     }
 
-    Err(format!(
-        "Bun Bridge entry not found at {}. Set QENEX_BRIDGE_ENTRY or bundle bridge/src.",
-        dev.display()
-    ))
+    tracing_log(&format!(
+        "packaged bridge missing node_modules; running bun install --production in {}",
+        bridge_root.display()
+    ));
+    let status = StdCommand::new(bun)
+        .args(["install", "--production"])
+        .current_dir(bridge_root)
+        .env("PATH", path_env)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("failed to run bun install in {}: {e}", bridge_root.display()))?;
+
+    if !status.success() || !has_local_bridge_deps(bridge_root) {
+        return Err(format!(
+            "bun install --production failed in {} (status={status}). Install Bun deps or set QENEX_BRIDGE_ENTRY to the repo apps/bridge.",
+            bridge_root.display()
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_cors_origins(app: &AppHandle, port: u16) -> Vec<String> {
@@ -330,7 +384,11 @@ fn login_shell_path() -> Option<String> {
     }
 }
 
-async fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> {
+async fn wait_for_health(
+    app: &AppHandle,
+    base_url: &str,
+    timeout_ms: u64,
+) -> Result<(), String> {
     let health_url = format!("{base_url}/health");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -340,6 +398,26 @@ async fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> 
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
 
     while std::time::Instant::now() < deadline {
+        if let Some(state) = app.try_state::<BridgeState>() {
+            if let Ok(mut guard) = state.child.lock() {
+                if let Some(child) = guard.as_mut() {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            return Err(format!(
+                                "Bridge exited before becoming healthy ({status}). \
+                                 Check console for bun errors (often missing node_modules on packaged bridge). \
+                                 Dev: prefer repo apps/bridge; or set QENEX_BRIDGE_ENTRY."
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            return Err(format!("failed to poll Bridge process: {err}"));
+                        }
+                    }
+                }
+            }
+        }
+
         match client.get(&health_url).send().await {
             Ok(response) if response.status().is_success() => return Ok(()),
             _ => tokio::time::sleep(Duration::from_millis(250)).await,

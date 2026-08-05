@@ -47,6 +47,8 @@ bun run dev:desktop      # 校验 Bun + Bridge 入口后启动 Tauri + Vite :142
 | `QENEX_BUN_BIN` | 指定 bun 可执行文件 |
 | `QENEX_BRIDGE_ENTRY` | 指定 Bridge 入口 `.ts` |
 
+开发态默认用仓库 `apps/bridge`（不用 `target/*/bridge` 那份无 `node_modules` 的拷贝）。打包安装包若缺依赖，会在首次启动时对该资源目录执行 `bun install --production`。
+
 ## 架构
 
 ```

@@ -53,8 +53,13 @@ if (bridgeRs.includes("acp-to-agui") || bridgeRs.includes("sidecar(")) {
 } else if (!bridgeRs.includes("QENEX_BRIDGE_PORT") || !bridgeRs.includes("bun")) {
   console.error("FAIL  bridge.rs missing Bun Bridge spawn markers");
   failed = true;
+} else if (!bridgeRs.includes("using repo Bun Bridge entry")) {
+  console.error(
+    "FAIL  bridge.rs should prefer repo apps/bridge over packaged target/*/bridge",
+  );
+  failed = true;
 } else {
-  console.log("OK  bridge.rs spawns Bun Bridge");
+  console.log("OK  bridge.rs spawns Bun Bridge (repo-first)");
 }
 
 const hostTs = readFileSync(

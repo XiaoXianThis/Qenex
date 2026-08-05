@@ -302,9 +302,10 @@ try {
       mkdtempSync(join(tmpdir(), "qenex-m9-vs-db-")),
       "sessions.db",
     );
-    const cspSource = "https://file+.vscode-resource.vscode-cdn.net";
+    const cspSource = "'self' https://*.vscode-cdn.net";
     const cors = [
       cspSource,
+      "vscode-webview://*",
       `http://127.0.0.1:${port}`,
       `http://localhost:${port}`,
     ].join(",");
@@ -318,8 +319,21 @@ try {
     await waitHealth(baseUrl);
     console.log("[m9] vscode bridge healthy");
 
-    await assertCors(baseUrl, cspSource, "vscode");
-    await assertChatSurface(baseUrl, cspSource, "vscode");
+    await assertCors(
+      baseUrl,
+      "https://file+.vscode-resource.vscode-cdn.net",
+      "vscode-cdn",
+    );
+    await assertCors(
+      baseUrl,
+      "vscode-webview://abcdef00-1111-2222-3333-444444444444",
+      "vscode-webview",
+    );
+    await assertChatSurface(
+      baseUrl,
+      "https://file+.vscode-resource.vscode-cdn.net",
+      "vscode",
+    );
 
     try {
       child.kill();

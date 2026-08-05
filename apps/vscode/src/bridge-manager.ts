@@ -54,17 +54,13 @@ export class BridgeManager {
     const entry = await resolveBridgeEntry(this.context.extensionPath);
     const bridgeCwd = path.dirname(path.dirname(entry)); // …/bridge/src → …/bridge
 
-    const cors = [
-      cspSource,
-      `http://127.0.0.1:${port}`,
-      `http://localhost:${port}`,
-    ]
-      .filter(Boolean)
-      .join(",");
+    // webview.cspSource may be "'self' https://*.vscode-cdn.net" — tokenize + allow vscode-webview://
+    const cors = buildCorsOrigins(cspSource, port);
 
     console.log(
       `[qenex] starting Bun Bridge: bun=${bun} entry=${entry} port=${port}`,
     );
+    console.log(`[qenex] QENEX_CORS_ORIGINS=${cors}`);
 
     const child = spawn(bun, [entry], {
       cwd: bridgeCwd,
@@ -121,6 +117,31 @@ function findBun(pathEnv: string): string {
   throw new Error(
     "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.",
   );
+}
+
+/** Normalize VS Code cspSource into Bridge CORS allow-list entries. */
+export function buildCorsOrigins(cspSource: string, port: number): string {
+  const keywords = new Set([
+    "'self'",
+    "'none'",
+    "'unsafe-inline'",
+    "'unsafe-eval'",
+    "self",
+    "none",
+  ]);
+  const tokens: string[] = [];
+  for (const chunk of (cspSource || "").split(/[\s,]+/)) {
+    const t = chunk.trim();
+    if (!t || keywords.has(t)) continue;
+    tokens.push(t);
+  }
+  const list = [
+    ...tokens,
+    "vscode-webview://*",
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ];
+  return [...new Set(list)].join(",");
 }
 
 function whichInPath(name: string, pathEnv: string): string | null {

@@ -48,4 +48,29 @@ describe("cors helpers", () => {
     const res = withCors(req, Response.json({ ok: true }));
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
+
+  test("tokenizes VS Code cspSource with 'self' and host wildcard", () => {
+    process.env.QENEX_CORS_ORIGINS =
+      "'self' https://*.vscode-cdn.net,http://127.0.0.1:51222";
+    const req = new Request("http://127.0.0.1:51222/health", {
+      headers: {
+        origin: "https://file+.vscode-resource.vscode-cdn.net",
+      },
+    });
+    const res = withCors(req, Response.json({ ok: true }));
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "https://file+.vscode-resource.vscode-cdn.net",
+    );
+  });
+
+  test("reflects vscode-webview:// origins", () => {
+    process.env.QENEX_CORS_ORIGINS =
+      "vscode-webview://*,http://127.0.0.1:51222";
+    const origin = "vscode-webview://abcdef00-1111-2222-3333-444444444444";
+    const req = new Request("http://127.0.0.1:51222/v2/agents/discover", {
+      headers: { origin },
+    });
+    const res = withCors(req, Response.json({ ok: true }));
+    expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+  });
 });

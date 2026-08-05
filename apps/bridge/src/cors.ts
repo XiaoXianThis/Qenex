@@ -2,18 +2,66 @@
  * CORS helpers for Desktop / IDE hosts that call Bridge cross-origin.
  * Origins from `QENEX_CORS_ORIGINS` (comma-separated). Empty = no CORS headers
  * (Web Vite proxy same-origin).
+ *
+ * VS Code passes `webview.cspSource`, which may look like:
+ *   `'self' https://*.vscode-cdn.net`
+ * We tokenize that and also support:
+ *   - exact origins
+ *   - `https://*.host.tld` (any subdomain of host.tld)
+ *   - `vscode-webview://*` (reflect any vscode-webview:// origin)
  */
+
+const CSP_KEYWORDS = new Set([
+  "'self'",
+  "'none'",
+  "'unsafe-inline'",
+  "'unsafe-eval'",
+  "'wasm-unsafe-eval'",
+  "self",
+  "none",
+]);
 
 function parseCorsOrigins(): string[] {
   const raw = process.env.QENEX_CORS_ORIGINS ?? "";
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const tokens: string[] = [];
+  for (const chunk of raw.split(",")) {
+    for (const part of chunk.trim().split(/\s+/)) {
+      const t = part.trim();
+      if (!t || CSP_KEYWORDS.has(t)) continue;
+      tokens.push(t);
+    }
+  }
+  return tokens;
 }
 
 export function corsOrigins(): string[] {
   return parseCorsOrigins();
+}
+
+/** Match `https://*.example.com` against any https origin whose host is example.com or *.example.com */
+function matchHostWildcard(pattern: string, requestOrigin: string): boolean {
+  const m = pattern.match(/^(https?):\/\/\*\.([^/]+)$/i);
+  if (!m) return false;
+  try {
+    const url = new URL(requestOrigin);
+    if (url.protocol !== `${m[1].toLowerCase()}:`) return false;
+    const suffix = m[2].toLowerCase();
+    const host = url.hostname.toLowerCase();
+    return host === suffix || host.endsWith(`.${suffix}`);
+  } catch {
+    return false;
+  }
+}
+
+function patternAllows(pattern: string, requestOrigin: string): boolean {
+  if (pattern === "*" || pattern === requestOrigin) return true;
+  if (pattern === "vscode-webview://*" || pattern === "vscode-webview:") {
+    return requestOrigin.startsWith("vscode-webview://");
+  }
+  if (pattern.includes("://*.")) {
+    return matchHostWildcard(pattern, requestOrigin);
+  }
+  return false;
 }
 
 function allowOrigin(req: Request, origins: string[]): string | null {
@@ -21,10 +69,15 @@ function allowOrigin(req: Request, origins: string[]): string | null {
   const requestOrigin = req.headers.get("origin");
   if (!requestOrigin) {
     // Non-browser or same-origin; still useful for * when only localhost listed.
-    return origins[0] ?? null;
+    return origins.find((o) => !o.includes("*") && !o.startsWith("vscode-webview:")) ??
+      origins[0] ??
+      null;
   }
-  if (origins.includes("*")) return requestOrigin;
-  if (origins.includes(requestOrigin)) return requestOrigin;
+  for (const pattern of origins) {
+    if (patternAllows(pattern, requestOrigin)) {
+      return requestOrigin;
+    }
+  }
   return null;
 }
 
@@ -49,6 +102,11 @@ export function withCors(
     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   );
   headers.set("vary", "origin");
+
+  // Chromium Private Network Access preflight (some hosts / future VS Code)
+  if (req.headers.get("access-control-request-private-network") === "true") {
+    headers.set("access-control-allow-private-network", "true");
+  }
 
   return new Response(response.body, {
     status: response.status,
