@@ -63,6 +63,9 @@ export function stageBunBridge(destDir, opts = {}) {
       for (const lock of ["bun.lock", "bun.lockb", "package-lock.json"]) {
         rmSync(join(tmp, lock), { force: true });
       }
+    } else {
+      // Drop CLI shims; Bun runs TypeScript entry directly. vsce also cannot zip them.
+      rmSync(join(tmp, "node_modules", ".bin"), { recursive: true, force: true });
     }
 
     rmSync(destDir, { recursive: true, force: true });

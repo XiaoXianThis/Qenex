@@ -57,11 +57,12 @@ jobs:
           fi
 
       - name: Build shared artifacts
-        run: |
-          bun run ci:release -- \
-            --platform linux-x64 \
-            --version "${{ steps.ver.outputs.version }}" \
-            --products server,vscode,jetbrains
+        shell: bash
+        run: >
+          bun run ci:release --
+          --platform linux-x64
+          --version "${{ steps.ver.outputs.version }}"
+          --products server,vscode,jetbrains
 
       - name: Upload shared artifacts
         uses: actions/upload-artifact@v4
@@ -127,11 +128,12 @@ jobs:
           fi
 
       - name: Build Desktop artifacts
-        run: |
-          bun run ci:release -- \
-            --platform ${{ matrix.platform }} \
-            --version "${{ steps.ver.outputs.version }}" \
-            --products desktop
+        shell: bash
+        run: >
+          bun run ci:release --
+          --platform ${{ matrix.platform }}
+          --version "${{ steps.ver.outputs.version }}"
+          --products desktop
 
       - name: Upload Desktop artifacts
         uses: actions/upload-artifact@v4
