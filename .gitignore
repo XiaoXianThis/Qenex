@@ -25,6 +25,7 @@ apps/jetbrains/.gradle/
 apps/jetbrains/.intellijPlatform/
 build/
 dist-artifacts/
+*.tsbuildinfo
 
 # Python
 .venv/

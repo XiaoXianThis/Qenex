@@ -1,7 +1,14 @@
 name: CI
 
 on:
+  push:
+    branches: [fusion, main]
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
@@ -31,11 +38,17 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Bridge + milestone guards
+      - name: Bridge unit tests
         run: bun run test:bridge
+
+      - name: CORS + M9 guards
+        run: bun test apps/bridge/test/cors.test.ts && bun run --filter @qenex/bridge test:m9
 
       - name: Build web frontend
         run: bun run build:web
+
+      - name: Build server package smoke
+        run: bun run build
 
       - name: Verify Desktop wiring
         run: bun run verify:desktop

@@ -31,6 +31,11 @@ cpSync(join(bridgeSrc, "src"), join(stagedBridge, "src"), { recursive: true });
 cpSync(join(bridgeSrc, "package.json"), join(stagedBridge, "package.json"));
 execSync("bun install --production", { cwd: stagedBridge, stdio: "inherit" });
 
+cpSync(
+  join(root, "scripts", "templates", "server-run.mjs"),
+  join(buildDir, "run.mjs"),
+);
+
 writeFileSync(
   join(buildDir, "start.ps1"),
   `$ErrorActionPreference = "Stop"
@@ -38,10 +43,7 @@ Set-Location $PSScriptRoot
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
   Write-Error "Bun is required. Install from https://bun.sh"
 }
-$env:QENEX_BRIDGE_HOST = if ($env:QENEX_BRIDGE_HOST) { $env:QENEX_BRIDGE_HOST } else { "127.0.0.1" }
-$env:QENEX_BRIDGE_PORT = if ($env:QENEX_BRIDGE_PORT) { $env:QENEX_BRIDGE_PORT } else { "8000" }
-Set-Location .\\bridge
-& bun .\\src\\index.ts
+& bun .\\run.mjs
 `,
 );
 
@@ -54,10 +56,7 @@ if ! command -v bun >/dev/null 2>&1; then
   echo "Bun is required. Install from https://bun.sh" >&2
   exit 1
 fi
-export QENEX_BRIDGE_HOST="\${QENEX_BRIDGE_HOST:-127.0.0.1}"
-export QENEX_BRIDGE_PORT="\${QENEX_BRIDGE_PORT:-8000}"
-cd bridge
-exec bun ./src/index.ts
+exec bun ./run.mjs
 `,
 );
 
@@ -67,7 +66,7 @@ if (!isWin) {
 
 writeFileSync(
   join(buildDir, "README.txt"),
-  `Qenex v0.3 build output (Bun Bridge)
+  `Qenex server package (Bun Bridge + Web)
 
 Requires system Bun (https://bun.sh).
 
@@ -75,12 +74,17 @@ Run:
   Windows:  .\\start.ps1
   Unix:     ./start.sh
 
-Then open the Web UI separately (dev: bun run dev:web) or serve build/web/.
-Bridge listens on http://127.0.0.1:8000 by default.
+Then open http://127.0.0.1:3000
+  - Web UI on :3000 (proxies /api /v2 /health to Bridge)
+  - Bridge on :8000
+
+Env overrides:
+  QENEX_BRIDGE_HOST / QENEX_BRIDGE_PORT / QENEX_WEB_PORT
 
 Contents:
-  bridge/     Bun Bridge source + production deps
-  web/        Static frontend
+  bridge/   Bun Bridge source + production deps
+  web/      Static frontend
+  run.mjs   Integrated runner
   start.sh / start.ps1
 `,
 );
@@ -88,4 +92,4 @@ Contents:
 console.log("");
 console.log("Build complete → build/");
 console.log(`  Run: ${isWin ? "build\\\\start.ps1" : "build/start.sh"}`);
-console.log("  Bridge: http://127.0.0.1:8000");
+console.log("  Web: http://127.0.0.1:3000  Bridge: http://127.0.0.1:8000");

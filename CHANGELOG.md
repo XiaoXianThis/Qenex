@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — release pipeline + IDE packages
+
+### Added
+
+- GitHub Actions Release：tag `v*` 构建 **server / VS Code / JetBrains / Desktop** 并上传 GitHub Release（见 [`RELEASE.md`](./RELEASE.md)）
+- Server 包一体启动：`build/run.mjs`（Web `:3000` 代理 Bridge `:8000`）
+- `ci:release --products` 可按产物拆分矩阵构建
+
+### Changed
+
+- VS Code / JetBrains 插件版本对齐 **0.3.0**；Release 说明不再跳过 IDE
+
+---
+
 ## 2026-08-03 - v0.3.0 Bun Bridge + AI SDK（breaking）
 
 ### Breaking Changes
@@ -8,19 +22,17 @@
 - **Bridge 换血**：默认与发布路径仅保留 **Bun** `apps/bridge`；删除 Rust `crates/bridge` / `acp-to-agui` 二进制与 `bun run dev:rust` / `build:rust`。
 - **会话数据不迁移**：旧 `~/.agent-center/tasks.db`、`~/.acp-to-agui/tasks.db` 及 AG-UI 事件日志 **废弃**；新库为 `~/.qenex/sessions.db`。升级到 v0.3 请清空旧会话后使用（可走「重置 App」流程）。
 - **Git 检查点删除**：Changes / rewind / checkpoint UI 与相关 API 已移除，不再提供一键还原。
-- **IDE（VS Code / JetBrains）**：v0.3.0 **不发布可用 IDE 包**（宿主仍待迁 Bun Bridge，见 `apps/bridge/M7.md` checklist）；正式门禁为 **Web + Desktop**。
 
 ### Added
 
 - Bun Bridge：会话 / 聊天 / 审批 / files / mode·model / 多 Agent（`/v2/agents/*`）
-- Desktop 通过系统 Bun spawn Bridge（CORS + 动态端口）；`Host.getBridgeBaseUrl()` 契约不变
-- 里程碑验收：`bun run test:m0` … `test:m8`
+- Desktop / VS Code / JetBrains 通过系统 Bun spawn Bridge；`Host.getBridgeBaseUrl()` 契约不变
+- 里程碑验收：`bun run test:m0` … `test:m9`
 
 ### Changed
 
 - 默认 `bun run dev` → Bun Bridge `:8000` + Web `:3000`
-- `bun run build` / `start` → 打包并启动 **Bun Bridge**（需本机 Bun），不再产出 Rust 一体二进制
-- Release：`qenex-server-*` 为 Bun 包；Desktop 继续打包；IDE 产物延后 0.3.x
+- `bun run build` / `start` → 打包并启动 **Bun Bridge + Web**（需本机 Bun）
 
 ### Migration
 

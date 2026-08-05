@@ -5,13 +5,73 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver without v prefix (workflow_dispatch only; tags use tag name)"
+        required: false
+        default: "0.3.0"
+      publish:
+        description: "Create/update GitHub Release (even without tag)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: Build (${{ matrix.platform }})
+  shared:
+    name: Package server + IDE
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install zip
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build shared artifacts
+        run: |
+          bun run ci:release -- \
+            --platform linux-x64 \
+            --version "${{ steps.ver.outputs.version }}" \
+            --products server,vscode,jetbrains
+
+      - name: Upload shared artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qenex-shared
+          path: dist-artifacts/
+          if-no-files-found: error
+
+  desktop:
+    name: Package Desktop (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,13 +79,10 @@ jobs:
         include:
           - os: windows-latest
             platform: win32-x64
-            rust_target: x86_64-pc-windows-msvc
           - os: macos-latest
             platform: darwin-arm64
-            rust_target: aarch64-apple-darwin
           - os: ubuntu-latest
             platform: linux-x64
-            rust_target: x86_64-unknown-linux-gnu
 
     steps:
       - name: Checkout
@@ -38,19 +95,12 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-
-      - name: Setup Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
+          key: desktop-${{ matrix.platform }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -60,25 +110,42 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            zip
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build release artifacts
-        run: bun run ci:release -- --platform ${{ matrix.platform }}
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload artifacts
+      - name: Build Desktop artifacts
+        run: |
+          bun run ci:release -- \
+            --platform ${{ matrix.platform }} \
+            --version "${{ steps.ver.outputs.version }}" \
+            --products desktop
+
+      - name: Upload Desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: qenex-${{ matrix.platform }}
+          name: qenex-desktop-${{ matrix.platform }}
           path: dist-artifacts/
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [shared, desktop]
+    if: >
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
 
     steps:
@@ -88,23 +155,29 @@ jobs:
           path: dist-artifacts
           merge-multiple: true
 
+      - name: List artifacts
+        run: find dist-artifacts -type f | sort
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', inputs.version) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', inputs.version) }}
           generate_release_notes: true
+          draft: ${{ github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/v') }}
           body: |
             ## Downloads
 
-            Pick the asset matching your platform and use case:
+            Requires **[Bun](https://bun.sh)** on PATH for server / Desktop / IDE hosts (runtime not embedded yet).
 
             | Product | File pattern | Usage |
             |---------|--------------|-------|
-            | Integrated server | `qenex-server-*` | Extract and run `start.ps1` (Windows) or `start.sh` (macOS/Linux), then open `http://localhost:8000` |
-            | VS Code extension | `qenex-vscode-*.vsix` | VS Code → Extensions → Install from VSIX |
-            | JetBrains plugin | `qenex-jetbrains-*.zip` | IDE → Settings → Plugins → Install from disk |
-            | Desktop app | `qenex-desktop-*` | Run the installer for your OS |
+            | Server (Web + Bridge) | `qenex-server-*.zip` | Extract → `./start.sh` or `.\start.ps1` → open `http://127.0.0.1:3000` |
+            | VS Code | `qenex-vscode-*.vsix` | Extensions → Install from VSIX |
+            | JetBrains | `qenex-jetbrains-*.zip` | Settings → Plugins → Install Plugin from Disk |
+            | Desktop | `qenex-desktop-*` | Run the installer for your OS |
 
-            Each platform build (`win32-x64`, `darwin-arm64`, `linux-x64`) includes all four products.
+            See [RELEASE.md](https://github.com/${{ github.repository }}/blob/HEAD/RELEASE.md) and [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/HEAD/CHANGELOG.md).
           files: dist-artifacts/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

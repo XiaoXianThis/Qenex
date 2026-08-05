@@ -1,11 +1,5 @@
-# Qenex
-
-**统一的 AI 编码 Agent 工作台** — 一套界面，连接多种 ACP Agent，随处可用。
-
-当前版本：**v0.3.0**（Bun Bridge + AI SDK UIMessage）。升级说明见 [`CHANGELOG.md`](./CHANGELOG.md)；重构记录见 [`重构指导.md`](./重构指导.md)。
-
 > **默认**：`bun run dev` 启动 **Bun Bridge**（`apps/bridge`，`:8000`）+ Web（`:3000`）。  
-> Rust AG-UI Bridge 已在本版本删除。VS Code / JetBrains 可用包延后至 **0.3.x**。
+> Rust AG-UI Bridge 已删除。四端（Web / Desktop / VS Code / JetBrains）均走 Bun Bridge。
 
 用现代化对话 UI 驱动任意 [ACP](https://agentclientprotocol.com/) 兼容编码 Agent（OpenCode、Claude、Codex、Cursor 等）。Web 与 Desktop 共享同一套 UI：多会话、可编辑布局与主题、工具审批、历史恢复。
 
@@ -17,15 +11,16 @@
 - **主题与样式** — 亮/暗；IDE「跟随宿主」、Web/Desktop「跟随系统」
 - **对话体验** — 工具调用视图、Shiki、Mermaid、`@` 文件引用、附件
 - **工具审批** — Ask/Auto；短标签（允许 / 不再询问 / 拒绝）
-- **双端门禁** — Web + Desktop（Tauri spawn Bun Bridge）
+- **四端** — Web + Desktop + VS Code + JetBrains（本机 Bun）
 
 ## 平台
 
 | 平台 | 说明 | 状态 |
 |------|------|------|
-| Web | Vite + proxy → Bun Bridge | ✅ v0.3.0 |
-| Desktop | Tauri + 系统 Bun Bridge | ✅ v0.3.0 |
-| VS Code / JetBrains | 宿主迁 Bun | ⏳ 0.3.x（见 `apps/bridge/M7.md`） |
+| Web | Vite + proxy → Bun Bridge | ✅ |
+| Desktop | Tauri + 系统 Bun Bridge | ✅ |
+| VS Code | Extension Host spawn Bun | ✅ M9 |
+| JetBrains | JCEF + spawn Bun | ✅ M9 |
 
 ## 快速开始
 
@@ -48,7 +43,8 @@ bun run dev:desktop
 
 ```bash
 bun run test:m8
-bun run verify:desktop
+bun run test:m9
+bun run verify:all
 ```
 
 ### 从 v0.2.x 升级（breaking）
@@ -79,20 +75,24 @@ ACP Agent                opencode · claude · codex …
 | `packages/platform` | 宿主抽象（QenexHost） |
 | `packages/core` | Bridge client、stores、布局/主题 |
 | `packages/ui` | 共享 React UI |
-| `apps/{web,desktop}` | v0.3.0 门禁端 |
-| `apps/{vscode,jetbrains}` | 0.3.x 迁 Bun |
+| `apps/{web,desktop,vscode,jetbrains}` | 各端壳 |
 
 ## Release
 
-打 `v*` tag 触发多平台 Release（Artifacts）。v0.3.0 产物以 **server（Bun）+ Desktop** 为主；IDE 包跳过直至 0.3.x。
+打 `v*` tag 触发 GitHub Actions，构建并上传到 **GitHub Release**（server / VS Code / JetBrains / Desktop）。完整说明见 [`RELEASE.md`](./RELEASE.md)。
 
 ```bash
-# 就绪后由维护者执行（本里程碑文档约定，不自动打 tag）
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
-本地：`bun run ci:release -- --platform darwin-arm64`。
+本地：
+
+```bash
+bun run ci:release -- --platform darwin-arm64 --version 0.3.1
+# 或仅共享产物：
+bun run ci:release -- --platform linux-x64 --version 0.3.1 --products server,vscode,jetbrains
+```
 
 ## 常用命令
 
@@ -100,9 +100,11 @@ git push origin v0.3.0
 |------|------|
 | `bun run dev` | Bun Bridge + Web |
 | `bun run dev:desktop` | Tauri Desktop |
-| `bun run build` / `start` | 打包/启动 Bun Bridge 服务端包 |
-| `bun run test:m8` | v0.3 全量回归 + 退役守卫 |
-| `bun run verify:desktop` | Desktop 接线验收 |
+| `bun run build` / `start` | 打包/启动 server 包（Web+Bridge） |
+| `bun run package:vscode` / `package:jetbrains` / `package:desktop` | 各端安装包 |
+| `bun run ci:release` | 本地/CI 发布打包 → `dist-artifacts/` |
+| `bun run test:m8` / `test:m9` | 里程碑验收 |
+| `bun run verify:all` | 三端接线验收 |
 
 ## 许可证
 
