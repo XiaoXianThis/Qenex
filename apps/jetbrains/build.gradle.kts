@@ -39,7 +39,7 @@ intellijPlatform {
         name = providers.gradleProperty("pluginName")
         version = providers.gradleProperty("pluginVersion")
         ideaVersion {
-            // Compile against 2024.2 (242); allow install on current IDEs (261 = 2026.1).
+            // Compile against platformVersion; sinceBuild 253+ for jcef module (needed on 2026.2).
             sinceBuild = providers.gradleProperty("pluginSinceBuild")
             untilBuild = providers.gradleProperty("pluginUntilBuild")
         }

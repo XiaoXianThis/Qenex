@@ -7,6 +7,8 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <!-- Required from 2026.2: JCEF moved out of the core platform into Web Browser (JCEF). -->
+    <depends>com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <applicationService serviceImplementation="com.qenex.BridgeProcessManager"/>

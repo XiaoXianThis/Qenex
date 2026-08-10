@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-10 - v0.3.2 JetBrains JCEF on 2026.2
+
+### Fixed
+
+- JetBrains：声明 `com.intellij.modules.jcef` 依赖，修复 WebStorm / IDEA **2026.2** 工具窗口空白（`NoClassDefFoundError: JBCefBrowser`）
+- JetBrains `since-build` 调整为 **253**（JCEF 模块别名可用的最低版本）
+
+---
+
 ## 2026-08-05 - v0.3.0 Bun Bridge + AI SDK（breaking）
 
 ### Breaking Changes
