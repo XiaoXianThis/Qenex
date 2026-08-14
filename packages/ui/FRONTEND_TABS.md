@@ -96,6 +96,6 @@
 ## ✅ 测试清单
 
 - [x] 创建 / 切换 / 关闭 / 恢复 tabs
-- [x] M1：流式对话 + 停止（见 `apps/bridge/M1.md`、`bun run test:m1`）
+- [x] M1：流式对话 + 停止（见 [`M1.md`](../../docs/archive/bridge-milestones/M1.md)、`bun run test:m1`）
 - [ ] 恢复会话后查看历史消息（M4）
 - [ ] 富 UI 不回归（M3）

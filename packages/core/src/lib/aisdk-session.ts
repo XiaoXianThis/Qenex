@@ -3,12 +3,22 @@
  * Host-aware REST against `/api/sessions` and `/health`.
  */
 import type { QenexHost } from "@qenex/platform";
-import { getBridgeHost } from "./bridge-client.ts";
+import {
+  agentNameFromUnknown,
+  authMethodsFromUnknown,
+  errorCodeOf,
+  getBridgeHost,
+  isAuthRequiredCode,
+  looksLikeAuthMessage,
+  stringifyErrorMessage,
+  type AuthMethodInfo,
+  type AuthRequiredPayload,
+} from "./bridge-client.ts";
 import {
   EMPTY_SESSION_CONFIG,
   parseSessionOptions,
+  type AuthChallenge,
   type SessionConfig,
-  type SessionOption,
 } from "./session-config.ts";
 
 /** Minimal UIMessage shape for Bridge history (avoid coupling core to `ai` package). */
@@ -49,6 +59,7 @@ export type AisdkSessionConfigResponse = {
   currentThoughtLevelId?: string | null;
   fastConfigId?: string | null;
   currentFastId?: string | null;
+  nativeResume?: boolean;
 };
 
 /** Bun Bridge chat / permission mode (Phase 3 / M2). */
@@ -89,10 +100,30 @@ export function approvalModeFromAutoAllow(autoAllow: boolean): ApprovalMode {
 export type AisdkBridgeErrorBody = {
   error?: {
     code?: string;
-    message?: string;
+    message?: unknown;
     details?: unknown;
   };
 };
+
+function detailsOf(err: unknown): unknown {
+  if (!err || typeof err !== "object") return undefined;
+  const rec = err as { details?: unknown; body?: { details?: unknown } };
+  return rec.details ?? rec.body?.details;
+}
+
+function withDetail(prefix: string, detail: string, fallback: string): string {
+  const text = stringifyErrorMessage(detail);
+  if (!text) return fallback;
+  return `${prefix}${text}`;
+}
+
+function authAgentName(err: unknown, fallback = "Agent"): string {
+  return (
+    agentNameFromUnknown(detailsOf(err)) ??
+    agentNameFromUnknown(err) ??
+    fallback
+  );
+}
 
 export class BridgeClientError extends Error {
   readonly code: string;
@@ -105,24 +136,63 @@ export class BridgeClientError extends Error {
     status = 500,
     details?: unknown,
   ) {
-    super(message);
+    super(stringifyErrorMessage(message));
     this.name = "BridgeClientError";
     this.code = code;
     this.status = status;
     this.details = details;
   }
+
+  asAuthRequired(): AuthRequiredPayload | null {
+    const detail = stringifyErrorMessage(this.message);
+    if (!isAuthRequiredCode(this.code) && !looksLikeAuthMessage(detail)) {
+      return null;
+    }
+    return {
+      code: isAuthRequiredCode(this.code) ? this.code : "auth_required",
+      detail: detail || this.message,
+      methods: authMethodsFromUnknown(this.details),
+      agentName: agentNameFromUnknown(this.details),
+    };
+  }
+}
+
+export function formatAuthRequiredMessage(
+  err: unknown,
+  fallbackAgentName = "Agent",
+): string {
+  const code = errorCodeOf(err);
+  if (code === "opencode_auth_required") {
+    return "OpenCode 需要登录。请在终端运行 `opencode auth login`（或对应提供商的登录命令）后再试。";
+  }
+  const name = authAgentName(err, fallbackAgentName);
+  return `${name} 需要登录。请完成该 Agent 的登录后重试。`;
+}
+
+export function authChallengeFromError(
+  err: unknown,
+  fallbackAgentName?: string | null,
+): AuthChallenge {
+  const fromDetails = authMethodsFromUnknown(detailsOf(err));
+  const methods: AuthMethodInfo[] =
+    fromDetails.length > 0 ? fromDetails : authMethodsFromUnknown(err);
+  const agentName =
+    fallbackAgentName?.trim() ||
+    agentNameFromUnknown(detailsOf(err)) ||
+    agentNameFromUnknown(err) ||
+    null;
+  return {
+    detail: formatAuthRequiredMessage(err, agentName ?? "Agent"),
+    methods,
+    agentName,
+  };
 }
 
 export function formatBridgeError(
   err: unknown,
   fallback = "操作失败，请重试。",
 ): string {
-  const rawMessage =
-    err instanceof Error
-      ? err.message
-      : typeof err === "string"
-        ? err
-        : "";
+  const rawMessage = stringifyErrorMessage(err);
 
   // Prefer actionable mapping even when AI SDK wraps the upstream text.
   if (
@@ -133,27 +203,49 @@ export function formatBridgeError(
     return "模型服务余额不足（Insufficient Balance）。请在 OpenCode 对应提供商账户充值，或切换已配置且有额度的模型后重试。";
   }
 
-  if (err instanceof BridgeClientError) {
-    switch (err.code) {
+  const code =
+    err instanceof BridgeClientError ? err.code : errorCodeOf(err);
+  const message =
+    err instanceof BridgeClientError
+      ? stringifyErrorMessage(err.message) || rawMessage
+      : rawMessage;
+
+  if (isAuthRequiredCode(code) || looksLikeAuthMessage(message)) {
+    if (
+      /需要登录/.test(message) &&
+      code !== "auth_required" &&
+      code !== "opencode_auth_required"
+    ) {
+      return message;
+    }
+    return formatAuthRequiredMessage(err);
+  }
+
+  if (err instanceof BridgeClientError || code) {
+    switch (code) {
       case "opencode_not_found":
         return "未找到 OpenCode。请先安装 OpenCode，并确保终端里能运行 `opencode --version`（或设置环境变量 QENEX_OPENCODE_BIN）。";
-      case "opencode_auth_required":
-        return "OpenCode 需要登录。请在终端运行 `opencode auth login`（或对应提供商的登录命令）后再试。";
-      case "auth_required":
-        return `Agent 需要登录：${err.message}`;
       case "agent_unavailable":
-        return `Agent 不可用：${err.message}`;
+        return withDetail("Agent 不可用：", message, "Agent 不可用。");
       case "agent_spawn_failed":
-        return `启动 Agent ACP 进程失败：${err.message}`;
+        return withDetail(
+          "启动 Agent ACP 进程失败：",
+          message,
+          "启动 Agent ACP 进程失败。",
+        );
       case "opencode_spawn_failed":
         return "启动 OpenCode ACP 进程失败。请确认 `opencode --version` 可运行，检查权限后重试。";
-      case "session_init_failed":
-        return `创建会话失败：${err.message}。可检查 Agent 是否已安装并已登录，然后重试。`;
+      case "session_init_failed": {
+        const detail = stringifyErrorMessage(message);
+        return detail
+          ? `创建会话失败：${detail}。可检查 Agent 是否已安装并已登录，然后重试。`
+          : "创建会话失败。可检查 Agent 是否已安装并已登录，然后重试。";
+      }
       case "invalid_cwd":
       case "missing_cwd": {
         const hint =
-          err.message && !/^missing_cwd|invalid_cwd$/i.test(err.message)
-            ? `\n（${err.message}）`
+          message && !/^missing_cwd|invalid_cwd$/i.test(message)
+            ? `\n（${message}）`
             : "";
         return `工作区路径无效。请填写本机上存在的项目目录。${hint}`;
       }
@@ -162,21 +254,27 @@ export function formatBridgeError(
       case "permission_bridge_unavailable":
         return "当前 Bridge 无法挂接审批回调。请确认依赖版本后重启 Bridge。";
       case "set_mode_failed":
-        return `切换 Agent 模式失败：${err.message}`;
+        return withDetail("切换 Agent 模式失败：", message, "切换 Agent 模式失败。");
       case "set_model_failed":
-        return `切换模型失败：${err.message}`;
+        return withDetail("切换模型失败：", message, "切换模型失败。");
       case "config_option_unsupported":
-        return `当前 Agent 不支持这项配置：${err.message}`;
+        return withDetail(
+          "当前 Agent 不支持这项配置：",
+          message,
+          "当前 Agent 不支持这项配置。",
+        );
       case "set_config_option_failed":
-        return `切换配置失败：${err.message}`;
+        return withDetail("切换配置失败：", message, "切换配置失败。");
       default:
-        return err.message || fallback;
+        return message || fallback;
     }
   }
   if (rawMessage && !/^an error occurred\.?$/i.test(rawMessage.trim())) {
     return rawMessage;
   }
-  if (typeof err === "string" && err) return err;
+  if (typeof err === "string" && err) {
+    return stringifyErrorMessage(err) || fallback;
+  }
   return fallback;
 }
 
@@ -185,6 +283,11 @@ async function bridgeUrl(host: QenexHost, path: string): Promise<string> {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** Default Bridge REST bound. Session create is longer: ACP authenticate can open a browser. */
+const BRIDGE_FETCH_TIMEOUT_MS = 60_000;
+/** Must cover session/new + in-process ACP authenticate (default 5 min) + retry. */
+export const SESSION_CREATE_TIMEOUT_MS = 8 * 60_000;
+
 function hostFetch(
   host: QenexHost,
   url: string,
@@ -192,7 +295,7 @@ function hostFetch(
 ): Promise<Response> {
   return host.fetch(url, {
     ...init,
-    signal: init.signal ?? AbortSignal.timeout(60_000),
+    signal: init.signal ?? AbortSignal.timeout(BRIDGE_FETCH_TIMEOUT_MS),
   });
 }
 
@@ -214,12 +317,14 @@ function throwBridgeError(
   fallback: string,
 ): never {
   const body = json as AisdkBridgeErrorBody;
-  throw new BridgeClientError(
-    body.error?.code ?? "internal_error",
-    body.error?.message ?? fallback,
-    res.status,
-    body.error?.details,
-  );
+  const nested = body.error;
+  const code =
+    (typeof nested?.code === "string" && nested.code) || "internal_error";
+  const message =
+    stringifyErrorMessage(nested?.message) ||
+    stringifyErrorMessage(nested?.details) ||
+    fallback;
+  throw new BridgeClientError(code, message, res.status, nested?.details);
 }
 
 export async function createAisdkSession(
@@ -239,6 +344,7 @@ export async function createAisdkSession(
           ? options.agentCommand
           : undefined,
     }),
+    signal: AbortSignal.timeout(SESSION_CREATE_TIMEOUT_MS),
   });
   const json = await readBridgeJson(res);
   if (!res.ok) {
@@ -341,6 +447,9 @@ export function toAisdkSessionConfig(
     loading: false,
     error: null,
     authChallenge: null,
+    ...(typeof payload.nativeResume === "boolean"
+      ? { nativeResume: payload.nativeResume }
+      : {}),
   };
 }
 
@@ -424,87 +533,65 @@ export async function setAisdkSessionConfigOption(
   return toAisdkSessionConfig(json as AisdkSessionConfigResponse);
 }
 
-export type AisdkModelConfigProbe = {
-  modelId: string;
-  thoughtLevels: SessionOption[];
-  thoughtLevelConfigId: string | null;
-  currentThoughtLevelId: string | null;
-  fastOptions: SessionOption[];
-  fastConfigId: string | null;
-  currentFastId: string | null;
-};
+/** GET /api/sessions/:id/models/:modelId/config — SessionConfigDto & { modelId }. */
+export type AisdkModelConfig = SessionConfig & { modelId: string };
 
-function toAisdkModelConfigProbe(
+/** @deprecated Use AisdkModelConfig / getAisdkSessionModelConfig. */
+export type AisdkModelConfigProbe = AisdkModelConfig;
+
+function toAisdkModelConfig(
   payload: AisdkSessionConfigResponse & { modelId?: string },
   fallbackModelId: string,
-): AisdkModelConfigProbe {
-  const config = toAisdkSessionConfig(payload);
+): AisdkModelConfig {
   return {
+    ...toAisdkSessionConfig(payload),
     modelId: payload.modelId ?? fallbackModelId,
-    thoughtLevels: config.thoughtLevels,
-    thoughtLevelConfigId: config.thoughtLevelConfigId,
-    currentThoughtLevelId: config.currentThoughtLevelId,
-    fastOptions: config.fastOptions,
-    fastConfigId: config.fastConfigId,
-    currentFastId: config.currentFastId,
   };
 }
 
-export async function probeAisdkSessionModelConfig(
+/** Prefetch thought/fast (and the rest of the snapshot) for a model without setModel. */
+export async function getAisdkSessionModelConfig(
   sessionId: string,
   modelId: string,
   host: QenexHost = getBridgeHost(),
-): Promise<AisdkModelConfigProbe> {
+): Promise<AisdkModelConfig> {
   const url = await bridgeUrl(
     host,
-    `/api/sessions/${encodeURIComponent(sessionId)}/probe-model-config`,
+    `/api/sessions/${encodeURIComponent(sessionId)}/models/${encodeURIComponent(modelId)}/config`,
   );
-  const res = await hostFetch(host, url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ modelId }),
-  });
+  const res = await hostFetch(host, url);
   const json = await readBridgeJson(res);
   if (!res.ok) {
-    throwBridgeError(res, json, `probeSessionModelConfig failed (${res.status})`);
+    throwBridgeError(res, json, `getSessionModelConfig failed (${res.status})`);
   }
-  return toAisdkModelConfigProbe(
+  return toAisdkModelConfig(
     json as AisdkSessionConfigResponse & { modelId?: string },
     modelId,
   );
 }
 
+/** @deprecated Use getAisdkSessionModelConfig (GET .../models/:modelId/config). */
+export async function probeAisdkSessionModelConfig(
+  sessionId: string,
+  modelId: string,
+  host: QenexHost = getBridgeHost(),
+): Promise<AisdkModelConfigProbe> {
+  return getAisdkSessionModelConfig(sessionId, modelId, host);
+}
+
+/**
+ * @deprecated UI should call getAisdkSessionModelConfig per model (Bridge serializes).
+ */
 export async function probeAisdkSessionModelsConfig(
   sessionId: string,
   modelIds: string[],
   host: QenexHost = getBridgeHost(),
 ): Promise<AisdkModelConfigProbe[]> {
-  if (modelIds.length === 0) return [];
-  if (modelIds.length === 1) {
-    return [await probeAisdkSessionModelConfig(sessionId, modelIds[0]!, host)];
+  const results: AisdkModelConfigProbe[] = [];
+  for (const id of modelIds) {
+    results.push(await getAisdkSessionModelConfig(sessionId, id, host));
   }
-  const url = await bridgeUrl(
-    host,
-    `/api/sessions/${encodeURIComponent(sessionId)}/probe-models-config`,
-  );
-  const res = await hostFetch(host, url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ modelIds }),
-  });
-  const json = await readBridgeJson(res);
-  if (!res.ok) {
-    throwBridgeError(res, json, `probeSessionModelsConfig failed (${res.status})`);
-  }
-  const probes = Array.isArray(
-    (json as { probes?: unknown[] }).probes,
-  )
-    ? ((json as { probes: Array<AisdkSessionConfigResponse & { modelId?: string }> })
-        .probes)
-    : [];
-  return probes.map((probe, index) =>
-    toAisdkModelConfigProbe(probe, modelIds[index] ?? ""),
-  );
+  return results;
 }
 
 export async function listPendingApprovals(

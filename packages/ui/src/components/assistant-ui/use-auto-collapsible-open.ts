@@ -4,6 +4,34 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useScrollLock } from "@assistant-ui/react";
 
 const DEFAULT_ANIMATION_MS = 200;
+const FOLLOW_LATEST_THRESHOLD_PX = 96;
+
+function threadViewport(): HTMLElement | null {
+  return document.querySelector('[data-slot="aui_thread-viewport"]');
+}
+
+function isThreadNearBottom(thresholdPx = FOLLOW_LATEST_THRESHOLD_PX): boolean {
+  const el = threadViewport();
+  if (!el) return true;
+  return el.scrollHeight - el.clientHeight - el.scrollTop <= thresholdPx;
+}
+
+function stickThreadToLatest() {
+  const el = threadViewport();
+  if (!el) return;
+  const top = Math.max(0, el.scrollHeight - el.clientHeight);
+  el.scrollTo({ top, behavior: "instant" as ScrollBehavior });
+}
+
+function followLatestOrLock(lockScroll: () => void) {
+  if (isThreadNearBottom()) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(stickThreadToLatest);
+    });
+    return;
+  }
+  lockScroll();
+}
 
 type UseAutoCollapsibleOpenOptions = {
   /**
@@ -50,12 +78,12 @@ export function useAutoCollapsibleOpen({
   useLayoutEffect(() => {
     if (prevAutoOpenRef.current === autoOpen) return;
     prevAutoOpenRef.current = autoOpen;
-    if (!isControlled && userOpen === null) lockScroll();
+    if (!isControlled && userOpen === null) followLatestOrLock(lockScroll);
   }, [autoOpen, isControlled, userOpen, lockScroll]);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
-      lockScroll();
+      followLatestOrLock(lockScroll);
       if (!isControlled) {
         if (previewClickExpands) {
           // 预览 → 完全展开

@@ -1,7 +1,7 @@
 # Qenex 路线图
 
 > **v0.3.0（当前）**：fusion UI − Git 检查点；协议/后端 = **AI SDK + Bun + UIMessage**。  
-> 详见 [`重构指导.md`](./重构指导.md) 与 [`CHANGELOG.md`](./CHANGELOG.md)。
+> 详见 [`重构指导.md`](./重构指导.md)、[`docs/agent-compat.md`](./docs/agent-compat.md) 与 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 ## v0.3.0 已交付
 
@@ -16,7 +16,7 @@
 
 ## 0.3.x
 
-- [x] **M9 IDE**：JetBrains → VS Code spawn Bun Bridge（本机 Bun；见 [`重构指导.md`](./重构指导.md) §M9 / [`apps/bridge/M9.md`](./apps/bridge/M9.md)）
+- [x] **M9 IDE**：JetBrains → VS Code spawn Bun Bridge（本机 Bun；见 [`重构指导.md`](./重构指导.md) §M9 / [`M9.md`](./docs/archive/bridge-milestones/M9.md)）
 - [ ] 嵌入 Bun / 离线安装包自洽（另立项）；打包固化 bridge `node_modules` / 发布物打磨
 ## 明确不做（v0.3）
 

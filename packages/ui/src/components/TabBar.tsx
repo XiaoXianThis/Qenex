@@ -279,7 +279,7 @@ export function TabBar({ position = "top" }: TabBarProps) {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              className={cn("rounded-full p-0.5", tabBarHoverBg)}
+              className={cn("cursor-pointer rounded-full p-0.5", tabBarHoverBg)}
               aria-label="关闭"
             >
               <X className="h-3 w-3" />

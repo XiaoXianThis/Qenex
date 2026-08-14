@@ -9,19 +9,21 @@ import {
   type ReactNode,
 } from "react";
 import {
+  authChallengeFromError,
   formatBridgeError,
   getAisdkSessionConfig,
+  getAisdkSessionModelConfig,
   isAisdkSessionId,
-  probeAisdkSessionModelConfig,
-  probeAisdkSessionModelsConfig,
   setAisdkSessionMode,
   setAisdkSessionModel,
   setAisdkSessionConfigOption,
-  type AisdkModelConfigProbe,
+  type AisdkModelConfig,
 } from "../lib/aisdk-session.ts";
-import { isCursorAgentId } from "../config/agents.ts";
+import { isAuthRequiredError } from "../lib/bridge-client.ts";
+import { getAgentPreset } from "../store/agents-store.ts";
 import {
   EMPTY_SESSION_CONFIG,
+  hasModelConfigOptions,
   type SessionConfig,
   type SessionOption,
 } from "../lib/session-config.ts";
@@ -75,16 +77,11 @@ function readFastPreference(
 type SessionConfigContextValue = {
   config: SessionConfig;
   agentId: string;
-  /**
-   * Cursor-only: per-model options need silent set_model probes.
-   * Other agents use session-level ACP configOptions directly.
-   */
-  usesPerModelConfigProbe: boolean;
-  /** Per-model thought level options (Cursor probe cache / live session). */
+  /** Per-model thought level options (GET cache / live session snapshot). */
   thoughtLevelsByModel: Record<string, SessionOption[]>;
-  /** Per-model Fast options (Cursor probe cache / live session). */
+  /** Per-model Fast options (GET cache / live session snapshot). */
   fastOptionsByModel: Record<string, SessionOption[]>;
-  /** Cursor-only: ensure thought/fast options for a model (probes when needed). */
+  /** Ensure thought/fast options for a model via GET .../models/:id/config. */
   ensureModelConfigForModel: (modelId: string) => Promise<ModelConfigSnapshot>;
   changeMode: (modeId: string) => Promise<void>;
   changeModel: (modelId: string) => Promise<void>;
@@ -122,12 +119,6 @@ export function SessionConfigProvider({
     ...EMPTY_SESSION_CONFIG,
     loading: true,
   });
-  const usesPerModelConfigProbe =
-    isCursorAgentId(agentId) ||
-    (config.models.length > 1 &&
-      (config.thoughtLevels.length > 0 || config.fastOptions.length > 0));
-  const usesPerModelConfigProbeRef = useRef(usesPerModelConfigProbe);
-  usesPerModelConfigProbeRef.current = usesPerModelConfigProbe;
   const [thoughtLevelsByModel, setThoughtLevelsByModel] = useState<
     Record<string, SessionOption[]>
   >(() => {
@@ -135,7 +126,9 @@ export function SessionConfigProvider({
     for (const [modelId, entry] of Object.entries(
       modelConfigCacheActions.getAgent(agentId),
     )) {
-      seeded[modelId] = entry.thoughtLevels;
+      if (entry.thoughtLevels.length > 0) {
+        seeded[modelId] = entry.thoughtLevels;
+      }
     }
     return seeded;
   });
@@ -146,7 +139,9 @@ export function SessionConfigProvider({
     for (const [modelId, entry] of Object.entries(
       modelConfigCacheActions.getAgent(agentId),
     )) {
-      seeded[modelId] = entry.fastOptions;
+      if (entry.fastOptions.length > 0) {
+        seeded[modelId] = entry.fastOptions;
+      }
     }
     return seeded;
   });
@@ -154,9 +149,10 @@ export function SessionConfigProvider({
   thoughtLevelsByModelRef.current = thoughtLevelsByModel;
   const fastOptionsByModelRef = useRef(fastOptionsByModel);
   fastOptionsByModelRef.current = fastOptionsByModel;
-  const probeInFlightRef = useRef<
+  const fetchInFlightRef = useRef<
     Map<string, Promise<ModelConfigSnapshot>>
   >(new Map());
+  const fetchQueueRef = useRef(Promise.resolve());
   const agentIdRef = useRef(agentId);
   agentIdRef.current = agentId;
 
@@ -198,46 +194,45 @@ export function SessionConfigProvider({
       thoughtLevels: SessionOption[],
       fastOptions: SessionOption[],
     ) => {
-      if (!usesPerModelConfigProbeRef.current) {
-        return;
-      }
       cacheThoughtLevels(modelId, thoughtLevels);
       cacheFastOptions(modelId, fastOptions);
-      modelConfigCacheActions.set(
-        agentIdRef.current,
-        modelId,
-        thoughtLevels,
-        fastOptions,
-      );
+      if (thoughtLevels.length > 0 || fastOptions.length > 0) {
+        modelConfigCacheActions.set(
+          agentIdRef.current,
+          modelId,
+          thoughtLevels,
+          fastOptions,
+        );
+      }
     },
     [cacheThoughtLevels, cacheFastOptions],
   );
 
-  const applyProbePrefs = useCallback(
-    (probe: AisdkModelConfigProbe) => {
-      const modelId = probe.modelId;
+  const applyModelConfigPrefs = useCallback(
+    (snapshot: AisdkModelConfig) => {
+      const modelId = snapshot.modelId;
       if (
-        probe.currentThoughtLevelId &&
-        probe.thoughtLevels.some(
-          (level) => level.id === probe.currentThoughtLevelId,
+        snapshot.currentThoughtLevelId &&
+        snapshot.thoughtLevels.some(
+          (level) => level.id === snapshot.currentThoughtLevelId,
         ) &&
         !modelThoughtPrefsActions.get(agentId, modelId)
       ) {
         modelThoughtPrefsActions.set(
           agentId,
           modelId,
-          probe.currentThoughtLevelId,
+          snapshot.currentThoughtLevelId,
         );
       }
       if (
-        probe.currentFastId &&
-        probe.fastOptions.some((option) => option.id === probe.currentFastId) &&
+        snapshot.currentFastId &&
+        snapshot.fastOptions.some((option) => option.id === snapshot.currentFastId) &&
         !modelThoughtPrefsActions.getFast(agentId, modelId)
       ) {
         modelThoughtPrefsActions.setFast(
           agentId,
           modelId,
-          probe.currentFastId,
+          snapshot.currentFastId,
         );
       }
     },
@@ -255,14 +250,17 @@ export function SessionConfigProvider({
         modelId,
       );
       if (hasThought && hasFast) {
-        return {
+        const snapshot = {
           thoughtLevels: thoughtLevelsByModelRef.current[modelId] ?? [],
           fastOptions: fastOptionsByModelRef.current[modelId] ?? [],
         };
+        if (hasModelConfigOptions(snapshot)) {
+          return snapshot;
+        }
       }
 
       const persisted = modelConfigCacheActions.get(agentId, modelId);
-      if (persisted) {
+      if (persisted && hasModelConfigOptions(persisted)) {
         cacheModelConfig(
           modelId,
           persisted.thoughtLevels,
@@ -341,7 +339,7 @@ export function SessionConfigProvider({
         }
       }
       if (signal?.aborted) return "error";
-      if (next.currentModelId) {
+      if (next.currentModelId && hasModelConfigOptions(next)) {
         cacheModelConfig(
           next.currentModelId,
           next.thoughtLevels,
@@ -352,6 +350,20 @@ export function SessionConfigProvider({
       return "ok";
     } catch (error) {
       if (signal?.aborted) return "error";
+      if (isAuthRequiredError(error)) {
+        const authChallenge = authChallengeFromError(
+          error,
+          getAgentPreset(agentId).name,
+        );
+        setConfig({
+          ...EMPTY_SESSION_CONFIG,
+          loading: false,
+          ready: false,
+          error: authChallenge.detail,
+          authChallenge,
+        });
+        return "auth";
+      }
       setConfig({
         ...EMPTY_SESSION_CONFIG,
         loading: false,
@@ -428,7 +440,12 @@ export function SessionConfigProvider({
 
   // Keep the live session model cache in sync when thought/fast options change.
   useEffect(() => {
-    if (!config.ready || config.loading || !config.currentModelId) {
+    if (
+      !config.ready ||
+      config.loading ||
+      !config.currentModelId ||
+      !hasModelConfigOptions(config)
+    ) {
       return;
     }
     cacheModelConfig(
@@ -451,7 +468,7 @@ export function SessionConfigProvider({
     }
     try {
       const next = await getAisdkSessionConfig(threadId);
-      if (next.currentModelId) {
+      if (next.currentModelId && hasModelConfigOptions(next)) {
         cacheModelConfig(
           next.currentModelId,
           next.thoughtLevels,
@@ -468,43 +485,31 @@ export function SessionConfigProvider({
     }
   }, [threadId, cacheModelConfig]);
 
-  const runBatchProbe = useCallback(
-    async (modelIds: string[]) => {
-      if (!usesPerModelConfigProbeRef.current || modelIds.length === 0) {
-        return;
-      }
-      const probes =
-        modelIds.length === 1
-          ? [await probeAisdkSessionModelConfig(threadId, modelIds[0]!)]
-          : await probeAisdkSessionModelsConfig(threadId, modelIds);
-      for (const probe of probes) {
-        cacheModelConfig(
-          probe.modelId,
-          probe.thoughtLevels,
-          probe.fastOptions,
-        );
-        applyProbePrefs(probe);
-      }
+  const fetchModelConfig = useCallback(
+    async (modelId: string): Promise<AisdkModelConfig> => {
+      const run = fetchQueueRef.current.then(() =>
+        getAisdkSessionModelConfig(threadId, modelId),
+      );
+      fetchQueueRef.current = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
     },
-    [threadId, cacheModelConfig, applyProbePrefs],
+    [threadId],
   );
 
   const ensureModelConfigForModel = useCallback(
     async (modelId: string): Promise<ModelConfigSnapshot> => {
-      // Non-Cursor agents: standard ACP session config is authoritative.
-      if (!usesPerModelConfigProbe) {
-        return {
-          thoughtLevels: config.thoughtLevels,
-          fastOptions: config.fastOptions,
-        };
-      }
-
       const cached = readCachedSnapshot(modelId);
       if (cached) {
         return cached;
       }
 
-      if (config.currentModelId === modelId) {
+      if (
+        config.currentModelId === modelId &&
+        hasModelConfigOptions(config)
+      ) {
         cacheModelConfig(modelId, config.thoughtLevels, config.fastOptions);
         return {
           thoughtLevels: config.thoughtLevels,
@@ -512,36 +517,59 @@ export function SessionConfigProvider({
         };
       }
 
-      const inflight = probeInFlightRef.current.get(modelId);
+      const inflight = fetchInFlightRef.current.get(modelId);
       if (inflight) {
         return inflight;
       }
 
-      const probePromise = (async () => {
+      const fetchPromise = (async () => {
         try {
-          await runBatchProbe([modelId]);
-          return (
-            readCachedSnapshot(modelId) ?? {
-              thoughtLevels: [],
-              fastOptions: [],
-            }
+          const snapshot = await fetchModelConfig(modelId);
+          cacheModelConfig(
+            snapshot.modelId,
+            snapshot.thoughtLevels,
+            snapshot.fastOptions,
           );
+          applyModelConfigPrefs(snapshot);
+          setConfig((current) => {
+            if (
+              current.currentModelId !== modelId &&
+              current.currentModelId !== snapshot.modelId
+            ) {
+              return current;
+            }
+            return {
+              ...current,
+              thoughtLevels: snapshot.thoughtLevels,
+              fastOptions: snapshot.fastOptions,
+              thoughtLevelConfigId:
+                snapshot.thoughtLevelConfigId ?? current.thoughtLevelConfigId,
+              currentThoughtLevelId:
+                snapshot.currentThoughtLevelId ?? current.currentThoughtLevelId,
+              fastConfigId: snapshot.fastConfigId ?? current.fastConfigId,
+              currentFastId: snapshot.currentFastId ?? current.currentFastId,
+            };
+          });
+          return {
+            thoughtLevels: snapshot.thoughtLevels,
+            fastOptions: snapshot.fastOptions,
+          };
         } finally {
-          probeInFlightRef.current.delete(modelId);
+          fetchInFlightRef.current.delete(modelId);
         }
       })();
 
-      probeInFlightRef.current.set(modelId, probePromise);
-      return probePromise;
+      fetchInFlightRef.current.set(modelId, fetchPromise);
+      return fetchPromise;
     },
     [
-      usesPerModelConfigProbe,
       cacheModelConfig,
       config.currentModelId,
       config.thoughtLevels,
       config.fastOptions,
       readCachedSnapshot,
-      runBatchProbe,
+      fetchModelConfig,
+      applyModelConfigPrefs,
     ],
   );
 
@@ -738,7 +766,6 @@ export function SessionConfigProvider({
     () => ({
       config,
       agentId,
-      usesPerModelConfigProbe,
       thoughtLevelsByModel,
       fastOptionsByModel,
       ensureModelConfigForModel,
@@ -752,7 +779,6 @@ export function SessionConfigProvider({
     [
       config,
       agentId,
-      usesPerModelConfigProbe,
       thoughtLevelsByModel,
       fastOptionsByModel,
       ensureModelConfigForModel,

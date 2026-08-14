@@ -218,7 +218,10 @@ function parseModelConfigProbe(
   };
 }
 
-/** Silently switch to a model, capture thought/fast options, then restore. */
+/**
+ * @deprecated Use GET `/api/sessions/:id/models/:modelId/config`
+ * (`getAisdkSessionModelConfig`). Not used by the UI main path.
+ */
 export async function probeModelConfig(
   taskId: string,
   modelId: string,
@@ -239,7 +242,8 @@ export async function probeModelConfig(
 }
 
 /**
- * Probe many models in one Bridge round-trip (N+1 set_model, single restore).
+ * @deprecated Sequential GET via `getAisdkSessionModelConfig` instead.
+ * Not used by the UI main path.
  */
 export async function probeModelsConfig(
   taskId: string,

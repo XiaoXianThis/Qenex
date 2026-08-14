@@ -1,0 +1,15 @@
+---
+description: 给某 Agent 加 quirk、适配或 compat 时，先读 docs/agent-compat.md；禁止把 if (agentId) 铺进 chat / UI / 审批
+globs: apps/bridge/src/agent/compat/**/*.ts,apps/bridge/src/agent/runtime/**/*.ts,apps/bridge/src/session-store.ts,apps/bridge/src/chat.ts,packages/core/src/context/SessionConfigContext.tsx,packages/ui/src/components/SessionConfigBar.tsx
+alwaysApply: false
+---
+
+# Agent Compat
+
+给某个 Agent 加 quirk / 适配 / compat 时，先读 [`docs/agent-compat.md`](../../docs/agent-compat.md)。
+
+- 运行时差异只写在 `apps/bridge/src/agent/compat/`。默认走 `generic-acp.ts`；仅当 Generic 不够再新开 `compat/foo.ts`。
+- 禁止在 `chat.ts`、审批、UI 里写 `if (agentId === …)` 影响运行时。
+- 安装域（`detect.ts` 的 `adapter` / `needAdapter`）与运行时 `AgentCompat` 勿混。
+- Provider 私有 `model.client` 只允许出现在 `agent/runtime/provider-compat.ts`。
+- 审批、cancel 不要进 session 操作队列。

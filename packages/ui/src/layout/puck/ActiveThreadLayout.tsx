@@ -219,7 +219,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
 
       <ThreadPrimitive.Viewport
         ref={viewportRef}
-        turnAnchor={layoutEditing ? "bottom" : "top"}
+        turnAnchor="bottom"
         autoScroll={!layoutEditing}
         data-slot="aui_thread-viewport"
         className={cn(

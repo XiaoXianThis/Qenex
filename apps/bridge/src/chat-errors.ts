@@ -2,6 +2,9 @@
  * Map chat-stream failures to actionable Chinese messages for the Web UI.
  * AI SDK defaults onError to "An error occurred." — we override that for local Bridge.
  */
+import { resolveAgentCompat } from "./agent/compat/registry.ts";
+import { errorText } from "./agent/compat/types.ts";
+
 const AGENT_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   "claude-acp": "Claude Agent",
@@ -17,21 +20,36 @@ function agentLabel(agentId: string): string {
   return (AGENT_LABELS[agentId] ?? agentId) || "Agent";
 }
 
+function messageForClassifiedCode(
+  code: string,
+  label: string,
+): string | null {
+  switch (code) {
+    case "opencode_auth_required":
+      return "OpenCode 需要登录或凭证已失效。请在终端运行 `opencode auth login`（或对应提供商登录）后重试。";
+    case "auth_required":
+      return `${label} 需要登录或凭证已失效。请完成该 Agent 的登录后重试。`;
+    case "quota_exceeded":
+      return `模型服务余额不足（Insufficient Balance）。请检查 ${label} 对应提供商的额度，或切换已配置且有额度的模型后重试。`;
+    case "model_unavailable":
+      return `当前模型不可用。请在 ${label} 中配置可用模型后重试。`;
+    default:
+      return null;
+  }
+}
+
 export function formatChatStreamError(
   error: unknown,
   agentId = "opencode",
 ): string {
-  const raw =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : error == null
-          ? ""
-          : String(error);
-  const message = raw.trim();
+  const message = errorText(error).trim();
   const lower = message.toLowerCase();
   const label = agentLabel(agentId);
+  const classified = resolveAgentCompat(agentId).classifyError?.(error, "chat");
+  const fromCompat = classified
+    ? messageForClassifiedCode(classified.code, label)
+    : null;
+  if (fromCompat) return fromCompat;
 
   if (
     /insufficient\s*balance|余额不足|quota\s*exceeded|rate\s*limit|billing|payment.?required|credit/i.test(
@@ -46,9 +64,7 @@ export function formatChatStreamError(
       lower,
     )
   ) {
-    return agentId === "opencode"
-      ? "OpenCode 需要登录或凭证已失效。请在终端运行 `opencode auth login`（或对应提供商登录）后重试。"
-      : `${label} 需要登录或凭证已失效。请完成该 Agent 的登录后重试。`;
+    return `${label} 需要登录或凭证已失效。请完成该 Agent 的登录后重试。`;
   }
 
   if (

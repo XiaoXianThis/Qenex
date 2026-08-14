@@ -151,51 +151,112 @@ export async function handleChat(
 
   const modelMessages = await convertToModelMessages(body.messages);
   const metadata = new MessageMetadataAccumulator();
+  const lease = await store.acquireSessionOperation(sessionId, "chat");
   const chatAbort = new AbortController();
-  const forwardRequestAbort = () => chatAbort.abort(req.signal.reason);
-  if (req.signal.aborted) forwardRequestAbort();
-  else req.signal.addEventListener("abort", forwardRequestAbort, { once: true });
+  const abortChat = (reason?: unknown) => {
+    if (!chatAbort.signal.aborted) chatAbort.abort(reason);
+  };
+  const forwardRequestAbort = () => {
+    abortChat(req.signal.reason);
+    store.interruptSessionOperation(sessionId);
+  };
+  const forwardLeaseAbort = () => abortChat(lease.signal.reason);
 
-  const result = streamText({
-    model: provider.languageModel(),
-    messages: modelMessages,
-    experimental_transform: smoothStream({
-      delayInMs: null,
-      chunking: stableStreamChunk,
-    }),
-    // Provider 0.3.x still publishes AI SDK 6 Tool types although its runtime
-    // stream is compatible with AI SDK 7 (verified in Phase 0).
-    tools: provider.tools as unknown as StreamTextTools,
-    includeRawChunks: true,
-    abortSignal: chatAbort.signal,
-  });
+  if (req.signal.aborted || lease.signal.aborted) {
+    lease.release();
+    throw new BridgeError("request_aborted", "Chat request was cancelled", 499);
+  }
+  req.signal.addEventListener("abort", forwardRequestAbort, { once: true });
+  lease.signal.addEventListener("abort", forwardLeaseAbort, { once: true });
 
-  const stream = withChatIdleTimeout(
-    result
-      .toUIMessageStream({
-        originalMessages: body.messages,
-        messageMetadata: ({ part }) => metadata.ingest(part),
-        // Local Bridge: surface real ACP/upstream errors (AI SDK default hides them).
-        onError: (error) => formatChatStreamError(error, entry.info.agent),
-        onEnd: ({ messages }) => {
-          try {
-            store.saveMessages(sessionId, messages);
-          } catch (err) {
-            console.error("[qenex-bridge] failed to persist messages:", err);
-          }
-        },
-      })
-      .pipeThrough(closeOpenUiPartsTransform()),
-    CHAT_IDLE_TIMEOUT_MS,
-    (error) => chatAbort.abort(error),
-    () => req.signal.removeEventListener("abort", forwardRequestAbort),
-  );
+  let released = false;
+  const releaseLease = () => {
+    if (released) return;
+    released = true;
+    req.signal.removeEventListener("abort", forwardRequestAbort);
+    lease.signal.removeEventListener("abort", forwardLeaseAbort);
+    lease.release();
+  };
 
-  return createUIMessageStreamResponse({
-    stream,
-    headers: {
-      "x-qenex-session-id": sessionId,
-      "x-qenex-agent": entry.info.agent,
+  try {
+    const result = streamText({
+      model: provider.languageModel(),
+      messages: modelMessages,
+      experimental_transform: smoothStream({
+        delayInMs: null,
+        chunking: stableStreamChunk,
+      }),
+      // Provider 0.3.x still publishes AI SDK 6 Tool types although its runtime
+      // stream is compatible with AI SDK 7 (verified in Phase 0).
+      tools: provider.tools as unknown as StreamTextTools,
+      includeRawChunks: true,
+      abortSignal: chatAbort.signal,
+    });
+
+    const stream = withChatIdleTimeout(
+      result
+        .toUIMessageStream({
+          originalMessages: body.messages,
+          messageMetadata: ({ part }) => metadata.ingest(part),
+          // Local Bridge: surface real ACP/upstream errors (AI SDK default hides them).
+          onError: (error) => formatChatStreamError(error, entry.info.agent),
+          onEnd: ({ messages }) => {
+            try {
+              store.saveMessages(sessionId, messages);
+            } catch (err) {
+              console.error("[qenex-bridge] failed to persist messages:", err);
+            }
+          },
+        })
+        .pipeThrough(closeOpenUiPartsTransform()),
+      CHAT_IDLE_TIMEOUT_MS,
+      (error) => abortChat(error),
+      releaseLease,
+    );
+
+    return createUIMessageStreamResponse({
+      stream: releaseWhenStreamSettles(stream, releaseLease) as typeof stream &
+        Parameters<typeof createUIMessageStreamResponse>[0]["stream"],
+      headers: {
+        "x-qenex-session-id": sessionId,
+        "x-qenex-agent": entry.info.agent,
+      },
+    });
+  } catch (err) {
+    releaseLease();
+    throw err;
+  }
+}
+
+function releaseWhenStreamSettles<T>(
+  source: ReadableStream<T>,
+  onSettle: () => void,
+): ReadableStream<T> {
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    onSettle();
+  };
+  const reader = source.getReader();
+  return new ReadableStream<T>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          settle();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        settle();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      settle();
+      return reader.cancel(reason);
     },
   });
 }

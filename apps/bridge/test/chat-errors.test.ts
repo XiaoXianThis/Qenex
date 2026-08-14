@@ -27,6 +27,24 @@ describe("formatChatStreamError", () => {
     expect(msg).not.toContain("OpenCode");
   });
 
+  test("maps JSON-RPC model-not-found without [object Object]", () => {
+    const msg = formatChatStreamError(
+      { code: -32602, message: "Invalid params: model not found: structure/openai/gpt-5.6-sol" },
+      "opencode",
+    );
+    expect(msg).toContain("当前模型不可用");
+    expect(msg).not.toContain("[object Object]");
+  });
+
+  test("maps nested token expiry as auth", () => {
+    const msg = formatChatStreamError(
+      { message: "Internal error", data: { details: "token expired" } },
+      "gemini",
+    );
+    expect(msg).toContain("Gemini");
+    expect(msg).toContain("登录");
+  });
+
   test("replaces opaque AI SDK default", () => {
     expect(formatChatStreamError(new Error("An error occurred."))).toContain(
       "对话失败",

@@ -23,11 +23,14 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { AgentIcon } from "@/components/AgentIcon";
+import { AgentAuthDialog } from "@/components/AgentAuthDialog";
 import { ErrorOverlay } from "@/components/ErrorOverlay";
 import {
   cn,
   formatBridgeError,
   getAgentPreset,
+  isAuthRequiredError,
+  authChallengeFromError,
   useLayoutStore,
   useSessionConfig,
   useTabsStore,
@@ -67,6 +70,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   SquareIcon,
+  KeyRound,
 } from "lucide-react";
 import {
   createContext,
@@ -101,6 +105,32 @@ const messageContainsImage = (
       (part.type === "text" &&
         MARKDOWN_IMAGE_PATTERN.test(part.text ?? "")),
   );
+
+const ThreadReasoningGroup: FC<
+  PropsWithChildren<{ group: ThreadGroupPart }>
+> = ({ group, children }) => {
+  const chat = useChatHelpers();
+  const chatBusy =
+    chat?.status === "submitted" || chat?.status === "streaming";
+  const innerRunning = useAuiState((s) =>
+    group.indices.some((index) => {
+      const part = s.message.parts[index];
+      return (
+        part?.type === "reasoning" && part.status?.type === "running"
+      );
+    }),
+  );
+  const streaming = Boolean(chatBusy && innerRunning);
+
+  return (
+    <ReasoningRoot streaming={streaming}>
+      <ReasoningTrigger active={streaming} />
+      <ReasoningContent aria-busy={streaming}>
+        <ReasoningText>{children}</ReasoningText>
+      </ReasoningContent>
+    </ReasoningRoot>
+  );
+};
 
 const ToolSequenceGroup: FC<
   PropsWithChildren<{ group: ThreadGroupPart }>
@@ -183,6 +213,10 @@ export const ThreadMessages: FC = () => {
   // Drive the list from live useChat messages so sendMessage paints the user
   // bubble in the same turn (true optimism — not a parallel fake bubble).
   if (chat && chat.messages.length > 0) {
+    const last = chat.messages.at(-1);
+    const optimisticWait =
+      (chat.status === "submitted" || chat.status === "streaming") &&
+      last?.role === "user";
     return (
       <div
         data-slot="aui_message-group"
@@ -202,6 +236,12 @@ export const ThreadMessages: FC = () => {
           }
           return <LiveAssistantFallback key={message.id} message={message} />;
         })}
+        {optimisticWait ? (
+          <LiveAssistantFallback
+            key="optimistic-wait"
+            message={OPTIMISTIC_ASSISTANT_MESSAGE}
+          />
+        ) : null}
       </div>
     );
   }
@@ -264,19 +304,28 @@ const LiveUserMessage: FC<{ message: UIMessage }> = ({ message }) => {
 /** Match AssistantMessage footer reserve so Live → MessageByIndex doesn't jump height. */
 const LIVE_ACTION_BAR_HEIGHT = "-mb-7.5 min-h-7.5 pt-1.5";
 
+const OPTIMISTIC_ASSISTANT_MESSAGE: UIMessage = {
+  id: "optimistic-wait",
+  role: "assistant",
+  parts: [],
+};
+
+/** Whole-turn waiting caret — not bound to the current text part. */
+const TurnStreamingCaret: FC = () => (
+  <span
+    data-slot="aui_turn-streaming-caret"
+    className="aui-turn-caret"
+    aria-label="Assistant is working"
+  >
+    {"●"}
+  </span>
+);
+
 /** Assistant stub from useChat while ThreadPrimitive catches up / mid-stream. */
 const LiveAssistantFallback: FC<{ message: UIMessage }> = ({ message }) => {
   const text = textFromUiMessage(message);
   const reasoning = reasoningFromUiMessage(message);
-  const indicator = (
-    <span
-      data-slot="aui_assistant-message-indicator"
-      className="animate-pulse font-sans"
-      aria-label="Assistant is working"
-    >
-      {"●"}
-    </span>
-  );
+  const indicator = <TurnStreamingCaret />;
 
   return (
     <div
@@ -364,33 +413,64 @@ export const AisdkThreadMessages: FC = () => {
 /** Live useChat error banner (ThreadPrimitive does not always surface transport errors). */
 export const ChatStreamErrorBanner: FC = () => {
   const chat = useChatHelpers();
+  const { agentId, retryAfterAuth } = useSessionConfig();
   const [dismissedError, setDismissedError] = useState<unknown>(null);
+  const [authOpen, setAuthOpen] = useState(false);
   if (!chat?.error || dismissedError === chat.error) return null;
+  const message = formatBridgeError(chat.error);
+  const needsAuth =
+    isAuthRequiredError(chat.error) || /需要登录|凭证已失效/.test(message);
+  const agent = getAgentPreset(agentId);
   return (
-    <ErrorOverlay
-      testId="chat-stream-error"
-      title="对话请求失败"
-      message={formatBridgeError(chat.error)}
-      onDismiss={() => setDismissedError(chat.error)}
-      actions={
-        <>
-          <button
-            type="button"
-            className="cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90"
-            onClick={() => void chat.regenerate?.()}
-          >
-            重新生成
-          </button>
-          <button
-            type="button"
-            className="cursor-pointer rounded-md bg-muted px-2.5 py-1 text-xs text-foreground hover:bg-muted/80"
-            onClick={() => chat.stop?.()}
-          >
-            停止
-          </button>
-        </>
-      }
-    />
+    <>
+      <ErrorOverlay
+        testId="chat-stream-error"
+        title={needsAuth ? `${agent.name} 需要登录` : "对话请求失败"}
+        message={message}
+        onDismiss={() => setDismissedError(chat.error)}
+        actions={
+          <>
+            {needsAuth ? (
+              <button
+                type="button"
+                className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90"
+                onClick={() => setAuthOpen(true)}
+              >
+                <KeyRound className="size-3.5" />
+                需要登录
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90"
+                onClick={() => void chat.regenerate?.()}
+              >
+                重新生成
+              </button>
+            )}
+            <button
+              type="button"
+              className="cursor-pointer rounded-md bg-muted px-2.5 py-1 text-xs text-foreground hover:bg-muted/80"
+              onClick={() => chat.stop?.()}
+            >
+              停止
+            </button>
+          </>
+        }
+      />
+      {needsAuth ? (
+        <AgentAuthDialog
+          open={authOpen}
+          onOpenChange={setAuthOpen}
+          agentId={agentId}
+          challenge={authChallengeFromError(chat.error, agent.name)}
+          onRetry={async () => {
+            await retryAfterAuth();
+            await chat.regenerate?.();
+          }}
+        />
+      ) : null}
+    </>
   );
 };
 
@@ -793,6 +873,9 @@ const AssistantMessage: FC = () => {
     ToolFallback: ToolFallbackComponent = ToolFallback,
     ReasoningGroup,
   } = useContext(ThreadComponentsContext);
+  const isLastMessage = useAuiState(
+    (s) => s.thread.messages.at(-1)?.id === s.message.id,
+  );
   const containsImage = useAuiState((s) =>
     messageContainsImage(s.message.parts),
   );
@@ -816,6 +899,7 @@ const AssistantMessage: FC = () => {
         className={cn(
           "text-foreground px-4 leading-relaxed wrap-break-word",
           !containsImage &&
+            !isLastMessage &&
             "[contain-intrinsic-size:auto_24px] [content-visibility:auto]",
         )}
       >
@@ -838,14 +922,10 @@ const AssistantMessage: FC = () => {
                     <ReasoningGroup group={part}>{children}</ReasoningGroup>
                   );
                 }
-                const running = part.status?.type === "running";
                 return (
-                  <ReasoningRoot streaming={running}>
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
+                  <ThreadReasoningGroup group={part}>
+                    {children}
+                  </ThreadReasoningGroup>
                 );
               }
               case "text":

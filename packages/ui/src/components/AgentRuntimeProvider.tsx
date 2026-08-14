@@ -13,6 +13,7 @@ import type { UIMessage } from "ai";
 import {
   SessionConfigProvider,
   approvalModeFromAutoAllow,
+  authChallengeFromError,
   createComposerAttachmentAdapter,
   ensureAisdkSession,
   formatBridgeError,
@@ -20,15 +21,19 @@ import {
   getAisdkSession,
   invalidateSessionBoot,
   isAisdkSessionId,
+  isAuthRequiredError,
   listAisdkSessionMessages,
   tabsActions,
   useApprovalPrefsStore,
   useHost,
+  type AuthChallenge,
   type RuntimeSessionConfig,
 } from "@qenex/core";
 import { ChatHelpersProvider } from "@/components/ChatHelpersContext";
 import { ApprovalPollBridge } from "@/components/ApprovalPollBridge";
+import { AgentAuthDialog } from "@/components/AgentAuthDialog";
 import { ErrorOverlay } from "@/components/ErrorOverlay";
+import { KeyRound, Loader2 } from "lucide-react";
 
 type AgentRuntimeProviderProps = {
   session: RuntimeSessionConfig;
@@ -208,7 +213,24 @@ function SessionBootstrap({
     messages: UIMessage[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authChallenge, setAuthChallenge] = useState<AuthChallenge | null>(
+    null,
+  );
+  const [authOpen, setAuthOpen] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [bootHint, setBootHint] = useState(false);
+  const retryWaiterRef = useRef<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  } | null>(null);
+
+  const settleRetry = (error?: Error) => {
+    const waiter = retryWaiterRef.current;
+    retryWaiterRef.current = null;
+    if (!waiter) return;
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -247,7 +269,10 @@ function SessionBootstrap({
             if (messages.length > 0) {
               tabsActions.markTabHasChatContent(session.tabId);
             }
+            setAuthChallenge(null);
+            setAuthOpen(false);
             setBoot({ sessionId: existing.sessionId, messages });
+            settleRetry();
             return;
           }
         }
@@ -278,11 +303,26 @@ function SessionBootstrap({
         if (messages.length > 0) {
           tabsActions.markTabHasChatContent(session.tabId);
         }
+        setAuthChallenge(null);
+        setAuthOpen(false);
         setBoot({ sessionId: info.sessionId, messages });
+        settleRetry();
       } catch (err) {
         if (cancelled) return;
-        setError(formatBridgeError(err));
         tabsActions.setAgentLoading(session.tabId, false);
+        if (isAuthRequiredError(err)) {
+          const agent = getAgentPreset(session.agentId);
+          setAuthChallenge(authChallengeFromError(err, agent.name));
+          setAuthOpen(true);
+          setError(null);
+          settleRetry(new Error("仍需登录：请在浏览器完成授权后再试"));
+          return;
+        }
+        setAuthChallenge(null);
+        setError(formatBridgeError(err));
+        settleRetry(
+          err instanceof Error ? err : new Error(formatBridgeError(err)),
+        );
       }
     })();
 
@@ -298,6 +338,52 @@ function SessionBootstrap({
     session.agentCommand,
     retryNonce,
   ]);
+
+  useEffect(() => {
+    if (boot || error || authChallenge) {
+      setBootHint(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setBootHint(true), 1500);
+    return () => window.clearTimeout(timer);
+  }, [boot, error, authChallenge, retryNonce]);
+
+  const retrySession = () => {
+    return new Promise<void>((resolve, reject) => {
+      retryWaiterRef.current = { resolve, reject };
+      setRetryNonce((n) => n + 1);
+    });
+  };
+
+  if (authChallenge) {
+    if (children == null) {
+      return <PendingRuntimeProvider>{children}</PendingRuntimeProvider>;
+    }
+    return (
+      <PendingRuntimeProvider>
+        <div className="relative h-full min-h-0">
+          {children}
+          {!authOpen ? (
+            <button
+              type="button"
+              className="absolute top-14 right-3 z-50 inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground shadow-sm hover:bg-muted"
+              onClick={() => setAuthOpen(true)}
+            >
+              <KeyRound className="size-3.5" />
+              需要登录
+            </button>
+          ) : null}
+          <AgentAuthDialog
+            open={authOpen}
+            onOpenChange={setAuthOpen}
+            agentId={session.agentId}
+            challenge={authChallenge}
+            onRetry={retrySession}
+          />
+        </div>
+      </PendingRuntimeProvider>
+    );
+  }
 
   if (error) {
     // Inactive keepalive slots receive no children. They must retain their
@@ -353,7 +439,35 @@ function SessionBootstrap({
   }
 
   if (!boot) {
-    return <PendingRuntimeProvider>{children}</PendingRuntimeProvider>;
+    if (children == null) {
+      return <PendingRuntimeProvider>{children}</PendingRuntimeProvider>;
+    }
+    return (
+      <PendingRuntimeProvider>
+        <div className="relative h-full min-h-0">
+          {children}
+          {bootHint ? (
+            <aside
+              role="status"
+              className="pointer-events-none absolute top-14 right-3 z-50 w-[min(22rem,calc(100%-1.5rem))] rounded-lg border border-border bg-background/96 p-3 text-sm shadow-xl backdrop-blur-md"
+            >
+              <div className="flex items-start gap-2.5">
+                <Loader2
+                  className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground"
+                  aria-hidden
+                />
+                <div className="min-w-0">
+                  <p className="font-medium text-foreground">正在启动</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    若系统打开了账号登录页，请在浏览器完成授权。完成后会自动继续。
+                  </p>
+                </div>
+              </div>
+            </aside>
+          ) : null}
+        </div>
+      </PendingRuntimeProvider>
+    );
   }
 
   return (

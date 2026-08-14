@@ -27,13 +27,13 @@ describe("chat stream idle timeout", () => {
         // Deliberately never enqueue or close.
       },
     });
-    let timeoutError: Error | null = null;
+    const captured: { error: Error | null } = { error: null };
     const reader = withChatIdleTimeout(source, 10, (error) => {
-      timeoutError = error;
+      captured.error = error;
     }).getReader();
 
     await expect(reader.read()).rejects.toThrow("produced no data");
-    expect(timeoutError?.name).toBe("ChatIdleTimeoutError");
+    expect(captured.error?.name).toBe("ChatIdleTimeoutError");
   });
 
   test("passes chunks through and clears the timer on close", async () => {

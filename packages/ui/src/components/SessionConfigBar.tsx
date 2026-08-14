@@ -178,6 +178,18 @@ function modelTriggerLabel(name: string): string {
   return model || name;
 }
 
+/** Catalog 若已把思考强度编进模型名，就不要再 overlay 同一标签。 */
+function overlayThoughtLabel(
+  modelName: string,
+  thoughtLabel: string | null,
+): string | null {
+  if (!thoughtLabel?.trim()) return null;
+  const name = modelName.toLowerCase();
+  const label = thoughtLabel.trim().toLowerCase();
+  if (name.includes(label)) return null;
+  return thoughtLabel;
+}
+
 type ModelOption = { id: string; name: string };
 type ThoughtOption = { id: string; name: string };
 
@@ -239,8 +251,6 @@ type ModelPickerProps = {
   fastOptions: ThoughtOption[];
   currentFastId: string | null;
   fastOptionsByModel: Record<string, ThoughtOption[]>;
-  /** Cursor-only silent set_model probes; other agents use session ACP config. */
-  usesPerModelConfigProbe: boolean;
   ensureModelConfigForModel: (modelId: string) => Promise<{
     thoughtLevels: ThoughtOption[];
     fastOptions: ThoughtOption[];
@@ -261,7 +271,6 @@ function ModelPicker({
   fastOptions,
   currentFastId,
   fastOptionsByModel,
-  usesPerModelConfigProbe,
   ensureModelConfigForModel,
   disabled,
   onSelectModel,
@@ -288,34 +297,21 @@ function ModelPicker({
   const selectedModel =
     models.find((model) => model.id === currentModelId) ?? models[0];
   const triggerLabel = modelTriggerLabel(selectedModel?.name ?? "");
-  const anyCachedThought = Object.values(thoughtLevelsByModel).some(
-    (levels) => levels.length > 0,
-  );
-  const anyCachedFast = Object.values(fastOptionsByModel).some(
-    (options) => options.length > 0,
-  );
-  const showEdit =
-    usesPerModelConfigProbe ||
-    thoughtLevels.length > 0 ||
-    fastOptions.length > 0 ||
-    anyCachedThought ||
-    anyCachedFast;
+  const showEdit = models.length > 0;
   const selectedThoughtId =
     currentThoughtLevelId ??
     (selectedModel ? agentPrefs[selectedModel.id] : undefined) ??
     thoughtLevels[0]?.id ??
     "";
-  const selectedThoughtLabel =
+  const selectedThoughtLabel = overlayThoughtLabel(
+    selectedModel?.name ?? triggerLabel,
     thoughtLevels.find((level) => level.id === selectedThoughtId)?.name ??
-    null;
+      null,
+  );
   const currentFastEnabled = isFastOptionEnabled(currentFastId);
 
   const levelsForModel = (modelId: string): ThoughtOption[] | null => {
-    // Standard ACP: session-level options apply to the live config snapshot.
-    if (!usesPerModelConfigProbe) {
-      return thoughtLevels;
-    }
-    if (modelId === selectedModel?.id) {
+    if (modelId === selectedModel?.id && thoughtLevels.length > 0) {
       return thoughtLevels;
     }
     if (Object.prototype.hasOwnProperty.call(thoughtLevelsByModel, modelId)) {
@@ -325,10 +321,7 @@ function ModelPicker({
   };
 
   const fastForModel = (modelId: string): ThoughtOption[] | null => {
-    if (!usesPerModelConfigProbe) {
-      return fastOptions;
-    }
-    if (modelId === selectedModel?.id) {
+    if (modelId === selectedModel?.id && fastOptions.length > 0) {
       return fastOptions;
     }
     if (Object.prototype.hasOwnProperty.call(fastOptionsByModel, modelId)) {
@@ -400,12 +393,12 @@ function ModelPicker({
       delete next[modelId];
       return next;
     });
-    // Non-Cursor: session ACP config is enough — no silent set_model.
-    if (!usesPerModelConfigProbe) {
-      return;
-    }
     // Cached (memory or persist-seeded): show immediately, no spinner.
-    if (levelsForModel(modelId) !== null && fastForModel(modelId) !== null) {
+    // Empty live/cache is not "known unsupported" — probe so per-model thought can appear.
+    if (
+      (levelsForModel(modelId)?.length ?? 0) > 0 ||
+      (fastForModel(modelId)?.length ?? 0) > 0
+    ) {
       return;
     }
     setProbingModelId(modelId);
@@ -480,7 +473,10 @@ function ModelPicker({
             const thoughtOpen = thoughtForModelId === model.id;
             const modelLevels = levelsForModel(model.id);
             const modelFastOptions = fastForModel(model.id);
-            const thoughtLabel = thoughtLabelForModel(model.id);
+            const thoughtLabel = overlayThoughtLabel(
+              model.name,
+              thoughtLabelForModel(model.id),
+            );
             const rowThoughtId =
               modelLevels && modelLevels.length > 0
                 ? thoughtIdForModel(model.id, modelLevels)
@@ -664,7 +660,6 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
   const {
     config,
     agentId,
-    usesPerModelConfigProbe,
     thoughtLevelsByModel,
     fastOptionsByModel,
     ensureModelConfigForModel,
@@ -751,7 +746,6 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
                   fastOptions={config.fastOptions}
                   currentFastId={config.currentFastId}
                   fastOptionsByModel={fastOptionsByModel}
-                  usesPerModelConfigProbe={usesPerModelConfigProbe}
                   ensureModelConfigForModel={ensureModelConfigForModel}
                   disabled={config.loading}
                   onSelectModel={(modelId) => {

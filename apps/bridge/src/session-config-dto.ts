@@ -1,6 +1,9 @@
 /**
  * Normalize SessionInfo → session config DTO for GET/POST mode|model.
+ * Non-empty lists mean the session has modes/models/thought/fast.
+ * nativeResume cannot be inferred from lists.
  */
+import { resolveAgentCompat } from "./agent/compat/registry.ts";
 import type { SessionInfo } from "./session-store.ts";
 
 export type SessionConfigDto = {
@@ -15,6 +18,8 @@ export type SessionConfigDto = {
   currentThoughtLevelId: string | null;
   fastConfigId: string | null;
   currentFastId: string | null;
+  /** True when the current AgentCompat resume strategy is native-load. */
+  nativeResume?: boolean;
 };
 
 export function sessionInfoToConfigDto(info: SessionInfo): SessionConfigDto {
@@ -57,5 +62,6 @@ export function sessionInfoToConfigDto(info: SessionInfo): SessionConfigDto {
       info.thoughtLevels?.currentId ?? thoughtLevels[0]?.id ?? null,
     fastConfigId: info.fastOptions?.configId ?? null,
     currentFastId: info.fastOptions?.currentId ?? fastOptions[0]?.id ?? null,
+    nativeResume: resolveAgentCompat(info.agent).resume === "native-load",
   };
 }

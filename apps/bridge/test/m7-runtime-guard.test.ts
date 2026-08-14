@@ -137,8 +137,11 @@ describe("Cross-platform runtime stability", () => {
     const store = read("apps/bridge/src/session-store.ts");
     const client = read("packages/core/src/lib/aisdk-session.ts");
     expect(store).toContain("SESSION_INIT_TIMEOUT_MS");
+    expect(store).toContain("SESSION_AUTH_TIMEOUT_MS");
     expect(store).toContain("request_aborted");
-    expect(client).toContain("AbortSignal.timeout(60_000)");
+    expect(store).toContain("initProviderSessionWithInteractiveAuth");
+    expect(client).toContain("BRIDGE_FETCH_TIMEOUT_MS");
+    expect(client).toContain("SESSION_CREATE_TIMEOUT_MS");
     expect(client.match(/host\.fetch\(/g)?.length).toBe(1);
   });
 

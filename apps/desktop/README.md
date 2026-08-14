@@ -62,7 +62,7 @@ Tauri Host (Rust)                 Webview (@qenex/ui)
 └── cmd_storage_*                 └── QenexHostProvider → App
 ```
 
-Bridge 使用动态端口；`QENEX_CORS_ORIGINS` 覆盖 Tauri webview 源。详见 [`apps/bridge/M7.md`](../bridge/M7.md)。
+Bridge 使用动态端口；`QENEX_CORS_ORIGINS` 覆盖 Tauri webview 源。详见归档 [`M7.md`](../../docs/archive/bridge-milestones/M7.md)。
 
 ## 手动冒烟清单
 

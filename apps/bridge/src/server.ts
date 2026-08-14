@@ -122,6 +122,18 @@ export function createBridgeHandler(store: SessionStore) {
         return withCors(req, Response.json(await store.getConfig(sessionId)));
       }
 
+      const modelConfigMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/models\/([^/]+)\/config$/,
+      );
+      if (modelConfigMatch && req.method === "GET") {
+        const sessionId = decodeURIComponent(modelConfigMatch[1]!);
+        const modelId = decodeURIComponent(modelConfigMatch[2]!);
+        return withCors(
+          req,
+          Response.json(await store.getModelConfig(sessionId, modelId)),
+        );
+      }
+
       const modeMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/mode$/);
       if (modeMatch && req.method === "POST") {
         const sessionId = decodeURIComponent(modeMatch[1]!);

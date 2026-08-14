@@ -77,6 +77,8 @@ ACP Agent                opencode · claude · codex …
 | `packages/ui` | 共享 React UI |
 | `apps/{web,desktop,vscode,jetbrains}` | 各端壳 |
 
+Agent 运行时适配见 [`docs/agent-compat.md`](./docs/agent-compat.md)。v0.3 里程碑归档见 [`docs/archive/bridge-milestones/`](./docs/archive/bridge-milestones/)。
+
 ## Release
 
 打 `v*` tag 触发 GitHub Actions，构建并上传到 **GitHub Release**（server / VS Code / JetBrains / Desktop）。完整说明见 [`RELEASE.md`](./RELEASE.md)。

@@ -27,6 +27,8 @@ describe("M5 · Bridge config API", () => {
     expect(server).toContain("/config-option");
     expect(server).toContain("/probe-model-config");
     expect(server).toContain("/probe-models-config");
+    expect(server).toContain("models\\/");
+    expect(server).toContain("getModelConfig");
     expect(server).toContain("getConfig");
     expect(server).toContain("setMode");
     expect(server).toContain("setModel");
@@ -50,7 +52,7 @@ describe("M5 · frontend uses aisdk session config", () => {
     expect(ctx).toContain("setAisdkSessionMode");
     expect(ctx).toContain("setAisdkSessionModel");
     expect(ctx).toContain("setAisdkSessionConfigOption");
-    expect(ctx).toContain("probeAisdkSessionModelConfig");
+    expect(ctx).toContain("getAisdkSessionModelConfig");
     expect(ctx).not.toContain('from "../lib/bridge-api.ts";\n  getSessionConfig');
     // Must not call fusion /v2 mode setters for primary path
     expect(ctx).not.toMatch(/\bsetMode\(threadId/);
@@ -66,8 +68,8 @@ describe("M5 · frontend uses aisdk session config", () => {
     expect(aisdk).toContain("/mode");
     expect(aisdk).toContain("/model");
     expect(aisdk).toContain("/config-option");
-    expect(aisdk).toContain("/probe-model-config");
-    expect(aisdk).toContain("/probe-models-config");
+    expect(aisdk).toContain("getAisdkSessionModelConfig");
+    expect(aisdk).toContain("/models/");
   });
 
   test("ModeSyncBridge is gone", () => {

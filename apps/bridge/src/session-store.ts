@@ -1,28 +1,45 @@
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 import type { UIMessage } from "ai";
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import {
-  existsSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+  applyCompatCatalog,
+  resolveAgentCompat,
+} from "./agent/compat/registry.ts";
+import {
+  errorText,
+  cliLoginCommand,
+  isAuthRequiredErrorCode,
+  normalizeAuthMethods,
+  pickInteractiveAuthMethodId,
+  type ConfigDiscovery,
+  type ResumeBehavior,
+} from "./agent/compat/types.ts";
+import {
+  forceCleanupProvider,
+  installClientHandlers,
+  setSessionConfigOption,
+} from "./agent/runtime/provider-compat.ts";
+import {
+  rejectWhenAborted,
+  SessionOperationQueue,
+  type SessionOpKind,
+  type SessionOpLease,
+} from "./agent/runtime/session-operation-queue.ts";
+import { spawnAgentProvider } from "./agent/spawn.ts";
+import { ApprovalManager } from "./approval-manager.ts";
 import { BridgeError } from "./errors.ts";
 import {
-  ApprovalManager,
-  type PermissionRequestParams,
-  type PermissionResponse,
-} from "./approval-manager.ts";
-import { classifySessionInitError } from "./session-errors.ts";
-import { SessionDb, resolveSessionsDbPath } from "./session-db.ts";
-import { normalizeAcpSessionConfig } from "./acp-session-config.ts";
+  MODE_THOUGHT_CONFIG_ID,
+  normalizeAcpSessionConfig,
+} from "./acp-session-config.ts";
 import type { NormalizedAcpSessionConfig } from "./acp-session-config.ts";
 import {
   sessionInfoToConfigDto,
   type SessionConfigDto,
 } from "./session-config-dto.ts";
-import { spawnAgentProvider } from "./agent/spawn.ts";
+import { classifySessionInitError } from "./session-errors.ts";
+import { SessionDb, resolveSessionsDbPath } from "./session-db.ts";
 
 export type SessionInfo = {
   sessionId: string;
@@ -63,8 +80,9 @@ export type SessionInfo = {
 
 export type SessionEntry = {
   info: SessionInfo;
-  /** ACP may rotate this when a provider cannot resume its old remote session. */
-  providerSessionId: string;
+  /** ACP session id. Rotates on load failure; UI keeps info.sessionId. */
+  remoteSessionId: string;
+  resumeBehavior: ResumeBehavior;
   provider: ACPProvider;
   approvals: ApprovalManager;
 };
@@ -73,215 +91,322 @@ export type SessionStoreOptions = {
   /** SQLite path; default ~/.qenex/sessions.db or QENEX_SESSIONS_DB. */
   dbPath?: string;
   db?: SessionDb;
+  operations?: SessionOperationQueue;
 };
 
+export function catalogCacheKey(agentId: string, cwd: string): string {
+  return `${agentId}::${cwd}`;
+}
+
+/** Mode/model catalogs keyed by agentId + cwd (never agentVersion). */
+export class AgentCatalogCache {
+  #map = new Map<string, NormalizedAcpSessionConfig>();
+
+  remember(
+    agentId: string,
+    cwd: string,
+    normalized: NormalizedAcpSessionConfig,
+  ): void {
+    const hasModes = (normalized.modes?.availableModes?.length ?? 0) > 0;
+    const hasModels = (normalized.models?.availableModels?.length ?? 0) > 0;
+    if (
+      !hasModes &&
+      !hasModels &&
+      !normalized.thoughtLevels &&
+      !normalized.fastOptions
+    ) {
+      return;
+    }
+    const key = catalogCacheKey(agentId, cwd);
+    const prev = this.#map.get(key) ?? {};
+    this.#map.set(key, {
+      modes: hasModes ? normalized.modes : prev.modes,
+      models: hasModels ? normalized.models : prev.models,
+      thoughtLevels: normalized.thoughtLevels ?? prev.thoughtLevels,
+      fastOptions: normalized.fastOptions ?? prev.fastOptions,
+    });
+  }
+
+  get(agentId: string, cwd: string): NormalizedAcpSessionConfig | undefined {
+    return this.#map.get(catalogCacheKey(agentId, cwd));
+  }
+}
+
 const configuredSessionInitTimeout = Number(
-  process.env.QENEX_SESSION_INIT_TIMEOUT_MS ?? 45_000,
+  process.env.QENEX_SESSION_INIT_TIMEOUT_MS ?? 90_000,
 );
 const SESSION_INIT_TIMEOUT_MS =
   Number.isFinite(configuredSessionInitTimeout) && configuredSessionInitTimeout > 0
     ? configuredSessionInitTimeout
     : 45_000;
 
-async function initProviderSession(
-  provider: ACPProvider,
-  signal?: AbortSignal,
-): Promise<Awaited<ReturnType<ACPProvider["initSession"]>>> {
-  const init = provider.initSession();
+const configuredSessionAuthTimeout = Number(
+  process.env.QENEX_SESSION_AUTH_TIMEOUT_MS ?? 300_000,
+);
+const SESSION_AUTH_TIMEOUT_MS =
+  Number.isFinite(configuredSessionAuthTimeout) && configuredSessionAuthTimeout > 0
+    ? configuredSessionAuthTimeout
+    : 300_000;
+
+async function raceWithSignal<T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  timeoutError: BridgeError,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortHandler: (() => void) | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(
-        new BridgeError(
-          "session_init_timeout",
-          `Agent did not initialize within ${SESSION_INIT_TIMEOUT_MS}ms`,
-          504,
-        ),
-      );
-    }, SESSION_INIT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(timeoutError), timeoutMs);
   });
   const aborted = new Promise<never>((_, reject) => {
     if (!signal) return;
     abortHandler = () =>
-      reject(new BridgeError("request_aborted", "Session creation was cancelled", 499));
+      reject(
+        new BridgeError("request_aborted", "Session creation was cancelled", 499),
+      );
     if (signal.aborted) abortHandler();
     else signal.addEventListener("abort", abortHandler, { once: true });
   });
   try {
-    return await Promise.race([init, timeout, aborted]);
+    return await Promise.race([work, timeout, aborted]);
   } finally {
     if (timer) clearTimeout(timer);
     if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
   }
 }
 
-export function isMissingProviderSessionError(error: unknown): boolean {
-  const parts: string[] = [];
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current != null && !seen.has(current)) {
-    seen.add(current);
-    if (current instanceof Error) {
-      parts.push(current.message);
-      const detail = (current as Error & { data?: unknown }).data;
-      if (detail !== undefined) {
-        try {
-          parts.push(JSON.stringify(detail));
-        } catch {
-          parts.push(String(detail));
-        }
-      }
-      current = current.cause;
-      continue;
-    }
-    if (typeof current === "object") {
-      try {
-        parts.push(JSON.stringify(current));
-      } catch {
-        parts.push(String(current));
-      }
-    } else {
-      parts.push(String(current));
-    }
-    break;
+async function initProviderSession(
+  provider: ACPProvider,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<ACPProvider["initSession"]>>> {
+  return raceWithSignal(
+    provider.initSession(),
+    signal,
+    SESSION_INIT_TIMEOUT_MS,
+    new BridgeError(
+      "session_init_timeout",
+      `Agent did not initialize within ${SESSION_INIT_TIMEOUT_MS}ms`,
+      504,
+    ),
+  );
+}
+
+function authMethodsFromClassified(err: BridgeError): unknown {
+  const details = err.details;
+  if (!details || typeof details !== "object") return undefined;
+  return (details as { methods?: unknown }).methods;
+}
+
+export type InteractiveAuthInitInput = {
+  provider: ACPProvider;
+  agentId: string;
+  launchCommand: string[];
+  signal?: AbortSignal;
+  respawn?: () => ACPProvider;
+  runLogin?: (command: string[]) => Promise<void>;
+};
+
+async function runCliBrowserLogin(
+  command: string[],
+  signal?: AbortSignal,
+): Promise<void> {
+  if (command.length === 0) {
+    throw new BridgeError("auth_required", "Login command is empty", 409);
   }
-  const message = parts.join(" ").toLowerCase();
+  const proc = Bun.spawn(command, {
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  try {
+    const code = await raceWithSignal(
+      proc.exited,
+      signal,
+      SESSION_AUTH_TIMEOUT_MS,
+      new BridgeError(
+        "session_auth_timeout",
+        `Agent login did not complete within ${SESSION_AUTH_TIMEOUT_MS}ms`,
+        504,
+      ),
+    );
+    if (code !== 0) {
+      throw new BridgeError(
+        "auth_required",
+        `Browser login exited with code ${code}`,
+        409,
+      );
+    }
+  } catch (error) {
+    try {
+      proc.kill();
+    } catch {
+      /* ignore */
+    }
+    throw error;
+  }
+}
+
+function rethrowAuthFailure(
+  classified: BridgeError,
+  authErr: unknown,
+  agentId: string,
+  authMethods: unknown,
+): never {
+  if (authErr instanceof BridgeError && authErr.code === "request_aborted") {
+    throw authErr;
+  }
+  const retryClassified = classifySessionInitError(authErr, agentId, {
+    authMethods,
+  });
+  if (
+    retryClassified.code === "session_auth_timeout" ||
+    isAuthRequiredErrorCode(retryClassified.code)
+  ) {
+    throw new BridgeError(
+      classified.code,
+      classified.message,
+      classified.status,
+      {
+        ...(typeof classified.details === "object" && classified.details
+          ? classified.details
+          : { cause: errorText(authErr), agentId }),
+        methods:
+          authMethodsFromClassified(retryClassified) ??
+          authMethodsFromClassified(classified) ??
+          authMethods,
+      },
+    );
+  }
+  throw retryClassified;
+}
+
+/**
+ * Try session/new first. On `auth_required`:
+ * 1. If the Agent has `loginArgv`, spawn `<bin> login` (Cursor opens the
+ *    account browser). Respawn ACP afterwards so the new process sees credentials.
+ * 2. Otherwise call ACP `authenticate` (Gemini-style in-process OAuth).
+ * Timeouts stay timeouts — do not open a login page for a slow but logged-in Agent.
+ */
+export async function initProviderSessionWithInteractiveAuth(
+  input: InteractiveAuthInitInput,
+): Promise<{
+  session: Awaited<ReturnType<ACPProvider["initSession"]>>;
+  provider: ACPProvider;
+}> {
+  let provider = input.provider;
+  const { agentId, signal } = input;
+  try {
+    return { session: await initProviderSession(provider, signal), provider };
+  } catch (firstErr) {
+    const authMethods = readProviderAuthMethods(provider);
+    const classified = classifySessionInitError(firstErr, agentId, { authMethods });
+    if (!isAuthRequiredErrorCode(classified.code)) {
+      throw classified;
+    }
+    const loginCmd = cliLoginCommand(
+      input.launchCommand,
+      resolveAgentCompat(agentId).loginArgv,
+    );
+    const methodId = pickInteractiveAuthMethodId(
+      authMethodsFromClassified(classified) ?? authMethods,
+    );
+    if (!loginCmd && !methodId) {
+      throw classified;
+    }
+    try {
+      if (loginCmd) {
+        if (input.runLogin) await input.runLogin(loginCmd);
+        else await runCliBrowserLogin(loginCmd, signal);
+        if (input.respawn) {
+          provider = input.respawn();
+        }
+      } else if (methodId) {
+        await raceWithSignal(
+          provider.authenticate(methodId),
+          signal,
+          SESSION_AUTH_TIMEOUT_MS,
+          new BridgeError(
+            "session_auth_timeout",
+            `Agent login did not complete within ${SESSION_AUTH_TIMEOUT_MS}ms`,
+            504,
+          ),
+        );
+      }
+      return { session: await initProviderSession(provider, signal), provider };
+    } catch (authErr) {
+      return rethrowAuthFailure(
+        classified,
+        authErr,
+        agentId,
+        readProviderAuthMethods(provider).length > 0
+          ? readProviderAuthMethods(provider)
+          : authMethods,
+      );
+    }
+  }
+}
+
+export function isMissingProviderSessionError(error: unknown): boolean {
+  const message = errorText(error).toLowerCase();
   return (
     message.includes("no previous sessions found") ||
     message.includes("session not found") ||
     message.includes("unknown session") ||
-    message.includes("cannot load session")
+    message.includes("cannot load session") ||
+    message.includes("no rollout found")
   );
 }
 
-type PermissionAwareModel = {
-  connection?: {
-    setSessionConfigOption?: (params: {
-      sessionId: string;
-      configId: string;
-      value: string;
-    }) => Promise<{ configOptions?: unknown }>;
-  };
-  client?: {
-    setPermissionRequestHandler?: (
-      handler: (params: PermissionRequestParams) => Promise<PermissionResponse>,
-    ) => void;
-    readTextFile?: (params: {
-      sessionId: string;
-      path: string;
-      line?: number | null;
-      limit?: number | null;
-    }) => Promise<{ content: string }> | { content: string };
-    writeTextFile?: (params: {
-      sessionId: string;
-      path: string;
-      content: string;
-    }) => Promise<Record<string, never>> | Record<string, never>;
-    sessionUpdate?: (params: {
-      update?: {
-        sessionUpdate?: string;
-        status?: string | null;
-        rawOutput?: unknown;
-      content?: unknown;
-      configOptions?: unknown;
-      [key: string]: unknown;
-      };
-      [key: string]: unknown;
-    }) => Promise<void>;
-  };
-};
-
-function isWithin(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+/**
+ * Best-effort restore of the live session model after a same-session probe.
+ * Always attempts restore even if the probe itself failed; swallows restore
+ * RPC errors so the probe result (or original failure) can still surface.
+ */
+/**
+ * Skip switching the live model when the snapshot is already known.
+ * Advertised + session-level thought (Codex) must not probe; advertised with
+ * empty thought (legacy OpenCode) and per-model-probe-fallback still probe.
+ */
+export function shouldSkipModelConfigProbe(input: {
+  configDiscovery: ConfigDiscovery;
+  currentModelId: string | null;
+  requestedModelId: string;
+  hasCachedSnapshot: boolean;
+  liveHasThoughtOrFast: boolean;
+}): boolean {
+  if (input.currentModelId === input.requestedModelId) return true;
+  if (input.hasCachedSnapshot) return true;
+  return (
+    input.configDiscovery === "advertised" && input.liveHasThoughtOrFast
+  );
 }
 
-function installClientHandlers(
-  provider: ACPProvider,
-  approvals: ApprovalManager,
-  cwd: string,
-  sessionId: string,
-  onConfigOptions?: (configOptions: unknown) => void,
-): void {
-  const model = provider.languageModel() as unknown as PermissionAwareModel;
-  if (!model.client?.setPermissionRequestHandler) {
-    throw new BridgeError(
-      "permission_bridge_unavailable",
-      "The installed ACP provider does not expose the permission callback required by Qenex. Check the pinned @mcpc-tech/acp-ai-provider version.",
-      500,
-    );
+export async function restoreProbedModel(input: {
+  originalModelId: string | null | undefined;
+  currentModelId?: string | null;
+  restore: (modelId: string) => Promise<unknown>;
+}): Promise<"restored" | "skipped" | "failed"> {
+  const original = input.originalModelId?.trim() ?? "";
+  if (!original) return "skipped";
+  if (input.currentModelId === original) return "skipped";
+  try {
+    await input.restore(original);
+    return "restored";
+  } catch {
+    return "failed";
   }
-  model.client.setPermissionRequestHandler((params) =>
-    approvals.handlePermissionRequest(params),
-  );
+}
 
-  const originalSessionUpdate = model.client.sessionUpdate?.bind(model.client);
-  if (originalSessionUpdate) {
-    model.client.sessionUpdate = (params) => {
-      const update = params.update;
-      if (
-        update?.sessionUpdate === "config_option_update" &&
-        Array.isArray(update.configOptions)
-      ) {
-        onConfigOptions?.(update.configOptions);
-      }
-      // Provider 0.3.4's failed-tool formatter assumes rawOutput is iterable.
-      // OpenCode can send `{}` there after a rejection; prefer ACP content.
-      if (
-        update?.sessionUpdate === "tool_call_update" &&
-        update.status === "failed" &&
-        !Array.isArray(update.rawOutput)
-      ) {
-        return originalSessionUpdate({
-          ...params,
-          update: {
-            ...update,
-            rawOutput: Array.isArray(update.content) ? update.content : [],
-          },
-        });
-      }
-      return originalSessionUpdate(params);
+function readProviderAuthMethods(provider: ACPProvider): unknown[] {
+  try {
+    const model = provider.languageModel() as unknown as {
+      availableAuthMethodIds?: unknown;
     };
+    return normalizeAuthMethods(model.availableAuthMethodIds);
+  } catch {
+    return [];
   }
-
-  // Provider 0.3.4 advertises fs support as false but OpenCode 1.18 can still
-  // issue fs/* requests after an approved edit. Implement the ACP methods and
-  // confine them to the real session workspace (including symlink checks).
-  const realCwd = realpathSync(cwd);
-  const assertSession = (received: string) => {
-    if (received !== sessionId) {
-      throw new Error(`ACP filesystem request has wrong sessionId: ${received}`);
-    }
-  };
-  model.client.readTextFile = (params) => {
-    assertSession(params.sessionId);
-    const target = realpathSync(resolve(cwd, params.path));
-    if (!isWithin(realCwd, target)) {
-      throw new Error(`ACP read is outside the session workspace: ${params.path}`);
-    }
-    const content = readFileSync(target, "utf8");
-    if (params.line == null && params.limit == null) return { content };
-    const start = Math.max(0, (params.line ?? 1) - 1);
-    const end = params.limit == null ? undefined : start + Math.max(0, params.limit);
-    return { content: content.split("\n").slice(start, end).join("\n") };
-  };
-  model.client.writeTextFile = (params) => {
-    assertSession(params.sessionId);
-    const target = resolve(cwd, params.path);
-    if (existsSync(target)) {
-      const realTarget = realpathSync(target);
-      if (!isWithin(realCwd, realTarget)) {
-        throw new Error(`ACP write is outside the session workspace: ${params.path}`);
-      }
-    }
-    const realParent = realpathSync(dirname(target));
-    if (!isWithin(realCwd, realParent)) {
-      throw new Error(`ACP write is outside the session workspace: ${params.path}`);
-    }
-    writeFileSync(target, params.content, "utf8");
-    return {};
-  };
 }
 
 function parseJsonField<T>(raw: string | null | undefined): T | undefined {
@@ -302,8 +427,10 @@ function infoFromRow(row: {
   updatedAt: string;
   modesJson: string | null;
   modelsJson: string | null;
+  thoughtLevelsJson: string | null;
+  fastOptionsJson: string | null;
 }): SessionInfo {
-  return {
+  return applyInfoCatalog({
     sessionId: row.sessionId,
     agent: (row.agent as SessionInfo["agent"]) || "opencode",
     cwd: row.cwd,
@@ -312,7 +439,54 @@ function infoFromRow(row: {
     title: row.title,
     modes: parseJsonField(row.modesJson),
     models: parseJsonField(row.modelsJson),
+    thoughtLevels: parseJsonField(row.thoughtLevelsJson),
+    fastOptions: parseJsonField(row.fastOptionsJson),
+  });
+}
+
+/** Replay per-agent catalog rewrites on DB-hydrated or in-memory info. */
+function applyInfoCatalog(info: SessionInfo): SessionInfo {
+  const normalized = applyCompatCatalog(info.agent, {
+    modes: info.modes,
+    models: info.models,
+    thoughtLevels: info.thoughtLevels,
+    fastOptions: info.fastOptions,
+  });
+  return {
+    ...info,
+    modes: normalized.modes,
+    models: normalized.models,
+    thoughtLevels: normalized.thoughtLevels,
+    fastOptions: normalized.fastOptions,
   };
+}
+
+function catalogPersistFields(info: {
+  modes?: SessionInfo["modes"];
+  models?: SessionInfo["models"];
+  thoughtLevels?: SessionInfo["thoughtLevels"];
+  fastOptions?: SessionInfo["fastOptions"];
+}): {
+  modesJson: string | null;
+  modelsJson: string | null;
+  thoughtLevelsJson: string | null;
+  fastOptionsJson: string | null;
+} {
+  return {
+    modesJson: info.modes ? JSON.stringify(info.modes) : null,
+    modelsJson: info.models ? JSON.stringify(info.models) : null,
+    thoughtLevelsJson: info.thoughtLevels
+      ? JSON.stringify(info.thoughtLevels)
+      : null,
+    fastOptionsJson: info.fastOptions ? JSON.stringify(info.fastOptions) : null,
+  };
+}
+
+function hasFullCatalog(info: SessionInfo): boolean {
+  const hasModels = (info.models?.availableModels?.length ?? 0) > 0;
+  const hasModes = (info.modes?.availableModes?.length ?? 0) > 0;
+  const hasThought = (info.thoughtLevels?.available?.length ?? 0) > 0;
+  return hasModels && (hasModes || hasThought);
 }
 
 /** First user text → short local title (no ACP dependency). */
@@ -334,19 +508,22 @@ export function deriveTitleFromMessages(messages: UIMessage[]): string | null {
 export class SessionStore {
   #sessions = new Map<string, SessionEntry>();
   #db: SessionDb;
+  #ops: SessionOperationQueue;
   /** Track reopen promises so concurrent GET/chat share one ACP attach. */
   #reopening = new Map<string, Promise<SessionEntry>>();
   /**
-   * OpenCode `session/load` (existingSessionId) often omits `configOptions`.
-   * Cache mode/model catalogs per cwd from create / probe.
+   * OpenCode `session/load` often omits `configOptions`.
+   * Cache mode/model catalogs per agentId + cwd from create / probe.
    */
-  #catalogByCwd = new Map<string, NormalizedAcpSessionConfig>();
+  #catalog = new AgentCatalogCache();
   #catalogProbe = new Map<string, Promise<NormalizedAcpSessionConfig>>();
+  #modelConfigBySession = new Map<string, Map<string, SessionConfigDto>>();
 
   constructor(options: SessionStoreOptions = {}) {
     this.#db =
       options.db ??
       new SessionDb(resolveSessionsDbPath(options.dbPath ?? null));
+    this.#ops = options.operations ?? new SessionOperationQueue();
   }
 
   get dbPath(): string {
@@ -360,6 +537,15 @@ export class SessionStore {
   /** Rows in SQLite (includes cold sessions not yet reopened). */
   get persistedCount(): number {
     return this.#db.listSessions().length;
+  }
+
+  /** Test helper: inspect per-agent catalog isolation. */
+  get catalog(): AgentCatalogCache {
+    return this.#catalog;
+  }
+
+  get sessionOperations(): SessionOperationQueue {
+    return this.#ops;
   }
 
   has(sessionId: string): boolean {
@@ -402,6 +588,25 @@ export class SessionStore {
     return fromDb.map((info) => this.#sessions.get(info.sessionId)?.info ?? info);
   }
 
+  acquireSessionOperation(
+    sessionId: string,
+    kind: SessionOpKind,
+  ): Promise<SessionOpLease> {
+    return this.#ops.acquire(sessionId, kind);
+  }
+
+  interruptSessionOperation(sessionId: string): void {
+    this.#ops.interrupt(sessionId);
+  }
+
+  async #withSessionOp<T>(
+    sessionId: string,
+    kind: SessionOpKind,
+    fn: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    return this.#ops.run(sessionId, kind, fn);
+  }
+
   async create(input: {
     cwd: string;
     agentId?: string;
@@ -423,11 +628,30 @@ export class SessionStore {
       agentCommand: input.agentCommand,
       persistSession: true,
     });
-    const { provider, agentId } = spawned;
+    let { provider, agentId } = spawned;
     const approvals = new ApprovalManager();
+    const compat = resolveAgentCompat(agentId);
 
     try {
-      const session = await initProviderSession(provider, input.signal);
+      const inited = await initProviderSessionWithInteractiveAuth({
+        provider,
+        agentId,
+        launchCommand: spawned.command,
+        signal: input.signal,
+        respawn: () => {
+          forceCleanupProvider(provider);
+          const next = spawnAgentProvider({
+            cwd,
+            agentId: input.agentId,
+            agentCommand: input.agentCommand,
+            persistSession: true,
+          });
+          provider = next.provider;
+          return provider;
+        },
+      });
+      provider = inited.provider;
+      const session = inited.session;
       const sessionId = session.sessionId;
       if (!sessionId) {
         throw new BridgeError(
@@ -444,12 +668,15 @@ export class SessionStore {
       });
 
       const createdAt = new Date().toISOString();
-      const normalized = normalizeAcpSessionConfig(session);
+      const normalized = this.#compatCatalog(
+        agentId,
+        normalizeAcpSessionConfig(session),
+      );
       const modes = normalized.modes;
       const models = normalized.models;
       const thoughtLevels = normalized.thoughtLevels;
       const fastOptions = normalized.fastOptions;
-      this.#rememberCatalog(cwd, normalized);
+      this.#rememberCatalog(agentId, cwd, normalized);
 
       const info: SessionInfo = {
         sessionId,
@@ -466,28 +693,42 @@ export class SessionStore {
 
       this.#db.upsertSession({
         sessionId,
+        remoteSessionId: sessionId,
+        resumeBehavior: compat.resume,
         agent: info.agent,
         cwd,
         title: null,
         createdAt,
         updatedAt: createdAt,
-        modesJson: modes ? JSON.stringify(modes) : null,
-        modelsJson: models ? JSON.stringify(models) : null,
+        ...catalogPersistFields({
+          modes,
+          models,
+          thoughtLevels,
+          fastOptions,
+        }),
       });
 
-      entry = { info, providerSessionId: sessionId, provider, approvals };
+      entry = {
+        info,
+        remoteSessionId: sessionId,
+        resumeBehavior: compat.resume,
+        provider,
+        approvals,
+      };
       this.#sessions.set(sessionId, entry);
       if (pendingConfigOptions) {
         this.#applyConfigOptions(entry, pendingConfigOptions);
       }
+      this.#rememberModelConfig(sessionId, sessionInfoToConfigDto(info));
       return info;
     } catch (err) {
+      const authMethods = readProviderAuthMethods(provider);
       try {
         provider.cleanup();
       } catch {
         /* ignore */
       }
-      throw classifySessionInitError(err, agentId);
+      throw classifySessionInitError(err, agentId, { authMethods });
     }
   }
 
@@ -527,10 +768,15 @@ export class SessionStore {
       );
     }
 
+    const agentId = row.agent || "opencode";
+    const compat = resolveAgentCompat(agentId);
+    const storedRemote = row.remoteSessionId || sessionId;
+    const tryLoad = compat.resume === "native-load";
+
     let spawned = spawnAgentProvider({
       cwd,
-      agentId: row.agent || "opencode",
-      existingSessionId: sessionId,
+      agentId,
+      existingSessionId: tryLoad ? storedRemote : undefined,
       persistSession: true,
     });
     let provider = spawned.provider;
@@ -539,24 +785,53 @@ export class SessionStore {
     try {
       let session: Awaited<ReturnType<ACPProvider["initSession"]>>;
       try {
-        session = await initProviderSession(provider);
+        const inited = await initProviderSessionWithInteractiveAuth({
+          provider,
+          agentId,
+          launchCommand: spawned.command,
+          respawn: () => {
+            forceCleanupProvider(provider);
+            spawned = spawnAgentProvider({
+              cwd,
+              agentId,
+              existingSessionId: tryLoad ? storedRemote : undefined,
+              persistSession: true,
+            });
+            provider = spawned.provider;
+            return provider;
+          },
+        });
+        provider = inited.provider;
+        session = inited.session;
       } catch (error) {
-        if (!isMissingProviderSessionError(error)) throw error;
-        try {
-          provider.cleanup();
-        } catch {
-          /* ignore cleanup failure before a fresh provider session */
-        }
+        if (!tryLoad || !isMissingProviderSessionError(error)) throw error;
+        forceCleanupProvider(provider);
         spawned = spawnAgentProvider({
           cwd,
-          agentId: row.agent || "opencode",
+          agentId,
           persistSession: true,
         });
         provider = spawned.provider;
-        session = await initProviderSession(provider);
+        const inited = await initProviderSessionWithInteractiveAuth({
+          provider,
+          agentId: spawned.agentId,
+          launchCommand: spawned.command,
+          respawn: () => {
+            forceCleanupProvider(provider);
+            spawned = spawnAgentProvider({
+              cwd,
+              agentId,
+              persistSession: true,
+            });
+            provider = spawned.provider;
+            return provider;
+          },
+        });
+        provider = inited.provider;
+        session = inited.session;
       }
-      const providerSessionId = session.sessionId;
-      if (!providerSessionId) {
+      const remoteSessionId = session.sessionId;
+      if (!remoteSessionId) {
         throw new BridgeError(
           "session_init_failed",
           `${spawned.agentId} ACP initSession did not return a sessionId`,
@@ -565,35 +840,51 @@ export class SessionStore {
       }
       let entry: SessionEntry | null = null;
       let pendingConfigOptions: unknown = null;
-      installClientHandlers(provider, approvals, cwd, providerSessionId, (options) => {
+      installClientHandlers(provider, approvals, cwd, remoteSessionId, (options) => {
         if (entry) this.#applyConfigOptions(entry, options);
         else pendingConfigOptions = options;
       });
-      const info = infoFromRow(row);
+      let info = infoFromRow(row);
       // Refresh mode/model catalogs from live ACP (configOptions / legacy).
-      const normalized = normalizeAcpSessionConfig(session);
+      const normalized = this.#compatCatalog(
+        agentId,
+        normalizeAcpSessionConfig(session),
+      );
       if (normalized.modes) info.modes = normalized.modes;
       if (normalized.models) info.models = normalized.models;
       if (normalized.thoughtLevels) info.thoughtLevels = normalized.thoughtLevels;
       if (normalized.fastOptions) info.fastOptions = normalized.fastOptions;
-      this.#rememberCatalog(cwd, normalized);
-      if (normalized.modes || normalized.models || normalized.thoughtLevels) {
-        this.#persistInfo(info);
-      }
-      entry = { info, providerSessionId, provider, approvals };
+      info = applyInfoCatalog(info);
+      this.#rememberCatalog(agentId, cwd, {
+        modes: info.modes,
+        models: info.models,
+        thoughtLevels: info.thoughtLevels,
+        fastOptions: info.fastOptions,
+      });
+      this.#persistInfo(info);
+      this.#db.updateRemoteSession(sessionId, remoteSessionId, compat.resume);
+      entry = {
+        info,
+        remoteSessionId,
+        resumeBehavior: compat.resume,
+        provider,
+        approvals,
+      };
       this.#sessions.set(sessionId, entry);
       if (pendingConfigOptions) {
         this.#applyConfigOptions(entry, pendingConfigOptions);
       }
       await this.#ensureSessionCatalog(entry);
+      this.#rememberModelConfig(sessionId, sessionInfoToConfigDto(entry.info));
       return entry;
     } catch (err) {
+      const authMethods = readProviderAuthMethods(provider);
       try {
         provider.cleanup();
       } catch {
         /* ignore */
       }
-      throw classifySessionInitError(err, spawned.agentId);
+      throw classifySessionInitError(err, spawned.agentId, { authMethods });
     }
   }
 
@@ -606,8 +897,16 @@ export class SessionStore {
   /** Session mode/model config for the frontend SessionConfigBar. */
   async getConfig(sessionId: string): Promise<SessionConfigDto> {
     const entry = await this.ensureOpen(sessionId);
-    await this.#ensureSessionCatalog(entry);
-    return sessionInfoToConfigDto(entry.info);
+    entry.info = applyInfoCatalog(entry.info);
+    if (hasFullCatalog(entry.info)) {
+      return sessionInfoToConfigDto(entry.info);
+    }
+    return this.#withSessionOp(sessionId, "get-config", async (signal) => {
+      const live = await this.ensureOpen(sessionId);
+      await rejectWhenAborted(signal, this.#ensureSessionCatalog(live));
+      live.info = applyInfoCatalog(live.info);
+      return sessionInfoToConfigDto(live.info);
+    });
   }
 
   async setMode(sessionId: string, modeId: string): Promise<SessionConfigDto> {
@@ -615,28 +914,31 @@ export class SessionStore {
     if (!trimmed) {
       throw new BridgeError("invalid_mode", "modeId must be a non-empty string", 400);
     }
-    const entry = await this.ensureOpen(sessionId);
-    await this.#ensureSessionCatalog(entry);
-    try {
-      await entry.provider.setMode(trimmed);
-    } catch (err) {
-      throw new BridgeError(
-        "set_mode_failed",
-        err instanceof Error ? err.message : String(err),
-        502,
-      );
-    }
-    const modes = {
-      currentModeId: trimmed,
-      availableModes: entry.info.modes?.availableModes ?? [],
-    };
-    entry.info = {
-      ...entry.info,
-      modes,
-      updatedAt: new Date().toISOString(),
-    };
-    this.#persistInfo(entry.info);
-    return sessionInfoToConfigDto(entry.info);
+    return this.#withSessionOp(sessionId, "set-mode", async (signal) => {
+      const entry = await this.ensureOpen(sessionId);
+      await rejectWhenAborted(signal, this.#ensureSessionCatalog(entry));
+      try {
+        await rejectWhenAborted(signal, entry.provider.setMode(trimmed));
+      } catch (err) {
+        if (err instanceof BridgeError) throw err;
+        throw new BridgeError(
+          "set_mode_failed",
+          errorText(err) || "Failed to set mode",
+          502,
+        );
+      }
+      const modes = {
+        currentModeId: trimmed,
+        availableModes: entry.info.modes?.availableModes ?? [],
+      };
+      entry.info = {
+        ...entry.info,
+        modes,
+        updatedAt: new Date().toISOString(),
+      };
+      this.#persistInfo(entry.info);
+      return sessionInfoToConfigDto(entry.info);
+    });
   }
 
   async setModel(sessionId: string, modelId: string): Promise<SessionConfigDto> {
@@ -648,28 +950,10 @@ export class SessionStore {
         400,
       );
     }
-    const entry = await this.ensureOpen(sessionId);
-    await this.#ensureSessionCatalog(entry);
-    try {
-      await entry.provider.setModel(trimmed);
-    } catch (err) {
-      throw new BridgeError(
-        "set_model_failed",
-        err instanceof Error ? err.message : String(err),
-        502,
-      );
-    }
-    const models = {
-      currentModelId: trimmed,
-      availableModels: entry.info.models?.availableModels ?? [],
-    };
-    entry.info = {
-      ...entry.info,
-      models,
-      updatedAt: new Date().toISOString(),
-    };
-    this.#persistInfo(entry.info);
-    return sessionInfoToConfigDto(entry.info);
+    return this.#withSessionOp(sessionId, "set-model", async (signal) => {
+      const entry = await this.ensureOpen(sessionId);
+      return this.#setModelUnlocked(entry, trimmed, signal);
+    });
   }
 
   async setConfigOption(
@@ -686,23 +970,52 @@ export class SessionStore {
         400,
       );
     }
-    const entry = await this.ensureOpen(sessionId);
-    const model = entry.provider.languageModel() as unknown as PermissionAwareModel;
-    const setter = model.connection?.setSessionConfigOption?.bind(model.connection);
-    if (!setter) {
-      throw new BridgeError(
-        "config_option_unsupported",
-        `${entry.info.agent} does not support session configuration options`,
-        409,
+    return this.#withSessionOp(sessionId, "set-config-option", async (signal) => {
+      const entry = await this.ensureOpen(sessionId);
+      const response = await rejectWhenAborted(
+        signal,
+        setSessionConfigOption(entry.provider, {
+          sessionId: entry.remoteSessionId,
+          configId: trimmedConfigId,
+          value: trimmedValue,
+        }),
       );
-    }
-    try {
-      const response = await setter({
-        sessionId: entry.providerSessionId,
-        configId: trimmedConfigId,
-        value: trimmedValue,
-      });
-      if (Array.isArray(response.configOptions)) {
+      if (response === undefined) {
+        if (trimmedConfigId === MODE_THOUGHT_CONFIG_ID) {
+          try {
+            await rejectWhenAborted(
+              signal,
+              entry.provider.setMode(trimmedValue),
+            );
+          } catch (err) {
+            if (err instanceof BridgeError) throw err;
+            throw new BridgeError(
+              "set_mode_failed",
+              errorText(err) || "Failed to set mode",
+              502,
+            );
+          }
+          if (entry.info.thoughtLevels?.configId === MODE_THOUGHT_CONFIG_ID) {
+            entry.info.thoughtLevels.currentId = trimmedValue;
+          }
+          if (
+            entry.info.modes?.availableModes?.some(
+              (mode) => mode.id === trimmedValue,
+            )
+          ) {
+            entry.info.modes = {
+              ...entry.info.modes,
+              currentModeId: trimmedValue,
+            };
+          }
+        } else {
+          throw new BridgeError(
+            "config_option_unsupported",
+            `${entry.info.agent} does not support session configuration options`,
+            409,
+          );
+        }
+      } else if (Array.isArray(response.configOptions)) {
         this.#applyConfigOptions(entry, response.configOptions);
       } else if (entry.info.thoughtLevels?.configId === trimmedConfigId) {
         entry.info.thoughtLevels.currentId = trimmedValue;
@@ -711,98 +1024,354 @@ export class SessionStore {
       }
       entry.info.updatedAt = new Date().toISOString();
       this.#persistInfo(entry.info);
-      return sessionInfoToConfigDto(entry.info);
-    } catch (err) {
-      throw new BridgeError(
-        "set_config_option_failed",
-        err instanceof Error ? err.message : String(err),
-        502,
-      );
-    }
+      const dto = sessionInfoToConfigDto(entry.info);
+      this.#rememberModelConfig(sessionId, dto);
+      return dto;
+    });
   }
 
+  /**
+   * Config snapshot for one model. Bridge chooses advertised / cache /
+   * same-session serial probe (no throwaway ACP session).
+   */
+  async getModelConfig(
+    sessionId: string,
+    modelId: string,
+  ): Promise<SessionConfigDto & { modelId: string }> {
+    const trimmed = modelId.trim();
+    if (!trimmed) {
+      throw new BridgeError(
+        "invalid_model",
+        "modelId must be a non-empty string",
+        400,
+      );
+    }
+    return this.#withSessionOp(sessionId, "probe-model-config", async (signal) => {
+      return this.#getModelConfigUnlocked(sessionId, trimmed, signal);
+    });
+  }
+
+  /** Compat wrapper: old POST probe path. */
   async probeModelConfig(
     sessionId: string,
     modelId: string,
   ): Promise<SessionConfigDto & { modelId: string }> {
-    const entry = await this.ensureOpen(sessionId);
-    const originalModelId = entry.info.models?.currentModelId ?? null;
-    await this.setModel(sessionId, modelId);
-    const probed = sessionInfoToConfigDto(entry.info);
-    if (originalModelId && originalModelId !== modelId) {
-      await this.setModel(sessionId, originalModelId);
-    }
-    return { ...probed, modelId };
+    return this.getModelConfig(sessionId, modelId);
   }
 
   async probeModelsConfig(
     sessionId: string,
     modelIds: string[],
   ): Promise<Array<SessionConfigDto & { modelId: string }>> {
-    const entry = await this.ensureOpen(sessionId);
-    const originalModelId = entry.info.models?.currentModelId ?? null;
-    const probes: Array<SessionConfigDto & { modelId: string }> = [];
-    try {
-      for (const modelId of modelIds) {
-        await this.setModel(sessionId, modelId);
-        probes.push({ ...sessionInfoToConfigDto(entry.info), modelId });
-      }
-    } finally {
-      if (originalModelId && entry.info.models?.currentModelId !== originalModelId) {
-        await this.setModel(sessionId, originalModelId);
-      }
+    const ids = modelIds
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    if (ids.length === 0) {
+      throw new BridgeError(
+        "invalid_models",
+        "Request body must include at least one modelId",
+        400,
+      );
     }
-    return probes;
-  }
-
-  #applyConfigOptions(entry: SessionEntry, configOptions: unknown): void {
-    const normalized = normalizeAcpSessionConfig({ configOptions });
-    if (normalized.modes) entry.info.modes = normalized.modes;
-    if (normalized.models) entry.info.models = normalized.models;
-    if (normalized.thoughtLevels) {
-      entry.info.thoughtLevels = normalized.thoughtLevels;
-    }
-    if (normalized.fastOptions) entry.info.fastOptions = normalized.fastOptions;
-    entry.info.updatedAt = new Date().toISOString();
-    this.#rememberCatalog(entry.info.cwd, normalized);
-    this.#persistInfo(entry.info);
-  }
-
-  #rememberCatalog(cwd: string, normalized: NormalizedAcpSessionConfig): void {
-    const hasModes = (normalized.modes?.availableModes?.length ?? 0) > 0;
-    const hasModels = (normalized.models?.availableModels?.length ?? 0) > 0;
-    if (
-      !hasModes &&
-      !hasModels &&
-      !normalized.thoughtLevels &&
-      !normalized.fastOptions
-    ) return;
-    const prev = this.#catalogByCwd.get(cwd) ?? {};
-    this.#catalogByCwd.set(cwd, {
-      modes: hasModes ? normalized.modes : prev.modes,
-      models: hasModels ? normalized.models : prev.models,
-      thoughtLevels: normalized.thoughtLevels ?? prev.thoughtLevels,
-      fastOptions: normalized.fastOptions ?? prev.fastOptions,
+    return this.#withSessionOp(sessionId, "probe-model-config", async (signal) => {
+      const entry = await this.ensureOpen(sessionId);
+      const originalModelId = entry.info.models?.currentModelId ?? null;
+      const probes: Array<SessionConfigDto & { modelId: string }> = [];
+      try {
+        for (const modelId of ids) {
+          const dto = await this.#setModelUnlocked(entry, modelId, signal);
+          probes.push({ ...dto, modelId });
+        }
+      } finally {
+        await this.#restoreModelAfterProbe(entry, originalModelId, signal);
+      }
+      return probes;
     });
   }
 
+  async #getModelConfigUnlocked(
+    sessionId: string,
+    modelId: string,
+    signal: AbortSignal,
+  ): Promise<SessionConfigDto & { modelId: string }> {
+    const entry = await this.ensureOpen(sessionId);
+    await rejectWhenAborted(signal, this.#ensureSessionCatalog(entry));
+    const currentModelId = entry.info.models?.currentModelId ?? null;
+    const live = sessionInfoToConfigDto(entry.info);
+    const liveHasThoughtOrFast =
+      live.thoughtLevels.length > 0 || live.fastOptions.length > 0;
+    const discovery = resolveAgentCompat(entry.info.agent).configDiscovery;
+    const cached = this.#cachedModelConfig(sessionId, modelId);
+    const cachedUsable =
+      !!cached &&
+      (cached.thoughtLevels.length > 0 || cached.fastOptions.length > 0);
+
+    if (currentModelId === modelId) {
+      if (liveHasThoughtOrFast || discovery === "advertised") {
+        this.#rememberModelConfig(sessionId, live);
+        return { ...live, modelId };
+      }
+      try {
+        const probed = await this.#setModelUnlocked(entry, modelId, signal);
+        return { ...probed, modelId };
+      } catch {
+        this.#rememberModelConfig(sessionId, live);
+        return { ...live, modelId };
+      }
+    }
+
+    if (
+      shouldSkipModelConfigProbe({
+        configDiscovery: discovery,
+        currentModelId,
+        requestedModelId: modelId,
+        hasCachedSnapshot: cachedUsable,
+        liveHasThoughtOrFast,
+      })
+    ) {
+      if (cachedUsable && cached) {
+        return {
+          ...live,
+          currentModelId: modelId,
+          thoughtLevels: cached.thoughtLevels,
+          fastOptions: cached.fastOptions,
+          thoughtLevelConfigId: cached.thoughtLevelConfigId,
+          currentThoughtLevelId: cached.currentThoughtLevelId,
+          fastConfigId: cached.fastConfigId,
+          currentFastId: cached.currentFastId,
+          modelId,
+        };
+      }
+      return { ...live, currentModelId: modelId, modelId };
+    }
+
+    const originalModelId = currentModelId;
+    try {
+      const probed = await this.#setModelUnlocked(entry, modelId, signal);
+      this.#rememberModelConfig(sessionId, { ...probed, currentModelId: modelId });
+      return { ...probed, currentModelId: modelId, modelId };
+    } finally {
+      await this.#restoreModelAfterProbe(entry, originalModelId, signal);
+    }
+  }
+
+  async #setModelUnlocked(
+    entry: SessionEntry,
+    modelId: string,
+    signal: AbortSignal,
+  ): Promise<SessionConfigDto> {
+    await rejectWhenAborted(signal, this.#ensureSessionCatalog(entry));
+    // Prefer session/set_config_option: OpenCode (and ACP v2) return the full
+    // configOptions snapshot, including per-model thought_level. Legacy
+    // session/set_model does not.
+    const viaConfigOption = await this.#trySetModelViaConfigOption(
+      entry,
+      modelId,
+      signal,
+    );
+    if (!viaConfigOption) {
+      try {
+        const result: unknown = await rejectWhenAborted(
+          signal,
+          entry.provider.setModel(modelId),
+        );
+        if (
+          result &&
+          typeof result === "object" &&
+          Array.isArray((result as { configOptions?: unknown }).configOptions)
+        ) {
+          this.#applyConfigOptions(
+            entry,
+            (result as { configOptions: unknown }).configOptions,
+          );
+        }
+      } catch (err) {
+        if (err instanceof BridgeError) throw err;
+        const classified = resolveAgentCompat(entry.info.agent).classifyError?.(
+          err,
+          "config",
+        );
+        if (classified) {
+          throw new BridgeError(
+            classified.code,
+            classified.message,
+            classified.status,
+            classified.details,
+          );
+        }
+        throw new BridgeError(
+          "set_model_failed",
+          errorText(err) || "Failed to set model",
+          502,
+        );
+      }
+    }
+    const models = {
+      currentModelId: modelId,
+      availableModels: entry.info.models?.availableModels ?? [],
+    };
+    entry.info = {
+      ...entry.info,
+      models,
+      updatedAt: new Date().toISOString(),
+    };
+    this.#persistInfo(entry.info);
+    const dto = sessionInfoToConfigDto(entry.info);
+    this.#rememberModelConfig(entry.info.sessionId, dto);
+    return dto;
+  }
+
+  #applyConfigOptions(entry: SessionEntry, configOptions: unknown): void {
+    const normalized = this.#compatCatalog(
+      entry.info.agent,
+      normalizeAcpSessionConfig({ configOptions }),
+    );
+    if (normalized.modes) entry.info.modes = normalized.modes;
+    if (normalized.models) entry.info.models = normalized.models;
+    const catalogRefresh = Boolean(normalized.models || normalized.modes);
+    if (normalized.thoughtLevels) {
+      entry.info.thoughtLevels = normalized.thoughtLevels;
+    } else if (catalogRefresh) {
+      entry.info.thoughtLevels = undefined;
+    }
+    if (normalized.fastOptions) {
+      entry.info.fastOptions = normalized.fastOptions;
+    } else if (catalogRefresh) {
+      entry.info.fastOptions = undefined;
+    }
+    entry.info.updatedAt = new Date().toISOString();
+    this.#rememberCatalog(entry.info.agent, entry.info.cwd, normalized);
+    this.#persistInfo(entry.info);
+    this.#rememberModelConfig(entry.info.sessionId, sessionInfoToConfigDto(entry.info));
+  }
+
+  #compatCatalog(
+    agentId: string,
+    normalized: NormalizedAcpSessionConfig,
+  ): NormalizedAcpSessionConfig {
+    return applyCompatCatalog(agentId, normalized);
+  }
+
+  async #trySetModelViaConfigOption(
+    entry: SessionEntry,
+    modelId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      const response = await rejectWhenAborted(
+        signal,
+        setSessionConfigOption(entry.provider, {
+          sessionId: entry.remoteSessionId,
+          configId: "model",
+          value: modelId,
+        }),
+      );
+      if (response === undefined) return false;
+      if (Array.isArray(response.configOptions)) {
+        this.#applyConfigOptions(entry, response.configOptions);
+      }
+      return true;
+    } catch (err) {
+      if (err instanceof BridgeError && err.code === "request_aborted") {
+        throw err;
+      }
+      return false;
+    }
+  }
+
+  async #restoreModelAfterProbe(
+    entry: SessionEntry,
+    originalModelId: string | null,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const original = originalModelId?.trim() ?? "";
+    if (!original) return;
+    if (entry.info.models?.currentModelId === original) return;
+    try {
+      await this.#setModelUnlocked(entry, original, signal);
+      return;
+    } catch {
+      const outcome = await restoreProbedModel({
+        originalModelId: original,
+        currentModelId: entry.info.models?.currentModelId,
+        restore: (modelId) => entry.provider.setModel(modelId),
+      });
+      if (outcome === "skipped" || !entry.info.models) return;
+      entry.info = {
+        ...entry.info,
+        models: { ...entry.info.models, currentModelId: original },
+        updatedAt: new Date().toISOString(),
+      };
+      this.#persistInfo(entry.info);
+    }
+  }
+
+  #rememberCatalog(
+    agentId: string,
+    cwd: string,
+    normalized: NormalizedAcpSessionConfig,
+  ): void {
+    this.#catalog.remember(agentId, cwd, normalized);
+  }
+
+  #rememberModelConfig(sessionId: string, dto: SessionConfigDto): void {
+    const modelId = dto.currentModelId;
+    if (!modelId) return;
+    let byModel = this.#modelConfigBySession.get(sessionId);
+    if (!byModel) {
+      byModel = new Map();
+      this.#modelConfigBySession.set(sessionId, byModel);
+    }
+    byModel.set(modelId, dto);
+  }
+
+  #cachedModelConfig(
+    sessionId: string,
+    modelId: string,
+  ): SessionConfigDto | undefined {
+    return this.#modelConfigBySession.get(sessionId)?.get(modelId);
+  }
+
   /**
-   * When loadSession omits catalogs, fill from cwd cache or a throwaway session/new probe.
+   * When loadSession omits catalogs, fill from agent+cwd cache or a throwaway session/new probe.
    */
   async #ensureSessionCatalog(entry: SessionEntry): Promise<void> {
+    entry.info = applyInfoCatalog(entry.info);
+    const discovery = resolveAgentCompat(entry.info.agent).configDiscovery;
     const hasModes = (entry.info.modes?.availableModes?.length ?? 0) > 0;
     const hasModels = (entry.info.models?.availableModels?.length ?? 0) > 0;
     if (hasModes && hasModels) {
-      this.#rememberCatalog(entry.info.cwd, {
+      let changed = false;
+      if (discovery === "advertised") {
+        const cached = this.#catalog.get(entry.info.agent, entry.info.cwd);
+        if (!entry.info.thoughtLevels && cached?.thoughtLevels) {
+          entry.info = {
+            ...entry.info,
+            thoughtLevels: cached.thoughtLevels,
+            updatedAt: new Date().toISOString(),
+          };
+          changed = true;
+        }
+        if (!entry.info.fastOptions && cached?.fastOptions) {
+          entry.info = {
+            ...entry.info,
+            fastOptions: cached.fastOptions,
+            updatedAt: new Date().toISOString(),
+          };
+          changed = true;
+        }
+      }
+      this.#rememberCatalog(entry.info.agent, entry.info.cwd, {
         modes: entry.info.modes,
         models: entry.info.models,
         thoughtLevels: entry.info.thoughtLevels,
         fastOptions: entry.info.fastOptions,
       });
+      if (changed) this.#persistInfo(entry.info);
       return;
     }
 
-    let catalog = this.#catalogByCwd.get(entry.info.cwd);
+    let catalog = this.#catalog.get(entry.info.agent, entry.info.cwd);
     const cacheOk =
       (catalog?.modes?.availableModes?.length ?? 0) > 0 &&
       (catalog?.models?.availableModels?.length ?? 0) > 0;
@@ -828,19 +1397,27 @@ export class SessionStore {
       };
       changed = true;
     }
-    if (!entry.info.thoughtLevels && catalog.thoughtLevels) {
+    if (
+      discovery === "advertised" &&
+      !entry.info.thoughtLevels &&
+      catalog.thoughtLevels
+    ) {
       entry.info.thoughtLevels = catalog.thoughtLevels;
       changed = true;
     }
-    if (!entry.info.fastOptions && catalog.fastOptions) {
+    if (
+      discovery === "advertised" &&
+      !entry.info.fastOptions &&
+      catalog.fastOptions
+    ) {
       entry.info.fastOptions = catalog.fastOptions;
       changed = true;
     }
     if (changed) {
-      entry.info = {
+      entry.info = applyInfoCatalog({
         ...entry.info,
         updatedAt: new Date().toISOString(),
-      };
+      });
       this.#persistInfo(entry.info);
     }
   }
@@ -849,7 +1426,7 @@ export class SessionStore {
     cwd: string,
     agentId = "opencode",
   ): Promise<NormalizedAcpSessionConfig> {
-    const key = `${agentId}::${cwd}`;
+    const key = catalogCacheKey(agentId, cwd);
     const pending = this.#catalogProbe.get(key);
     if (pending) return pending;
 
@@ -862,8 +1439,11 @@ export class SessionStore {
       const { provider } = spawned;
       try {
         const session = await initProviderSession(provider);
-        const normalized = normalizeAcpSessionConfig(session);
-        this.#rememberCatalog(cwd, normalized);
+        const normalized = this.#compatCatalog(
+          agentId,
+          normalizeAcpSessionConfig(session),
+        );
+        this.#rememberCatalog(agentId, cwd, normalized);
         return normalized;
       } finally {
         try {
@@ -883,6 +1463,7 @@ export class SessionStore {
   }
 
   #persistInfo(info: SessionInfo): void {
+    const live = this.#sessions.get(info.sessionId);
     this.#db.upsertSession({
       sessionId: info.sessionId,
       agent: info.agent,
@@ -890,8 +1471,9 @@ export class SessionStore {
       title: info.title ?? null,
       createdAt: info.createdAt,
       updatedAt: info.updatedAt ?? new Date().toISOString(),
-      modesJson: info.modes ? JSON.stringify(info.modes) : null,
-      modelsJson: info.models ? JSON.stringify(info.models) : null,
+      ...catalogPersistFields(info),
+      remoteSessionId: live?.remoteSessionId,
+      resumeBehavior: live?.resumeBehavior,
     });
   }
 
@@ -936,7 +1518,14 @@ export class SessionStore {
     }
     const next = infoFromRow(row);
     const live = this.#sessions.get(sessionId);
-    if (live) live.info = next;
+    if (live) {
+      live.info = {
+        ...next,
+        thoughtLevels: next.thoughtLevels ?? live.info.thoughtLevels,
+        fastOptions: next.fastOptions ?? live.info.fastOptions,
+      };
+      return live.info;
+    }
     return next;
   }
 
@@ -959,6 +1548,7 @@ export class SessionStore {
         /* ignore cleanup errors */
       }
     }
+    this.#modelConfigBySession.delete(sessionId);
     this.#db.deleteSession(sessionId);
   }
 
@@ -969,6 +1559,7 @@ export class SessionStore {
     for (const id of [...this.#sessions.keys()]) {
       const entry = this.#sessions.get(id);
       this.#sessions.delete(id);
+      this.#modelConfigBySession.delete(id);
       if (!entry) continue;
       entry.approvals.cancelAll();
       try {

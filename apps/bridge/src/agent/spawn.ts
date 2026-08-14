@@ -4,7 +4,7 @@
 import { createACPProvider } from "@mcpc-tech/acp-ai-provider";
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 import { BridgeError } from "../errors.ts";
-import { buildOpenCodeConfigContent } from "../opencode-config.ts";
+import { resolveAgentCompat } from "./compat/registry.ts";
 import { resolveLaunchCommand } from "./detect.ts";
 
 function cleanEnv(
@@ -61,31 +61,31 @@ export function spawnAgentProvider(input: SpawnAgentInput): SpawnedAgent {
     );
   }
 
+  const compat = resolveAgentCompat(launch.agentId);
   const envExtra: Record<string, string | undefined> = {
     ACP_AI_PROVIDER_DEBUG: process.env.ACP_AI_PROVIDER_DEBUG,
     ...(launch.env ?? {}),
   };
-
-  // OpenCode-only inline permission / config injection.
-  if (launch.agentId === "opencode") {
-    try {
-      envExtra.OPENCODE_CONFIG_CONTENT = buildOpenCodeConfigContent(
-        process.env.OPENCODE_CONFIG_CONTENT,
-      );
-    } catch (err) {
-      throw new BridgeError(
-        "invalid_opencode_config",
-        err instanceof Error ? err.message : String(err),
-        500,
-      );
-    }
-  }
+  const patch = compat.augmentLaunch?.({
+    cwd: input.cwd,
+    agentId: launch.agentId,
+    command: launch.command,
+    env: Object.fromEntries(
+      Object.entries(envExtra).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    existingSessionId: input.existingSessionId,
+    persistSession: input.persistSession ?? true,
+  });
+  if (patch?.env) Object.assign(envExtra, patch.env);
 
   const provider = createACPProvider({
     command,
-    args,
+    args: patch?.args ?? args,
     session: { cwd: input.cwd, mcpServers: [] },
-    existingSessionId: input.existingSessionId,
+    existingSessionId:
+      compat.resume === "native-load" ? input.existingSessionId : undefined,
     persistSession: input.persistSession ?? true,
     env: cleanEnv(envExtra),
   });

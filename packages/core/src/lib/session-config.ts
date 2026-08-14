@@ -11,6 +11,7 @@ export type SessionOption = {
 /** Structured auth challenge when ACP requires login before session/new. */
 export type AuthChallenge = {
   detail: string;
+  /** May be empty when Bridge has not advertised login methods yet. */
   methods: AuthMethodInfo[];
   agentName?: string | null;
 };
@@ -31,6 +32,8 @@ export type SessionConfig = {
   error: string | null;
   /** Present when spawn failed with ACP auth_required. */
   authChallenge: AuthChallenge | null;
+  /** Agent reports native session resume; UI does not branch on agent id. */
+  nativeResume?: boolean;
 };
 
 export const EMPTY_SESSION_CONFIG: SessionConfig = {
@@ -82,4 +85,12 @@ export function optionLabel(
     return options[0]?.name ?? fallback;
   }
   return options.find((option) => option.id === currentId)?.name ?? currentId;
+}
+
+/** Empty thought/fast snapshots are not a cache hit — allow a refetch/probe. */
+export function hasModelConfigOptions(snapshot: {
+  thoughtLevels: SessionOption[];
+  fastOptions: SessionOption[];
+}): boolean {
+  return snapshot.thoughtLevels.length > 0 || snapshot.fastOptions.length > 0;
 }

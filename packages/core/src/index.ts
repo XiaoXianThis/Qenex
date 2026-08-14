@@ -5,6 +5,8 @@ export * from "./context/SessionConfigContext.tsx";
 export {
   BridgeApiError,
   isAuthRequiredError,
+  isInteractiveAuthMethod,
+  stringifyErrorMessage,
   bridgeFetch,
   fetchJson,
   getBridgeHost,

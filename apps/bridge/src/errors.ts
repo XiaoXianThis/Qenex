@@ -3,6 +3,7 @@
  * Prefer ~/.bun/bin/opencode over accidental node_modules shims.
  */
 import { existsSync } from "node:fs";
+import { errorText } from "./agent/compat/types.ts";
 
 export function resolveOpenCodeBin(
   env: NodeJS.ProcessEnv = process.env,
@@ -60,18 +61,24 @@ export class BridgeError extends Error {
 
 export function jsonError(err: unknown): Response {
   if (err instanceof BridgeError) {
+    const message =
+      typeof err.message === "string" &&
+      err.message.trim() &&
+      err.message !== "[object Object]"
+        ? err.message
+        : errorText(err.details) || errorText(err) || "internal error";
     return Response.json(
       {
         error: {
           code: err.code,
-          message: err.message,
+          message,
           details: err.details ?? undefined,
         },
       },
       { status: err.status },
     );
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorText(err) || "internal error";
   return Response.json(
     { error: { code: "internal_error", message } },
     { status: 500 },

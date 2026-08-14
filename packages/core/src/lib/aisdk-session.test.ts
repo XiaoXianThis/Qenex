@@ -2,13 +2,17 @@ import { describe, expect, test, beforeEach } from "bun:test";
 import type { QenexHost } from "@qenex/platform";
 import {
   BridgeClientError,
+  authChallengeFromError,
   clearSessionBootCache,
+  createAisdkSession,
   ensureAisdkSession,
   formatBridgeError,
   invalidateSessionBoot,
   isAisdkSessionId,
+  SESSION_CREATE_TIMEOUT_MS,
   sessionBootKey,
 } from "./aisdk-session.ts";
+import { isAuthRequiredError } from "./bridge-client.ts";
 
 function mockHost(fetchImpl: QenexHost["fetch"]): QenexHost {
   return {
@@ -73,6 +77,36 @@ describe("aisdk-session helpers", () => {
         ),
       ),
     ).toContain("余额不足");
+  });
+
+  test("formatBridgeError does not emit [object Object]", () => {
+    expect(
+      formatBridgeError(
+        new BridgeClientError("set_model_failed", "[object Object]", 502),
+      ),
+    ).toBe("切换模型失败。");
+    expect(
+      formatBridgeError(
+        new BridgeClientError("set_model_failed", {
+          message: "model rejected",
+        } as unknown as string, 502),
+      ),
+    ).toContain("model rejected");
+    expect(formatBridgeError({ message: { message: "nested" } })).toBe("nested");
+  });
+
+  test("formatBridgeError auth_required is Chinese with agent name", () => {
+    const err = new BridgeClientError(
+      "auth_required",
+      "gemini requires authentication. Complete login for this agent, then retry.",
+      409,
+      { methods: [], agentName: "gemini" },
+    );
+    const text = formatBridgeError(err);
+    expect(text).toContain("gemini");
+    expect(text).toContain("需要登录");
+    expect(text).not.toContain("requires authentication");
+    expect(text).not.toContain("[object Object]");
   });
 });
 
@@ -140,6 +174,83 @@ describe("ensureAisdkSession dedupe", () => {
     const ok = await ensureAisdkSession("tab-y", "/tmp/ws", host);
     expect(posts).toBe(2);
     expect(ok.sessionId).toBe("ses_retry");
+  });
+});
+
+describe("createAisdkSession auth errors", () => {
+  test("create session waits long enough for in-process browser login", () => {
+    expect(SESSION_CREATE_TIMEOUT_MS).toBe(8 * 60_000);
+  });
+
+  test("preserves methods and is detectable as auth required", async () => {
+    const host = mockHost(async () => {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "auth_required",
+            message: {
+              text: "gemini requires authentication. Complete login for this agent, then retry.",
+            },
+            details: {
+              methods: [
+                {
+                  id: "google_login",
+                  type: "browser",
+                  name: "Google",
+                  description: "Sign in with Google",
+                },
+              ],
+              agentName: "gemini",
+              cause: "unauthorized",
+            },
+          },
+        }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    let caught: unknown;
+    try {
+      await createAisdkSession("/tmp/ws", host, { agentId: "gemini" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BridgeClientError);
+    expect(isAuthRequiredError(caught)).toBe(true);
+    const client = caught as BridgeClientError;
+    expect(client.code).toBe("auth_required");
+    expect(client.message).not.toContain("[object Object]");
+    expect(client.details).toMatchObject({
+      agentName: "gemini",
+      methods: [{ id: "google_login" }],
+    });
+    const challenge = authChallengeFromError(client, "Gemini CLI");
+    expect(challenge.agentName).toBe("Gemini CLI");
+    expect(challenge.methods[0]?.id).toBe("google_login");
+    expect(challenge.detail).toContain("需要登录");
+    expect(challenge.detail).not.toContain("requires authentication");
+  });
+
+  test("detects auth even when methods are missing", async () => {
+    const host = mockHost(async () => {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "auth_required",
+            message: "gemini requires authentication. Complete login for this agent, then retry.",
+          },
+        }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      );
+    });
+    let caught: unknown;
+    try {
+      await createAisdkSession("/tmp/ws", host);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isAuthRequiredError(caught)).toBe(true);
+    expect(authChallengeFromError(caught).methods).toEqual([]);
   });
 });
 
@@ -241,15 +352,17 @@ describe("session config REST helpers", () => {
   test("get / set mode / set model", async () => {
     const {
       getAisdkSessionConfig,
-      probeAisdkSessionModelConfig,
-      probeAisdkSessionModelsConfig,
+      getAisdkSessionModelConfig,
       setAisdkSessionConfigOption,
       setAisdkSessionMode,
       setAisdkSessionModel,
     } = await import("./aisdk-session.ts");
     const host = mockHost(async (input, init) => {
       const url = String(input);
-      if (url.endsWith("/config") && (!init?.method || init.method === "GET")) {
+      if (
+        /\/api\/sessions\/[^/]+\/config$/.test(url) &&
+        (!init?.method || init.method === "GET")
+      ) {
         return new Response(
           JSON.stringify({
             sessionId: "ses_c",
@@ -257,6 +370,7 @@ describe("session config REST helpers", () => {
             models: [{ id: "m1", name: "Model 1" }],
             currentModeId: "build",
             currentModelId: "m1",
+            nativeResume: true,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -307,21 +421,27 @@ describe("session config REST helpers", () => {
           currentThoughtLevelId: "high",
         });
       }
-      if (url.endsWith("/probe-model-config") && init?.method === "POST") {
-        return Response.json({
-          modelId: "m2",
-          thoughtLevels: [{ id: "high", name: "High" }],
-          thoughtLevelConfigId: "reasoning_effort",
-          currentThoughtLevelId: "high",
-        });
-      }
-      if (url.endsWith("/probe-models-config") && init?.method === "POST") {
-        return Response.json({
-          probes: [
-            { modelId: "m1", thoughtLevels: [{ id: "low", name: "Low" }] },
-            { modelId: "m2", thoughtLevels: [{ id: "high", name: "High" }] },
-          ],
-        });
+      const modelConfigMatch = url.match(
+        /\/api\/sessions\/[^/]+\/models\/([^/]+)\/config$/,
+      );
+      if (modelConfigMatch && (!init?.method || init.method === "GET")) {
+        const modelId = decodeURIComponent(modelConfigMatch[1]!);
+        if (modelId === "m2") {
+          return Response.json({
+            modelId: "m2",
+            thoughtLevels: [{ id: "high", name: "High" }],
+            thoughtLevelConfigId: "reasoning_effort",
+            currentThoughtLevelId: "high",
+          });
+        }
+        if (modelId === "m1") {
+          return Response.json({
+            modelId: "m1",
+            thoughtLevels: [{ id: "low", name: "Low" }],
+            thoughtLevelConfigId: "reasoning_effort",
+            currentThoughtLevelId: "low",
+          });
+        }
       }
       return new Response("nope", { status: 404 });
     });
@@ -330,6 +450,7 @@ describe("session config REST helpers", () => {
     expect(cfg.ready).toBe(true);
     expect(cfg.currentModeId).toBe("build");
     expect(cfg.modes[0]?.id).toBe("build");
+    expect(cfg.nativeResume).toBe(true);
 
     const afterMode = await setAisdkSessionMode("ses_c", "plan", host);
     expect(afterMode.currentModeId).toBe("plan");
@@ -345,15 +466,12 @@ describe("session config REST helpers", () => {
     );
     expect(afterThought.currentThoughtLevelId).toBe("high");
 
-    const probe = await probeAisdkSessionModelConfig("ses_c", "m2", host);
-    expect(probe.modelId).toBe("m2");
-    expect(probe.currentThoughtLevelId).toBe("high");
+    const modelCfg = await getAisdkSessionModelConfig("ses_c", "m2", host);
+    expect(modelCfg.modelId).toBe("m2");
+    expect(modelCfg.currentThoughtLevelId).toBe("high");
 
-    const probes = await probeAisdkSessionModelsConfig(
-      "ses_c",
-      ["m1", "m2"],
-      host,
-    );
-    expect(probes.map((item) => item.modelId)).toEqual(["m1", "m2"]);
+    const other = await getAisdkSessionModelConfig("ses_c", "m1", host);
+    expect(other.modelId).toBe("m1");
+    expect(other.thoughtLevels.map((item) => item.id)).toEqual(["low"]);
   });
 });

@@ -7,9 +7,14 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { UIMessage } from "ai";
+import type { ResumeBehavior } from "./agent/compat/types.ts";
 
 export type PersistedSessionRow = {
+  /** UI / URL / DB primary key. Stable across ACP reconnects. */
   sessionId: string;
+  /** ACP session id. May rotate when load fails and we spawn fresh. */
+  remoteSessionId: string;
+  resumeBehavior: ResumeBehavior;
   agent: string;
   cwd: string;
   title: string | null;
@@ -17,7 +22,48 @@ export type PersistedSessionRow = {
   updatedAt: string;
   modesJson: string | null;
   modelsJson: string | null;
+  thoughtLevelsJson: string | null;
+  fastOptionsJson: string | null;
 };
+
+type SessionQueryRow = {
+  session_id: string;
+  agent: string;
+  cwd: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  modes_json: string | null;
+  models_json: string | null;
+  thought_levels_json: string | null;
+  fast_options_json: string | null;
+  remote_session_id: string | null;
+  resume_behavior: string | null;
+};
+
+function parseResumeBehavior(raw: string | null | undefined): ResumeBehavior {
+  if (raw === "reconnect-fresh" || raw === "none" || raw === "native-load") {
+    return raw;
+  }
+  return "native-load";
+}
+
+function mapSessionRow(row: SessionQueryRow): PersistedSessionRow {
+  return {
+    sessionId: row.session_id,
+    remoteSessionId: row.remote_session_id || row.session_id,
+    resumeBehavior: parseResumeBehavior(row.resume_behavior),
+    agent: row.agent,
+    cwd: row.cwd,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    modesJson: row.modes_json ?? null,
+    modelsJson: row.models_json ?? null,
+    thoughtLevelsJson: row.thought_levels_json ?? null,
+    fastOptionsJson: row.fast_options_json ?? null,
+  };
+}
 
 export function resolveSessionsDbPath(
   override?: string | null,
@@ -56,7 +102,11 @@ export class SessionDb {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         modes_json TEXT,
-        models_json TEXT
+        models_json TEXT,
+        thought_levels_json TEXT,
+        fast_options_json TEXT,
+        remote_session_id TEXT,
+        resume_behavior TEXT
       );
 
       CREATE TABLE IF NOT EXISTS messages (
@@ -74,6 +124,34 @@ export class SessionDb {
       CREATE INDEX IF NOT EXISTS idx_messages_session_sort
         ON messages(session_id, sort_index);
     `);
+
+    const columns = new Set(
+      (
+        this.#db.query(`PRAGMA table_info(sessions)`).all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
+    );
+    if (!columns.has("remote_session_id")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN remote_session_id TEXT`);
+    }
+    if (!columns.has("resume_behavior")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN resume_behavior TEXT`);
+    }
+    if (!columns.has("thought_levels_json")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN thought_levels_json TEXT`);
+    }
+    if (!columns.has("fast_options_json")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN fast_options_json TEXT`);
+    }
+    this.#db.exec(`
+      UPDATE sessions
+      SET remote_session_id = session_id
+      WHERE remote_session_id IS NULL OR remote_session_id = '';
+      UPDATE sessions
+      SET resume_behavior = 'native-load'
+      WHERE resume_behavior IS NULL OR resume_behavior = '';
+    `);
   }
 
   close(): void {
@@ -89,20 +167,33 @@ export class SessionDb {
     updatedAt?: string;
     modesJson?: string | null;
     modelsJson?: string | null;
+    thoughtLevelsJson?: string | null;
+    fastOptionsJson?: string | null;
+    remoteSessionId?: string | null;
+    resumeBehavior?: ResumeBehavior | null;
   }): void {
     const updatedAt = row.updatedAt ?? row.createdAt;
+    // null on update preserves an already-rotated remote id / resume strategy.
+    const remoteSessionId = row.remoteSessionId ?? null;
+    const resumeBehavior = row.resumeBehavior ?? null;
     this.#db
       .query(
         `INSERT INTO sessions (
-          session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
+          thought_levels_json, fast_options_json,
+          remote_session_id, resume_behavior
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), COALESCE(?, 'native-load'))
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           cwd = excluded.cwd,
           title = COALESCE(excluded.title, sessions.title),
           updated_at = excluded.updated_at,
           modes_json = COALESCE(excluded.modes_json, sessions.modes_json),
-          models_json = COALESCE(excluded.models_json, sessions.models_json)`,
+          models_json = COALESCE(excluded.models_json, sessions.models_json),
+          thought_levels_json = COALESCE(excluded.thought_levels_json, sessions.thought_levels_json),
+          fast_options_json = COALESCE(excluded.fast_options_json, sessions.fast_options_json),
+          remote_session_id = COALESCE(?, sessions.remote_session_id),
+          resume_behavior = COALESCE(?, sessions.resume_behavior)`,
       )
       .run(
         row.sessionId,
@@ -113,67 +204,65 @@ export class SessionDb {
         updatedAt,
         row.modesJson ?? null,
         row.modelsJson ?? null,
+        row.thoughtLevelsJson ?? null,
+        row.fastOptionsJson ?? null,
+        remoteSessionId,
+        row.sessionId,
+        resumeBehavior,
+        remoteSessionId,
+        resumeBehavior,
       );
+  }
+
+  /** Load failed / reconnect-fresh: rotate ACP id; UI local PK stays. */
+  updateRemoteSession(
+    localSessionId: string,
+    remoteSessionId: string,
+    resumeBehavior?: ResumeBehavior,
+  ): boolean {
+    const now = new Date().toISOString();
+    const result = resumeBehavior
+      ? this.#db
+          .query(
+            `UPDATE sessions
+             SET remote_session_id = ?, resume_behavior = ?, updated_at = ?
+             WHERE session_id = ?`,
+          )
+          .run(remoteSessionId, resumeBehavior, now, localSessionId)
+      : this.#db
+          .query(
+            `UPDATE sessions
+             SET remote_session_id = ?, updated_at = ?
+             WHERE session_id = ?`,
+          )
+          .run(remoteSessionId, now, localSessionId);
+    return result.changes > 0;
   }
 
   getSession(sessionId: string): PersistedSessionRow | null {
     const row = this.#db
       .query(
-        `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json
+        `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
+                thought_levels_json, fast_options_json,
+                remote_session_id, resume_behavior
          FROM sessions WHERE session_id = ?`,
       )
-      .get(sessionId) as
-      | {
-          session_id: string;
-          agent: string;
-          cwd: string;
-          title: string | null;
-          created_at: string;
-          updated_at: string;
-          modes_json: string | null;
-          models_json: string | null;
-        }
-      | null;
+      .get(sessionId) as SessionQueryRow | null;
     if (!row) return null;
-    return {
-      sessionId: row.session_id,
-      agent: row.agent,
-      cwd: row.cwd,
-      title: row.title,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      modesJson: row.modes_json,
-      modelsJson: row.models_json,
-    };
+    return mapSessionRow(row);
   }
 
   listSessions(): PersistedSessionRow[] {
     const rows = this.#db
       .query(
-        `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json
+        `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
+                thought_levels_json, fast_options_json,
+                remote_session_id, resume_behavior
          FROM sessions
          ORDER BY updated_at DESC`,
       )
-      .all() as Array<{
-      session_id: string;
-      agent: string;
-      cwd: string;
-      title: string | null;
-      created_at: string;
-      updated_at: string;
-      modes_json: string | null;
-      models_json: string | null;
-    }>;
-    return rows.map((row) => ({
-      sessionId: row.session_id,
-      agent: row.agent,
-      cwd: row.cwd,
-      title: row.title,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      modesJson: row.modes_json,
-      modelsJson: row.models_json,
-    }));
+      .all() as SessionQueryRow[];
+    return rows.map(mapSessionRow);
   }
 
   deleteSession(sessionId: string): boolean {

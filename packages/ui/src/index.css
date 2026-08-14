@@ -289,6 +289,17 @@
   animation: thread-welcome-dot-blink 1s step-end infinite;
 }
 
+/* Turn-level waiting caret (same blink as welcome; not bound to a text part). */
+.aui-turn-caret {
+  display: inline-block;
+  margin-left: 0.25rem;
+  margin-right: 0.25rem;
+  font-family:
+    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
+  animation: thread-welcome-dot-blink 1s step-end infinite;
+}
+
 /* 组件列表：可滚动但隐藏滚动条 */
 [data-layout-component-drawer] [data-layout-component-list] {
   scrollbar-width: none;

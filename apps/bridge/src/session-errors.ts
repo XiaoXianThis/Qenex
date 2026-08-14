@@ -1,51 +1,67 @@
 import { BridgeError } from "./errors.ts";
+import { resolveAgentCompat } from "./agent/compat/registry.ts";
+import {
+  errorText,
+  extractAuthMethods,
+  mergeAuthMethods,
+} from "./agent/compat/types.ts";
+
+export type SessionInitErrorExtras = {
+  authMethods?: unknown;
+};
 
 /**
  * Classify ACP init/spawn failures into actionable error codes.
  * Keeps the same JSON error envelope — no new protocol.
+ *
+ * Timeouts stay timeouts even when initialize advertised auth methods.
+ * Gemini always lists oauth-personal; treating timeout as login false-positives
+ * already-authenticated users.
  */
+const OPAQUE_INIT_CODES = new Set(["session_init_failed", "internal_error"]);
+
 export function classifySessionInitError(
   err: unknown,
   agentId = "opencode",
+  extras?: SessionInitErrorExtras,
 ): BridgeError {
-  if (err instanceof BridgeError) return err;
+  const opaqueBridge =
+    err instanceof BridgeError && OPAQUE_INIT_CODES.has(err.code);
 
-  const message = err instanceof Error ? err.message : String(err);
-  const lower = message.toLowerCase();
-  const details = { cause: message, agentId };
-
-  if (
-    /auth|login|unauthori[sz]ed|not authenticated|authentication|token expired|please\s+run\s+.*login|opencode\s+auth|cursor.?login|agent login/i.test(
-      lower,
-    )
-  ) {
-    const code =
-      agentId === "opencode" ? "opencode_auth_required" : "auth_required";
-    return new BridgeError(
-      code,
-      agentId === "opencode"
-        ? "OpenCode requires authentication. Run `opencode auth login` (or your provider login), then retry."
-        : `${agentId} requires authentication. Complete login for this agent, then retry.`,
-      agentId === "opencode" ? 401 : 409,
-      {
-        ...details,
-        methods: [],
-        agentName: agentId,
-      },
+  if (err instanceof BridgeError && !opaqueBridge) {
+    if (!extras?.authMethods) return err;
+    const details =
+      err.details && typeof err.details === "object"
+        ? { ...(err.details as Record<string, unknown>) }
+        : { cause: errorText(err), agentId };
+    details.methods = mergeAuthMethods(
+      details.methods,
+      extras.authMethods,
+      extractAuthMethods(err),
     );
+    return new BridgeError(err.code, err.message, err.status, details);
   }
 
-  if (
-    /spawn|enoent|eacces|eperm|failed to start|cannot find|exited with code|signal\s|broken pipe|process\s+.*exited/i.test(
-      lower,
-    )
-  ) {
-    const code =
-      agentId === "opencode" ? "opencode_spawn_failed" : "agent_spawn_failed";
+  const message = errorText(err);
+  const classified = resolveAgentCompat(agentId).classifyError?.(
+    err,
+    "session-init",
+  );
+  const methods = mergeAuthMethods(
+    classified?.details?.methods,
+    extras?.authMethods,
+    extractAuthMethods(err),
+  );
+  if (classified) {
+    const details = {
+      ...(classified.details ?? { cause: message, agentId }),
+      methods,
+      agentId: classified.details?.agentId ?? agentId,
+    };
     return new BridgeError(
-      code,
-      `Failed to start the ${agentId} ACP process. Check the install / PATH and retry.`,
-      502,
+      classified.code,
+      classified.message,
+      classified.status,
       details,
     );
   }
@@ -54,6 +70,6 @@ export function classifySessionInitError(
     "session_init_failed",
     message || `${agentId} ACP session initialization failed`,
     502,
-    details,
+    { cause: message, agentId, methods },
   );
 }

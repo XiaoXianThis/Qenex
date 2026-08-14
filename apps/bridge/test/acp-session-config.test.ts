@@ -23,6 +23,17 @@ describe("acp-session-config", () => {
     ]);
   });
 
+  test("grouped options with a value still flatten nested leaves", () => {
+    const flat = flattenAcpSelectOptions([
+      {
+        value: "structure/openai/gpt-5.6-sol",
+        name: "Structure",
+        options: [{ value: "openai/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
+      },
+    ]);
+    expect(flat).toEqual([{ id: "openai/gpt-5.6-sol", name: "GPT-5.6-Sol" }]);
+  });
+
   test("maps OpenCode-style configOptions to modes/models", () => {
     const normalized = normalizeAcpSessionConfig({
       configOptions: [
@@ -115,6 +126,76 @@ describe("acp-session-config", () => {
     expect(normalized.fastOptions?.currentId).toBe("false");
   });
 
+  test("maps OpenCode effort configOption (category thought_level) to thoughtLevels", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "tokenhub/gpt-5.6-sol",
+          options: [
+            { value: "opencode/big-pickle", name: "Big Pickle" },
+            { value: "tokenhub/gpt-5.6-sol", name: "GPT 5.6 Sol" },
+          ],
+        },
+        {
+          id: "effort",
+          name: "Effort",
+          description: "Available effort levels for this model",
+          category: "thought_level",
+          type: "select",
+          currentValue: "medium",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "max", name: "Max" },
+          ],
+        },
+        {
+          id: "mode",
+          name: "Session Mode",
+          category: "mode",
+          type: "select",
+          currentValue: "build",
+          options: [
+            { value: "build", name: "build" },
+            { value: "plan", name: "plan" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thoughtLevels?.configId).toBe("effort");
+    expect(normalized.thoughtLevels?.currentId).toBe("medium");
+    expect(normalized.thoughtLevels?.available.map((level) => level.id)).toEqual(
+      ["low", "medium", "high", "max"],
+    );
+    expect(normalized.models?.currentModelId).toBe("tokenhub/gpt-5.6-sol");
+  });
+
+  test("omits thoughtLevels when OpenCode snapshot has no effort option", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "model",
+          category: "model",
+          currentValue: "opencode/big-pickle",
+          options: [{ value: "opencode/big-pickle", name: "Big Pickle" }],
+        },
+        {
+          id: "mode",
+          category: "mode",
+          currentValue: "build",
+          options: [{ value: "build", name: "build" }],
+        },
+      ],
+    });
+    expect(normalized.thoughtLevels).toBeUndefined();
+    expect(normalized.fastOptions).toBeUndefined();
+  });
+
   test("sessionInfoToConfigDto surfaces descriptions", () => {
     const dto = sessionInfoToConfigDto({
       sessionId: "ses_x",
@@ -156,5 +237,47 @@ describe("acp-session-config", () => {
     expect(dto.thoughtLevelConfigId).toBe("reasoning_effort");
     expect(dto.currentFastId).toBe("true");
     expect(dto.fastConfigId).toBe("fast");
+    expect(dto.nativeResume).toBe(true);
+  });
+
+  test("nativeResume is false for cursor-agent", () => {
+    const dto = sessionInfoToConfigDto({
+      sessionId: "ses_c",
+      agent: "cursor-agent",
+      cwd: "/tmp",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(dto.nativeResume).toBe(false);
+    expect(dto).not.toHaveProperty("configDiscovery");
+    expect(dto).not.toHaveProperty("usesPerModelConfigProbe");
+    expect(dto).not.toHaveProperty("scope");
+  });
+
+  test("nativeResume is false for qoder reconnect-fresh", () => {
+    const dto = sessionInfoToConfigDto({
+      sessionId: "ses_q",
+      agent: "qoder",
+      cwd: "/tmp",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(dto.nativeResume).toBe(false);
+  });
+
+  test("maps think alias onto thoughtLevels", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "think",
+          name: "Think",
+          currentValue: "medium",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thoughtLevels?.configId).toBe("think");
+    expect(normalized.thoughtLevels?.currentId).toBe("medium");
   });
 });
