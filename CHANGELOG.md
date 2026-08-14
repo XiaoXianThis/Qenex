@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-14 - v0.3.3 Agent compat, session hardening, approval settings
+
+### Added
+
+- 按 Agent 的 ACP 适配层：启动 / resume / 认证 / 错误分类与会话操作队列
+- Desktop / IDE 宿主可重启失败的 Bun Bridge
+
+### Changed
+
+- 工具审批 Ask/Auto 从输入框挪到 Agent 设置（只对发出 ACP 权限请求的 Agent 生效）
+- 聊天会话增加超时、ACP Fast 配置，并在 ACP session 丢失时恢复
+
+### Fixed
+
+- 卡住的 Agent 不再把整页 UI 冻住
+
+---
+
 ## 2026-08-10 - v0.3.2 JetBrains JCEF on 2026.2
 
 ### Fixed
