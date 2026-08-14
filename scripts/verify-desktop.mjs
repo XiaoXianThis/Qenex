@@ -2,11 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { execSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageBunBridge } from "./lib/stage-bun-bridge.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = join(root, "apps", "desktop");
 const tauriDir = join(desktopDir, "src-tauri");
 const bridgeEntry = join(root, "apps", "bridge", "src", "index.ts");
+const bridgeStage = join(desktopDir, "bridge");
 
 const required = [
   join(desktopDir, "bridge.config.json"),
@@ -44,6 +46,13 @@ if (tauriConf.includes("externalBin") || tauriConf.includes("acp-to-agui")) {
   failed = true;
 } else {
   console.log("OK  tauri.conf.json has no Rust sidecar externalBin");
+}
+
+console.log("Staging self-contained Desktop Bridge resource...");
+stageBunBridge(bridgeStage);
+if (!existsSync(join(bridgeStage, "index.js"))) {
+  console.error("MISSING  Desktop bundled bridge/index.js");
+  failed = true;
 }
 
 const bridgeRs = readFileSync(join(tauriDir, "src", "bridge.rs"), "utf8");

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { classifySessionInitError } from "../src/session-errors.ts";
 import { BridgeError } from "../src/errors.ts";
+import { isMissingProviderSessionError } from "../src/session-store.ts";
 
 describe("classifySessionInitError", () => {
   test("maps auth-like failures", () => {
@@ -25,5 +26,21 @@ describe("classifySessionInitError", () => {
     const other = classifySessionInitError(new Error("weird ACP handshake"));
     expect(other.code).toBe("session_init_failed");
     expect(other.message).toContain("weird ACP handshake");
+  });
+});
+
+describe("isMissingProviderSessionError", () => {
+  test("recognizes an ACP load failure with nested details", () => {
+    const error = Object.assign(new Error("Internal error"), {
+      data: { details: "No previous sessions found for this project." },
+    });
+    expect(isMissingProviderSessionError(error)).toBe(true);
+  });
+
+  test("does not hide authentication or network failures", () => {
+    expect(isMissingProviderSessionError(new Error("Unauthorized"))).toBe(false);
+    expect(isMissingProviderSessionError(new Error("connection timed out"))).toBe(
+      false,
+    );
   });
 });

@@ -31,12 +31,12 @@ export QENEX_BUN_BIN=$HOME/.bun/bin/bun
 
 ```
 Extension Host                    Webview (@qenex/ui)
-├── spawn bun bridge/src/index.ts ├── createVscodeHost()
+├── spawn bun bridge/index.js     ├── createVscodeHost()
 │   env: QENEX_BRIDGE_PORT / CORS │   ├── getBridgeBaseUrl()
 └── bridge-ready { url }          └── fetch → localhost Bridge
 ```
 
-打包：`apps/vscode/bridge/` 随扩展发布（`vsce`）；`.vscodeignore` 保留 `bridge/**` 的 `.ts`。
+打包：构建时从仓库锁文件生成自包含 `apps/vscode/bridge/index.js`，再随扩展发布；用户机器无需联网安装依赖。
 
 ## 验收
 

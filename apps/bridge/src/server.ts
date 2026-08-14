@@ -99,6 +99,7 @@ export function createBridgeHandler(store: SessionStore) {
           agentCommand: Array.isArray(body.agentCommand)
             ? body.agentCommand.filter((p): p is string => typeof p === "string")
             : undefined,
+          signal: req.signal,
         });
         return withCors(req, Response.json(info, { status: 201 }));
       }
@@ -149,6 +150,75 @@ export function createBridgeHandler(store: SessionStore) {
         }
         const config = await store.setModel(sessionId, body.modelId);
         return withCors(req, Response.json(config));
+      }
+
+      const configOptionMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/config-option$/,
+      );
+      if (configOptionMatch && req.method === "POST") {
+        const sessionId = decodeURIComponent(configOptionMatch[1]!);
+        const body = (await readJson(req)) as {
+          configId?: unknown;
+          value?: unknown;
+        };
+        if (
+          typeof body.configId !== "string" ||
+          !body.configId.trim() ||
+          typeof body.value !== "string" ||
+          !body.value.trim()
+        ) {
+          throw new BridgeError(
+            "invalid_config_option",
+            "Request body must include non-empty configId and value strings",
+            400,
+          );
+        }
+        const config = await store.setConfigOption(
+          sessionId,
+          body.configId,
+          body.value,
+        );
+        return withCors(req, Response.json(config));
+      }
+
+      const probeModelMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/probe-model-config$/,
+      );
+      if (probeModelMatch && req.method === "POST") {
+        const sessionId = decodeURIComponent(probeModelMatch[1]!);
+        const body = (await readJson(req)) as { modelId?: unknown };
+        if (typeof body.modelId !== "string" || !body.modelId.trim()) {
+          throw new BridgeError(
+            "invalid_model",
+            "Request body must include modelId: string",
+            400,
+          );
+        }
+        const probe = await store.probeModelConfig(sessionId, body.modelId);
+        return withCors(req, Response.json(probe));
+      }
+
+      const probeModelsMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/probe-models-config$/,
+      );
+      if (probeModelsMatch && req.method === "POST") {
+        const sessionId = decodeURIComponent(probeModelsMatch[1]!);
+        const body = (await readJson(req)) as { modelIds?: unknown };
+        const modelIds = Array.isArray(body.modelIds)
+          ? body.modelIds.filter(
+              (modelId): modelId is string =>
+                typeof modelId === "string" && modelId.trim().length > 0,
+            )
+          : [];
+        if (modelIds.length === 0) {
+          throw new BridgeError(
+            "invalid_models",
+            "Request body must include at least one modelId",
+            400,
+          );
+        }
+        const probes = await store.probeModelsConfig(sessionId, modelIds);
+        return withCors(req, Response.json({ probes }));
       }
 
       const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);

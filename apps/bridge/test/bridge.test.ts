@@ -26,11 +26,11 @@ beforeAll(() => {
 });
 
 afterEach(() => {
-  server.store.clear();
+  server?.store.clear();
 });
 
 afterAll(() => {
-  server.stop({ wipe: true });
+  server?.stop({ wipe: true });
 });
 
 async function postJson(path: string, body: unknown): Promise<Response> {

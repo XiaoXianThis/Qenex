@@ -27,8 +27,7 @@
     "targets": "all",
     "resources": {
       "../bridge.config.json": "bridge.config.json",
-      "../../bridge/src": "bridge/src",
-      "../../bridge/package.json": "bridge/package.json"
+      "../bridge": "bridge"
     },
     "icon": [
       "icons/32x32.png",

@@ -1,6 +1,7 @@
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
+  smoothStream,
   streamText,
   type UIMessage,
 } from "ai";
@@ -18,6 +19,99 @@ export type ChatRequestBody = {
 };
 
 type StreamTextTools = Parameters<typeof streamText>[0]["tools"];
+
+const STABLE_STREAM_CHUNK_SIZE = 32;
+const STREAM_BOUNDARY = /[\s,.;:!?，。；：！？、）)\]}]/u;
+
+/**
+ * Coalesce very small provider deltas before they reach React. The returned
+ * chunks remain append-only; concatenating them always reproduces the exact
+ * provider text.
+ */
+export function stableStreamChunk(buffer: string): string | null {
+  const newline = buffer.indexOf("\n");
+  if (newline >= 0) return buffer.slice(0, newline + 1);
+  if (buffer.length < STABLE_STREAM_CHUNK_SIZE) return null;
+
+  let end = STABLE_STREAM_CHUNK_SIZE;
+  for (let index = end - 1; index >= STABLE_STREAM_CHUNK_SIZE / 2; index--) {
+    if (STREAM_BOUNDARY.test(buffer[index]!)) {
+      end = index + 1;
+      break;
+    }
+  }
+  // Do not split a UTF-16 surrogate pair across JSON/SSE events.
+  const before = buffer.charCodeAt(end - 1);
+  const after = buffer.charCodeAt(end);
+  if (
+    before >= 0xd800 &&
+    before <= 0xdbff &&
+    after >= 0xdc00 &&
+    after <= 0xdfff
+  ) {
+    end -= 1;
+  }
+  return buffer.slice(0, end);
+}
+
+function positiveTimeout(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const CHAT_IDLE_TIMEOUT_MS = positiveTimeout(
+  process.env.QENEX_CHAT_IDLE_TIMEOUT_MS,
+  90_000,
+);
+
+export function withChatIdleTimeout<T>(
+  source: ReadableStream<T>,
+  timeoutMs: number,
+  onTimeout: (error: Error) => void,
+  onSettled: () => void = () => {},
+): ReadableStream<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const settle = () => {
+    if (settled) return false;
+    settled = true;
+    clear();
+    onSettled();
+    return true;
+  };
+  const arm = (controller: TransformStreamDefaultController<T>) => {
+    clear();
+    timer = setTimeout(() => {
+      if (!settle()) return;
+      const error = new Error(
+        `Agent stream produced no data for ${timeoutMs}ms`,
+      );
+      error.name = "ChatIdleTimeoutError";
+      onTimeout(error);
+      controller.error(error);
+    }, timeoutMs);
+  };
+
+  return source.pipeThrough(
+    new TransformStream<T, T>({
+      start(controller) {
+        arm(controller);
+      },
+      transform(chunk, controller) {
+        if (settled) return;
+        arm(controller);
+        controller.enqueue(chunk);
+      },
+      flush() {
+        settle();
+      },
+    }),
+  );
+}
 
 export async function handleChat(
   store: SessionStore,
@@ -57,38 +151,51 @@ export async function handleChat(
 
   const modelMessages = await convertToModelMessages(body.messages);
   const metadata = new MessageMetadataAccumulator();
+  const chatAbort = new AbortController();
+  const forwardRequestAbort = () => chatAbort.abort(req.signal.reason);
+  if (req.signal.aborted) forwardRequestAbort();
+  else req.signal.addEventListener("abort", forwardRequestAbort, { once: true });
 
   const result = streamText({
     model: provider.languageModel(),
     messages: modelMessages,
+    experimental_transform: smoothStream({
+      delayInMs: null,
+      chunking: stableStreamChunk,
+    }),
     // Provider 0.3.x still publishes AI SDK 6 Tool types although its runtime
     // stream is compatible with AI SDK 7 (verified in Phase 0).
     tools: provider.tools as unknown as StreamTextTools,
     includeRawChunks: true,
-    abortSignal: req.signal,
+    abortSignal: chatAbort.signal,
   });
 
-  const stream = result
-    .toUIMessageStream({
-      originalMessages: body.messages,
-      messageMetadata: ({ part }) => metadata.ingest(part),
-      // Local Bridge: surface real ACP/upstream errors (AI SDK default hides them).
-      onError: formatChatStreamError,
-      onEnd: ({ messages }) => {
-        try {
-          store.saveMessages(sessionId, messages);
-        } catch (err) {
-          console.error("[qenex-bridge] failed to persist messages:", err);
-        }
-      },
-    })
-    .pipeThrough(closeOpenUiPartsTransform());
+  const stream = withChatIdleTimeout(
+    result
+      .toUIMessageStream({
+        originalMessages: body.messages,
+        messageMetadata: ({ part }) => metadata.ingest(part),
+        // Local Bridge: surface real ACP/upstream errors (AI SDK default hides them).
+        onError: (error) => formatChatStreamError(error, entry.info.agent),
+        onEnd: ({ messages }) => {
+          try {
+            store.saveMessages(sessionId, messages);
+          } catch (err) {
+            console.error("[qenex-bridge] failed to persist messages:", err);
+          }
+        },
+      })
+      .pipeThrough(closeOpenUiPartsTransform()),
+    CHAT_IDLE_TIMEOUT_MS,
+    (error) => chatAbort.abort(error),
+    () => req.signal.removeEventListener("abort", forwardRequestAbort),
+  );
 
   return createUIMessageStreamResponse({
     stream,
     headers: {
       "x-qenex-session-id": sessionId,
-      "x-qenex-agent": "opencode",
+      "x-qenex-agent": entry.info.agent,
     },
   });
 }

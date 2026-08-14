@@ -53,10 +53,18 @@ export type SessionInfo = {
     currentId?: string;
     available: Array<{ id: string; name: string; description?: string }>;
   };
+  /** Optional Fast/speed config advertised through ACP configOptions. */
+  fastOptions?: {
+    configId: string;
+    currentId?: string;
+    available: Array<{ id: string; name: string; description?: string }>;
+  };
 };
 
 export type SessionEntry = {
   info: SessionInfo;
+  /** ACP may rotate this when a provider cannot resume its old remote session. */
+  providerSessionId: string;
   provider: ACPProvider;
   approvals: ApprovalManager;
 };
@@ -67,7 +75,94 @@ export type SessionStoreOptions = {
   db?: SessionDb;
 };
 
+const configuredSessionInitTimeout = Number(
+  process.env.QENEX_SESSION_INIT_TIMEOUT_MS ?? 45_000,
+);
+const SESSION_INIT_TIMEOUT_MS =
+  Number.isFinite(configuredSessionInitTimeout) && configuredSessionInitTimeout > 0
+    ? configuredSessionInitTimeout
+    : 45_000;
+
+async function initProviderSession(
+  provider: ACPProvider,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<ACPProvider["initSession"]>>> {
+  const init = provider.initSession();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new BridgeError(
+          "session_init_timeout",
+          `Agent did not initialize within ${SESSION_INIT_TIMEOUT_MS}ms`,
+          504,
+        ),
+      );
+    }, SESSION_INIT_TIMEOUT_MS);
+  });
+  const aborted = new Promise<never>((_, reject) => {
+    if (!signal) return;
+    abortHandler = () =>
+      reject(new BridgeError("request_aborted", "Session creation was cancelled", 499));
+    if (signal.aborted) abortHandler();
+    else signal.addEventListener("abort", abortHandler, { once: true });
+  });
+  try {
+    return await Promise.race([init, timeout, aborted]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+  }
+}
+
+export function isMissingProviderSessionError(error: unknown): boolean {
+  const parts: string[] = [];
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current != null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      parts.push(current.message);
+      const detail = (current as Error & { data?: unknown }).data;
+      if (detail !== undefined) {
+        try {
+          parts.push(JSON.stringify(detail));
+        } catch {
+          parts.push(String(detail));
+        }
+      }
+      current = current.cause;
+      continue;
+    }
+    if (typeof current === "object") {
+      try {
+        parts.push(JSON.stringify(current));
+      } catch {
+        parts.push(String(current));
+      }
+    } else {
+      parts.push(String(current));
+    }
+    break;
+  }
+  const message = parts.join(" ").toLowerCase();
+  return (
+    message.includes("no previous sessions found") ||
+    message.includes("session not found") ||
+    message.includes("unknown session") ||
+    message.includes("cannot load session")
+  );
+}
+
 type PermissionAwareModel = {
+  connection?: {
+    setSessionConfigOption?: (params: {
+      sessionId: string;
+      configId: string;
+      value: string;
+    }) => Promise<{ configOptions?: unknown }>;
+  };
   client?: {
     setPermissionRequestHandler?: (
       handler: (params: PermissionRequestParams) => Promise<PermissionResponse>,
@@ -88,8 +183,9 @@ type PermissionAwareModel = {
         sessionUpdate?: string;
         status?: string | null;
         rawOutput?: unknown;
-        content?: unknown;
-        [key: string]: unknown;
+      content?: unknown;
+      configOptions?: unknown;
+      [key: string]: unknown;
       };
       [key: string]: unknown;
     }) => Promise<void>;
@@ -106,6 +202,7 @@ function installClientHandlers(
   approvals: ApprovalManager,
   cwd: string,
   sessionId: string,
+  onConfigOptions?: (configOptions: unknown) => void,
 ): void {
   const model = provider.languageModel() as unknown as PermissionAwareModel;
   if (!model.client?.setPermissionRequestHandler) {
@@ -123,6 +220,12 @@ function installClientHandlers(
   if (originalSessionUpdate) {
     model.client.sessionUpdate = (params) => {
       const update = params.update;
+      if (
+        update?.sessionUpdate === "config_option_update" &&
+        Array.isArray(update.configOptions)
+      ) {
+        onConfigOptions?.(update.configOptions);
+      }
       // Provider 0.3.4's failed-tool formatter assumes rawOutput is iterable.
       // OpenCode can send `{}` there after a rejection; prefer ACP content.
       if (
@@ -303,6 +406,7 @@ export class SessionStore {
     cwd: string;
     agentId?: string;
     agentCommand?: string[];
+    signal?: AbortSignal;
   }): Promise<SessionInfo> {
     const cwd = resolve(input.cwd);
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
@@ -323,7 +427,7 @@ export class SessionStore {
     const approvals = new ApprovalManager();
 
     try {
-      const session = await provider.initSession();
+      const session = await initProviderSession(provider, input.signal);
       const sessionId = session.sessionId;
       if (!sessionId) {
         throw new BridgeError(
@@ -332,13 +436,19 @@ export class SessionStore {
           502,
         );
       }
-      installClientHandlers(provider, approvals, cwd, sessionId);
+      let entry: SessionEntry | null = null;
+      let pendingConfigOptions: unknown = null;
+      installClientHandlers(provider, approvals, cwd, sessionId, (options) => {
+        if (entry) this.#applyConfigOptions(entry, options);
+        else pendingConfigOptions = options;
+      });
 
       const createdAt = new Date().toISOString();
       const normalized = normalizeAcpSessionConfig(session);
       const modes = normalized.modes;
       const models = normalized.models;
       const thoughtLevels = normalized.thoughtLevels;
+      const fastOptions = normalized.fastOptions;
       this.#rememberCatalog(cwd, normalized);
 
       const info: SessionInfo = {
@@ -351,6 +461,7 @@ export class SessionStore {
         modes,
         models,
         thoughtLevels,
+        fastOptions,
       };
 
       this.#db.upsertSession({
@@ -364,7 +475,11 @@ export class SessionStore {
         modelsJson: models ? JSON.stringify(models) : null,
       });
 
-      this.#sessions.set(sessionId, { info, provider, approvals });
+      entry = { info, providerSessionId: sessionId, provider, approvals };
+      this.#sessions.set(sessionId, entry);
+      if (pendingConfigOptions) {
+        this.#applyConfigOptions(entry, pendingConfigOptions);
+      }
       return info;
     } catch (err) {
       try {
@@ -412,30 +527,64 @@ export class SessionStore {
       );
     }
 
-    const spawned = spawnAgentProvider({
+    let spawned = spawnAgentProvider({
       cwd,
       agentId: row.agent || "opencode",
       existingSessionId: sessionId,
       persistSession: true,
     });
-    const { provider } = spawned;
+    let provider = spawned.provider;
     const approvals = new ApprovalManager();
 
     try {
-      const session = await provider.initSession();
-      installClientHandlers(provider, approvals, cwd, sessionId);
+      let session: Awaited<ReturnType<ACPProvider["initSession"]>>;
+      try {
+        session = await initProviderSession(provider);
+      } catch (error) {
+        if (!isMissingProviderSessionError(error)) throw error;
+        try {
+          provider.cleanup();
+        } catch {
+          /* ignore cleanup failure before a fresh provider session */
+        }
+        spawned = spawnAgentProvider({
+          cwd,
+          agentId: row.agent || "opencode",
+          persistSession: true,
+        });
+        provider = spawned.provider;
+        session = await initProviderSession(provider);
+      }
+      const providerSessionId = session.sessionId;
+      if (!providerSessionId) {
+        throw new BridgeError(
+          "session_init_failed",
+          `${spawned.agentId} ACP initSession did not return a sessionId`,
+          502,
+        );
+      }
+      let entry: SessionEntry | null = null;
+      let pendingConfigOptions: unknown = null;
+      installClientHandlers(provider, approvals, cwd, providerSessionId, (options) => {
+        if (entry) this.#applyConfigOptions(entry, options);
+        else pendingConfigOptions = options;
+      });
       const info = infoFromRow(row);
       // Refresh mode/model catalogs from live ACP (configOptions / legacy).
       const normalized = normalizeAcpSessionConfig(session);
       if (normalized.modes) info.modes = normalized.modes;
       if (normalized.models) info.models = normalized.models;
       if (normalized.thoughtLevels) info.thoughtLevels = normalized.thoughtLevels;
+      if (normalized.fastOptions) info.fastOptions = normalized.fastOptions;
       this.#rememberCatalog(cwd, normalized);
       if (normalized.modes || normalized.models || normalized.thoughtLevels) {
         this.#persistInfo(info);
       }
-      const entry: SessionEntry = { info, provider, approvals };
+      entry = { info, providerSessionId, provider, approvals };
       this.#sessions.set(sessionId, entry);
+      if (pendingConfigOptions) {
+        this.#applyConfigOptions(entry, pendingConfigOptions);
+      }
       await this.#ensureSessionCatalog(entry);
       return entry;
     } catch (err) {
@@ -523,15 +672,117 @@ export class SessionStore {
     return sessionInfoToConfigDto(entry.info);
   }
 
+  async setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<SessionConfigDto> {
+    const trimmedConfigId = configId.trim();
+    const trimmedValue = value.trim();
+    if (!trimmedConfigId || !trimmedValue) {
+      throw new BridgeError(
+        "invalid_config_option",
+        "configId and value must be non-empty strings",
+        400,
+      );
+    }
+    const entry = await this.ensureOpen(sessionId);
+    const model = entry.provider.languageModel() as unknown as PermissionAwareModel;
+    const setter = model.connection?.setSessionConfigOption?.bind(model.connection);
+    if (!setter) {
+      throw new BridgeError(
+        "config_option_unsupported",
+        `${entry.info.agent} does not support session configuration options`,
+        409,
+      );
+    }
+    try {
+      const response = await setter({
+        sessionId: entry.providerSessionId,
+        configId: trimmedConfigId,
+        value: trimmedValue,
+      });
+      if (Array.isArray(response.configOptions)) {
+        this.#applyConfigOptions(entry, response.configOptions);
+      } else if (entry.info.thoughtLevels?.configId === trimmedConfigId) {
+        entry.info.thoughtLevels.currentId = trimmedValue;
+      } else if (entry.info.fastOptions?.configId === trimmedConfigId) {
+        entry.info.fastOptions.currentId = trimmedValue;
+      }
+      entry.info.updatedAt = new Date().toISOString();
+      this.#persistInfo(entry.info);
+      return sessionInfoToConfigDto(entry.info);
+    } catch (err) {
+      throw new BridgeError(
+        "set_config_option_failed",
+        err instanceof Error ? err.message : String(err),
+        502,
+      );
+    }
+  }
+
+  async probeModelConfig(
+    sessionId: string,
+    modelId: string,
+  ): Promise<SessionConfigDto & { modelId: string }> {
+    const entry = await this.ensureOpen(sessionId);
+    const originalModelId = entry.info.models?.currentModelId ?? null;
+    await this.setModel(sessionId, modelId);
+    const probed = sessionInfoToConfigDto(entry.info);
+    if (originalModelId && originalModelId !== modelId) {
+      await this.setModel(sessionId, originalModelId);
+    }
+    return { ...probed, modelId };
+  }
+
+  async probeModelsConfig(
+    sessionId: string,
+    modelIds: string[],
+  ): Promise<Array<SessionConfigDto & { modelId: string }>> {
+    const entry = await this.ensureOpen(sessionId);
+    const originalModelId = entry.info.models?.currentModelId ?? null;
+    const probes: Array<SessionConfigDto & { modelId: string }> = [];
+    try {
+      for (const modelId of modelIds) {
+        await this.setModel(sessionId, modelId);
+        probes.push({ ...sessionInfoToConfigDto(entry.info), modelId });
+      }
+    } finally {
+      if (originalModelId && entry.info.models?.currentModelId !== originalModelId) {
+        await this.setModel(sessionId, originalModelId);
+      }
+    }
+    return probes;
+  }
+
+  #applyConfigOptions(entry: SessionEntry, configOptions: unknown): void {
+    const normalized = normalizeAcpSessionConfig({ configOptions });
+    if (normalized.modes) entry.info.modes = normalized.modes;
+    if (normalized.models) entry.info.models = normalized.models;
+    if (normalized.thoughtLevels) {
+      entry.info.thoughtLevels = normalized.thoughtLevels;
+    }
+    if (normalized.fastOptions) entry.info.fastOptions = normalized.fastOptions;
+    entry.info.updatedAt = new Date().toISOString();
+    this.#rememberCatalog(entry.info.cwd, normalized);
+    this.#persistInfo(entry.info);
+  }
+
   #rememberCatalog(cwd: string, normalized: NormalizedAcpSessionConfig): void {
     const hasModes = (normalized.modes?.availableModes?.length ?? 0) > 0;
     const hasModels = (normalized.models?.availableModels?.length ?? 0) > 0;
-    if (!hasModes && !hasModels && !normalized.thoughtLevels) return;
+    if (
+      !hasModes &&
+      !hasModels &&
+      !normalized.thoughtLevels &&
+      !normalized.fastOptions
+    ) return;
     const prev = this.#catalogByCwd.get(cwd) ?? {};
     this.#catalogByCwd.set(cwd, {
       modes: hasModes ? normalized.modes : prev.modes,
       models: hasModels ? normalized.models : prev.models,
       thoughtLevels: normalized.thoughtLevels ?? prev.thoughtLevels,
+      fastOptions: normalized.fastOptions ?? prev.fastOptions,
     });
   }
 
@@ -546,6 +797,7 @@ export class SessionStore {
         modes: entry.info.modes,
         models: entry.info.models,
         thoughtLevels: entry.info.thoughtLevels,
+        fastOptions: entry.info.fastOptions,
       });
       return;
     }
@@ -580,6 +832,10 @@ export class SessionStore {
       entry.info.thoughtLevels = catalog.thoughtLevels;
       changed = true;
     }
+    if (!entry.info.fastOptions && catalog.fastOptions) {
+      entry.info.fastOptions = catalog.fastOptions;
+      changed = true;
+    }
     if (changed) {
       entry.info = {
         ...entry.info,
@@ -605,7 +861,7 @@ export class SessionStore {
       });
       const { provider } = spawned;
       try {
-        const session = await provider.initSession();
+        const session = await initProviderSession(provider);
         const normalized = normalizeAcpSessionConfig(session);
         this.#rememberCatalog(cwd, normalized);
         return normalized;

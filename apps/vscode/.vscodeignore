@@ -6,8 +6,4 @@ tsconfig.json
 **/*.map
 **/*.ts
 !bridge/**
-!bridge/**/*.ts
 !media/**
-# vsce/yazl cannot pack bun/npm .bin shims (currentLevel is undefined)
-bridge/node_modules/.bin/**
-**/node_modules/.bin/**

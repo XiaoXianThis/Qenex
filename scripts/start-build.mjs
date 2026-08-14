@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const buildDir = join(root, "build");
 const runJs = join(buildDir, "run.mjs");
-const bridgeEntry = join(buildDir, "bridge", "src", "index.ts");
+const bridgeEntry = join(buildDir, "bridge", "index.js");
 
 if (!existsSync(bridgeEntry)) {
   console.error(`Build output not found: ${bridgeEntry}`);

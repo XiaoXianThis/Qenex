@@ -37,7 +37,12 @@ class BridgeProcessManager {
         get() = port?.let { "http://127.0.0.1:$it" }
 
     fun start(pageOrigin: String? = null): String {
-        port?.let { return "http://127.0.0.1:$it" }
+        port?.takeIf { process?.isAlive == true }?.let { return "http://127.0.0.1:$it" }
+        if (port != null && process?.isAlive != true) {
+            process = null
+            port = null
+            startFuture = null
+        }
 
         synchronized(this) {
             port?.let { return "http://127.0.0.1:$it" }
@@ -53,9 +58,10 @@ class BridgeProcessManager {
                 future.complete(url)
                 return url
             } catch (error: Exception) {
-                startFuture = null
                 future.completeExceptionally(error)
                 throw error
+            } finally {
+                startFuture = null
             }
         }
     }
@@ -75,8 +81,11 @@ class BridgeProcessManager {
         val pathEnv = augmentedPath()
         val bun = findBun(pathEnv)
         val entry = resolveBridgeEntry()
-        val bridgeCwd = entry.parent?.parent
-            ?: throw IllegalStateException("Invalid bridge entry (expected …/bridge/src/index.ts): $entry")
+        val bridgeCwd = if (entry.fileName.toString() == "index.js") {
+            entry.parent
+        } else {
+            entry.parent?.parent
+        } ?: throw IllegalStateException("Invalid bridge entry: $entry")
 
         val cors = buildList {
             pageOrigin?.takeIf { it.isNotBlank() }?.let { add(it) }
@@ -112,9 +121,34 @@ class BridgeProcessManager {
         }
 
         process = child
-        waitForHealth(freePort, child)
+        try {
+            waitForHealth(freePort, child)
+        } catch (error: Exception) {
+            if (process === child) process = null
+            killProcessTree(child)
+            throw error
+        }
         port = freePort
+        watchProcess(child, freePort)
         return "http://127.0.0.1:$freePort"
+    }
+
+    private fun watchProcess(child: Process, childPort: Int) {
+        Thread {
+            val code = runCatching { child.waitFor() }.getOrNull()
+            synchronized(this) {
+                if (process === child) {
+                    process = null
+                    if (port == childPort) port = null
+                    startFuture = null
+                    log.warn("Qenex Bridge exited unexpectedly${code?.let { " (exit $it)" } ?: ""}")
+                }
+            }
+        }.apply {
+            name = "qenex-bridge-watch"
+            isDaemon = true
+            start()
+        }
     }
 
     private fun findBun(pathEnv: String): String {
@@ -165,8 +199,7 @@ class BridgeProcessManager {
             throw IllegalStateException("QENEX_BRIDGE_ENTRY not found: $override")
         }
 
-        // Dev first: monorepo apps/bridge (has workspace-resolvable deps).
-        // Packaged classpath resources often lack node_modules and break runIde.
+        // Dev first: use monorepo source so local edits are reflected immediately.
         findRepoBridgeEntry()?.let {
             log.info("using repo Bun Bridge entry: $it")
             return it
@@ -214,28 +247,23 @@ class BridgeProcessManager {
         return null
     }
 
-    /**
-     * Packaged plugin: classpath qenex/bridge → real filesystem dir with local deps.
-     * If node_modules is missing, runs `bun install --production` once.
-     */
+    /** Packaged plugin: extract the build-time bundled Bridge to a real file. */
     private fun ensureBundledBridgeReady(): Path? {
         val classLoader = BridgeProcessManager::class.java.classLoader
-        val indexUrl = classLoader.getResource("qenex/bridge/src/index.ts") ?: return null
+        val indexUrl = classLoader.getResource("qenex/bridge/index.js") ?: return null
 
-        val destRoot = Path.of(PathManager.getSystemPath(), "qenex", "bundled-bridge")
-        val destIndex = destRoot.resolve("src").resolve("index.ts")
+        val resourceStamp = runCatching { indexUrl.openConnection().lastModified }
+            .getOrDefault(0L)
+            .toString(16)
+        val destRoot = Path.of(PathManager.getSystemPath(), "qenex", "bundled-bridge-$resourceStamp")
+        val destIndex = destRoot.resolve("index.js")
 
         if (indexUrl.protocol == "file") {
             val filePath = Path.of(indexUrl.toURI()).toAbsolutePath().normalize()
-            val bridgeRoot = filePath.parent?.parent
-            if (bridgeRoot != null && hasLocalBridgeDeps(bridgeRoot)) {
-                return filePath
-            }
-            // Exploded resources without deps: copy/install into systemPath instead
-            log.warn("classpath bridge at $bridgeRoot has no local node_modules; installing into $destRoot")
+            return filePath
         }
 
-        if (!isBundledBridgeReady(destRoot)) {
+        if (!Files.isRegularFile(destIndex)) {
             if (Files.isDirectory(destRoot)) {
                 runCatching {
                     Files.walk(destRoot)
@@ -249,53 +277,9 @@ class BridgeProcessManager {
                 log.warn("bundled bridge extract missing index at $destIndex")
                 return null
             }
-            if (!hasLocalBridgeDeps(destRoot)) {
-                installBridgeDeps(destRoot)
-            }
         }
 
-        if (!Files.isRegularFile(destIndex) || !hasLocalBridgeDeps(destRoot)) {
-            log.warn("bundled bridge not runnable at $destRoot (missing index or node_modules)")
-            return null
-        }
-        return destIndex
-    }
-
-    private fun isBundledBridgeReady(destRoot: Path): Boolean {
-        val destIndex = destRoot.resolve("src").resolve("index.ts")
-        return Files.isRegularFile(destIndex) &&
-            Files.isRegularFile(destRoot.resolve("package.json")) &&
-            hasLocalBridgeDeps(destRoot)
-    }
-
-    private fun hasLocalBridgeDeps(bridgeRoot: Path): Boolean =
-        Files.isRegularFile(bridgeRoot.resolve("node_modules").resolve("ai").resolve("package.json"))
-
-    private fun installBridgeDeps(bridgeRoot: Path) {
-        val pathEnv = augmentedPath()
-        val bun = findBun(pathEnv)
-        log.info("running bun install --production in $bridgeRoot")
-        val proc = ProcessBuilder(bun, "install", "--production")
-            .directory(bridgeRoot.toFile())
-            .redirectErrorStream(true)
-            .apply {
-                environment().clear()
-                environment().putAll(HashMap(System.getenv()).also { it["PATH"] = pathEnv })
-            }
-            .start()
-        val output = proc.inputStream.bufferedReader().readText()
-        val ok = proc.waitFor(120, TimeUnit.SECONDS)
-        if (!ok) {
-            proc.destroyForcibly()
-            throw IllegalStateException("bun install timed out in $bridgeRoot")
-        }
-        val code = proc.exitValue()
-        if (code != 0 || !hasLocalBridgeDeps(bridgeRoot)) {
-            throw IllegalStateException(
-                "bun install --production failed (exit $code) in $bridgeRoot\n${output.takeLast(2000)}",
-            )
-        }
-        log.info("bun install completed for bundled bridge")
+        return destIndex.takeIf { Files.isRegularFile(it) }
     }
 
     private fun copyResourceTree(classLoader: ClassLoader, resourceRoot: String, destRoot: Path) {
@@ -305,8 +289,6 @@ class BridgeProcessManager {
                 for (rel in lines) {
                     val trimmed = rel.trim()
                     if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
-                    // Skip copying node_modules from JAR when present — prefer bun install
-                    if (trimmed.startsWith("node_modules/")) continue
                     val stream = classLoader.getResourceAsStream("$resourceRoot/$trimmed") ?: continue
                     val dest = destRoot.resolve(trimmed)
                     Files.createDirectories(dest.parent)
@@ -316,7 +298,7 @@ class BridgeProcessManager {
             return
         }
 
-        for (rel in listOf("package.json", "src/index.ts")) {
+        for (rel in listOf("index.js", "package.json")) {
             val stream = classLoader.getResourceAsStream("$resourceRoot/$rel") ?: continue
             val dest = destRoot.resolve(rel)
             Files.createDirectories(dest.parent)
@@ -435,7 +417,12 @@ class BridgeProcessManager {
             }
             return
         }
-        runCatching { child.destroyForcibly().waitFor(5, TimeUnit.SECONDS) }
+        runCatching {
+            child.destroy()
+            if (!child.waitFor(3, TimeUnit.SECONDS)) {
+                child.destroyForcibly().waitFor(2, TimeUnit.SECONDS)
+            }
+        }
     }
 
     companion object {

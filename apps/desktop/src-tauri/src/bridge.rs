@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -24,9 +25,11 @@ struct BridgeCorsTemplate {
 }
 
 pub struct BridgeState {
-    pub base_url: String,
+    base_url: Mutex<String>,
     child: Mutex<Option<Child>>,
     status: Mutex<BridgeStatus>,
+    lifecycle: Mutex<()>,
+    generation: Mutex<u64>,
 }
 
 #[derive(Clone)]
@@ -39,9 +42,21 @@ enum BridgeStatus {
 impl BridgeState {
     fn new(base_url: String, child: Child) -> Self {
         Self {
-            base_url,
+            base_url: Mutex::new(base_url),
             child: Mutex::new(Some(child)),
             status: Mutex::new(BridgeStatus::Starting),
+            lifecycle: Mutex::new(()),
+            generation: Mutex::new(1),
+        }
+    }
+
+    fn failed(error: String) -> Self {
+        Self {
+            base_url: Mutex::new(String::new()),
+            child: Mutex::new(None),
+            status: Mutex::new(BridgeStatus::Failed(error)),
+            lifecycle: Mutex::new(()),
+            generation: Mutex::new(0),
         }
     }
 
@@ -58,6 +73,13 @@ impl BridgeState {
             .map_err(|_| "Bridge status lock poisoned".to_string())
     }
 
+    fn base_url(&self) -> Result<String, String> {
+        self.base_url
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| "Bridge URL lock poisoned".to_string())
+    }
+
     pub fn stop(&self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
@@ -69,22 +91,41 @@ impl BridgeState {
 }
 
 pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
+    match spawn_bridge(app) {
+        Ok((base_url, child)) => {
+            app.manage(BridgeState::new(base_url.clone(), child));
+            monitor_startup(app.clone(), base_url, 1);
+        }
+        Err(error) => {
+            tracing_log(&error);
+            app.manage(BridgeState::failed(error));
+        }
+    }
+    Ok(())
+}
+
+fn spawn_bridge(app: &AppHandle) -> Result<(String, Child), String> {
     let port = find_free_port()?;
     let base_url = format!("http://127.0.0.1:{port}");
     let cors = resolve_cors_origins(app, port);
     let path = augmented_path();
     let bun = find_bun(&path)?;
-    let entry = resolve_bridge_entry(app, &bun, &path)?;
-    let bridge_cwd = Path::new(&entry)
-        .parent()
-        .and_then(|p| p.parent()) // …/bridge/src → …/bridge
-        .unwrap_or(Path::new("."));
+    let entry = resolve_bridge_entry(app)?;
+    let entry_path = Path::new(&entry);
+    let bridge_cwd = if entry_path.file_name() == Some(OsStr::new("index.js")) {
+        entry_path.parent().unwrap_or(Path::new("."))
+    } else {
+        entry_path
+            .parent()
+            .and_then(|p| p.parent()) // …/bridge/src → …/bridge
+            .unwrap_or(Path::new("."))
+    };
 
     tracing_log(&format!(
         "starting Bun Bridge: bun={bun} entry={entry} port={port} cwd={}",
         bridge_cwd.display()
     ));
-    tracing_log(&format!("bridge PATH={path}"));
+    tracing_log(&format!("bridge PATH={}", path.to_string_lossy()));
     tracing_log(&format!("QENEX_CORS_ORIGINS={}", cors.join(",")));
 
     let mut command = StdCommand::new(&bun);
@@ -102,23 +143,87 @@ pub fn start_bridge(app: &AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("failed to spawn Bun Bridge ({bun} {entry}): {e}"))?;
 
-    app.manage(BridgeState::new(base_url.clone(), child));
+    Ok((base_url, child))
+}
 
-    let app_handle = app.clone();
+fn monitor_startup(app_handle: AppHandle, base_url: String, generation: u64) {
     tauri::async_runtime::spawn(async move {
-        let status = match wait_for_health(&app_handle, &base_url, HEALTH_TIMEOUT_MS).await {
-            Ok(()) => BridgeStatus::Ready,
-            Err(error) => {
-                tracing_log(&error);
-                BridgeStatus::Failed(error)
-            }
-        };
+        let result = wait_for_health(&app_handle, &base_url, generation, HEALTH_TIMEOUT_MS).await;
 
         if let Some(state) = app_handle.try_state::<BridgeState>() {
-            state.set_status(status);
+            let is_current = state
+                .generation
+                .lock()
+                .map(|current| *current == generation)
+                .unwrap_or(false);
+            if is_current && state.base_url().as_deref() == Ok(base_url.as_str()) {
+                let status = match result {
+                    Ok(()) => BridgeStatus::Ready,
+                    Err(error) => {
+                        tracing_log(&error);
+                        BridgeStatus::Failed(error)
+                    }
+                };
+                if matches!(&status, BridgeStatus::Failed(_)) {
+                    state.stop();
+                }
+                state.set_status(status);
+            }
         }
     });
+}
 
+pub fn restart_bridge(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<BridgeState>()
+        .ok_or_else(|| "Bridge state is unavailable".to_string())?;
+    let _lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "Bridge lifecycle lock poisoned".to_string())?;
+    let running = state
+        .child
+        .lock()
+        .map_err(|_| "Bridge process lock poisoned".to_string())?
+        .as_mut()
+        .map(|child| child.try_wait().map(|status| status.is_none()))
+        .transpose()
+        .map_err(|error| format!("failed to poll Bridge process: {error}"))?
+        .unwrap_or(false);
+    if running
+        && matches!(
+            state.status()?,
+            BridgeStatus::Starting | BridgeStatus::Ready
+        )
+    {
+        return Ok(());
+    }
+    let generation = {
+        let mut current = state
+            .generation
+            .lock()
+            .map_err(|_| "Bridge generation lock poisoned".to_string())?;
+        *current = current.saturating_add(1);
+        *current
+    };
+    state.stop();
+    state.set_status(BridgeStatus::Starting);
+    let (base_url, child) = match spawn_bridge(app) {
+        Ok(result) => result,
+        Err(error) => {
+            state.set_status(BridgeStatus::Failed(error.clone()));
+            return Err(error);
+        }
+    };
+    *state
+        .base_url
+        .lock()
+        .map_err(|_| "Bridge URL lock poisoned".to_string())? = base_url.clone();
+    *state
+        .child
+        .lock()
+        .map_err(|_| "Bridge process lock poisoned".to_string())? = Some(child);
+    monitor_startup(app.clone(), base_url, generation);
     Ok(())
 }
 
@@ -127,8 +232,22 @@ pub async fn get_bridge_url(app: &AppHandle) -> Result<String, String> {
 
     while std::time::Instant::now() < deadline {
         if let Some(state) = app.try_state::<BridgeState>() {
+            let exited = state
+                .child
+                .lock()
+                .map_err(|_| "Bridge process lock poisoned".to_string())?
+                .as_mut()
+                .map(|child| child.try_wait())
+                .transpose()
+                .map_err(|error| format!("failed to poll Bridge process: {error}"))?
+                .flatten();
+            if let Some(status) = exited {
+                let error = format!("Bridge exited unexpectedly ({status}); retry to recover");
+                state.set_status(BridgeStatus::Failed(error.clone()));
+                return Err(error);
+            }
             match state.status()? {
-                BridgeStatus::Ready => return Ok(state.base_url.clone()),
+                BridgeStatus::Ready => return state.base_url(),
                 BridgeStatus::Failed(error) => return Err(error),
                 BridgeStatus::Starting => {}
             }
@@ -151,7 +270,7 @@ fn tracing_log(message: &str) {
     eprintln!("[qenex-desktop] {message}");
 }
 
-fn find_bun(path: &str) -> Result<String, String> {
+fn find_bun(path: &OsStr) -> Result<String, String> {
     if let Ok(override_bin) = std::env::var("QENEX_BUN_BIN") {
         let trimmed = override_bin.trim();
         if !trimmed.is_empty() {
@@ -162,26 +281,24 @@ fn find_bun(path: &str) -> Result<String, String> {
         }
     }
 
-    if let Some(found) = which_in_path("bun", path) {
+    let executable = if cfg!(windows) { "bun.exe" } else { "bun" };
+    if let Some(found) = which_in_path(executable, path) {
         return Ok(found);
     }
 
     if let Some(home) = dirs::home_dir() {
-        let candidate = home.join(".bun/bin/bun");
+        let candidate = home.join(".bun").join("bin").join(executable);
         if candidate.is_file() {
             return Ok(candidate.to_string_lossy().into_owned());
         }
     }
 
-    Err(
-        "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN."
-            .to_string(),
-    )
+    Err("Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.".to_string())
 }
 
-fn which_in_path(name: &str, path: &str) -> Option<String> {
-    for dir in path.split(':') {
-        let candidate = Path::new(dir).join(name);
+fn which_in_path(name: &str, path: &OsStr) -> Option<String> {
+    for dir in std::env::split_paths(path) {
+        let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate.to_string_lossy().into_owned());
         }
@@ -189,7 +306,7 @@ fn which_in_path(name: &str, path: &str) -> Option<String> {
     None
 }
 
-fn resolve_bridge_entry(app: &AppHandle, bun: &str, path_env: &str) -> Result<String, String> {
+fn resolve_bridge_entry(app: &AppHandle) -> Result<String, String> {
     if let Ok(override_entry) = std::env::var("QENEX_BRIDGE_ENTRY") {
         let trimmed = override_entry.trim();
         if !trimmed.is_empty() {
@@ -201,9 +318,7 @@ fn resolve_bridge_entry(app: &AppHandle, bun: &str, path_env: &str) -> Result<St
         }
     }
 
-    // Dev first: monorepo apps/bridge (has workspace-local node_modules).
-    // Tauri copies bridge/src into target/*/bridge without deps; preferring that
-    // path makes `bun` fail with "Cannot find package 'ai'".
+    // Dev first: use the monorepo source so edits are reflected immediately.
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bridge/src/index.ts");
     if let Ok(canonical) = dev.canonicalize() {
         if canonical.is_file() {
@@ -215,12 +330,10 @@ fn resolve_bridge_entry(app: &AppHandle, bun: &str, path_env: &str) -> Result<St
         }
     }
 
-    // Packaged app: resources/bridge/src/index.ts
+    // Packaged app: self-contained build-time bundle.
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let packaged = resource_dir.join("bridge").join("src").join("index.ts");
+        let packaged = resource_dir.join("bridge").join("index.js");
         if packaged.is_file() {
-            let bridge_root = resource_dir.join("bridge");
-            ensure_packaged_bridge_deps(&bridge_root, bun, path_env)?;
             tracing_log(&format!(
                 "using packaged Bun Bridge entry: {}",
                 packaged.display()
@@ -230,50 +343,9 @@ fn resolve_bridge_entry(app: &AppHandle, bun: &str, path_env: &str) -> Result<St
     }
 
     Err(
-        "Bun Bridge entry not found. Set QENEX_BRIDGE_ENTRY or run from the Qenex repo / install a build that bundles bridge/src."
+        "Bun Bridge entry not found. Set QENEX_BRIDGE_ENTRY or install a build that bundles bridge/index.js."
             .to_string(),
     )
-}
-
-fn has_local_bridge_deps(bridge_root: &Path) -> bool {
-    bridge_root
-        .join("node_modules")
-        .join("ai")
-        .join("package.json")
-        .is_file()
-}
-
-fn ensure_packaged_bridge_deps(bridge_root: &Path, bun: &str, path_env: &str) -> Result<(), String> {
-    if has_local_bridge_deps(bridge_root) {
-        return Ok(());
-    }
-    if !bridge_root.join("package.json").is_file() {
-        return Err(format!(
-            "packaged bridge missing package.json at {}",
-            bridge_root.display()
-        ));
-    }
-
-    tracing_log(&format!(
-        "packaged bridge missing node_modules; running bun install --production in {}",
-        bridge_root.display()
-    ));
-    let status = StdCommand::new(bun)
-        .args(["install", "--production"])
-        .current_dir(bridge_root)
-        .env("PATH", path_env)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|e| format!("failed to run bun install in {}: {e}", bridge_root.display()))?;
-
-    if !status.success() || !has_local_bridge_deps(bridge_root) {
-        return Err(format!(
-            "bun install --production failed in {} (status={status}). Install Bun deps or set QENEX_BRIDGE_ENTRY to the repo apps/bridge.",
-            bridge_root.display()
-        ));
-    }
-    Ok(())
 }
 
 fn resolve_cors_origins(app: &AppHandle, port: u16) -> Vec<String> {
@@ -315,27 +387,23 @@ fn resolve_cors_origins(app: &AppHandle, port: u16) -> Vec<String> {
 }
 
 /// Build a PATH suitable for spawning Bun + ACP agents from a packaged desktop app.
-fn augmented_path() -> String {
-    let mut parts: Vec<String> = Vec::new();
-    let mut seen = HashSet::new();
+fn augmented_path() -> OsString {
+    let mut parts: Vec<PathBuf> = Vec::new();
+    let mut seen = HashSet::<PathBuf>::new();
 
-    let mut push = |raw: &str| {
-        for part in raw.split(':') {
-            let trimmed = part.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if seen.insert(trimmed.to_string()) {
-                parts.push(trimmed.to_string());
+    let mut push = |raw: &OsStr| {
+        for part in std::env::split_paths(raw) {
+            if !part.as_os_str().is_empty() && seen.insert(part.clone()) {
+                parts.push(part);
             }
         }
     };
 
     if let Some(login_path) = login_shell_path() {
-        push(&login_path);
+        push(login_path.as_os_str());
     }
 
-    if let Ok(current) = std::env::var("PATH") {
+    if let Some(current) = std::env::var_os("PATH") {
         push(&current);
     }
 
@@ -348,26 +416,32 @@ fn augmented_path() -> String {
             "bin",
             ".nvm/current/bin",
         ] {
-            push(&home.join(rel).to_string_lossy());
+            let candidate = home.join(rel);
+            push(candidate.as_os_str());
         }
     }
 
-    for system in [
-        "/opt/homebrew/bin",
-        "/opt/homebrew/sbin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-    ] {
-        push(system);
+    if !cfg!(windows) {
+        for system in [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ] {
+            push(OsStr::new(system));
+        }
     }
 
-    parts.join(":")
+    std::env::join_paths(parts).unwrap_or_default()
 }
 
-fn login_shell_path() -> Option<String> {
+fn login_shell_path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let output = StdCommand::new(&shell)
         .args(["-l", "-c", "printf %s \"$PATH\""])
@@ -380,13 +454,14 @@ fn login_shell_path() -> Option<String> {
     if path.is_empty() {
         None
     } else {
-        Some(path)
+        Some(PathBuf::from(path))
     }
 }
 
 async fn wait_for_health(
     app: &AppHandle,
     base_url: &str,
+    generation: u64,
     timeout_ms: u64,
 ) -> Result<(), String> {
     let health_url = format!("{base_url}/health");
@@ -399,14 +474,22 @@ async fn wait_for_health(
 
     while std::time::Instant::now() < deadline {
         if let Some(state) = app.try_state::<BridgeState>() {
+            let is_current = state
+                .generation
+                .lock()
+                .map_err(|_| "Bridge generation lock poisoned".to_string())
+                .map(|current| *current == generation)?;
+            if !is_current {
+                return Err("Bridge startup was superseded by a restart".to_string());
+            }
             if let Ok(mut guard) = state.child.lock() {
                 if let Some(child) = guard.as_mut() {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             return Err(format!(
                                 "Bridge exited before becoming healthy ({status}). \
-                                 Check console for bun errors (often missing node_modules on packaged bridge). \
-                                 Dev: prefer repo apps/bridge; or set QENEX_BRIDGE_ENTRY."
+                                 Check console for [qenex-bridge] errors. \
+                                 Dev: verify apps/bridge; packaged: rebuild the Bridge bundle."
                             ));
                         }
                         Ok(None) => {}

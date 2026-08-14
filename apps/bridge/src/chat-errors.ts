@@ -2,7 +2,25 @@
  * Map chat-stream failures to actionable Chinese messages for the Web UI.
  * AI SDK defaults onError to "An error occurred." — we override that for local Bridge.
  */
-export function formatChatStreamError(error: unknown): string {
+const AGENT_LABELS: Record<string, string> = {
+  opencode: "OpenCode",
+  "claude-acp": "Claude Agent",
+  "codex-acp": "Codex",
+  "cursor-agent": "Cursor",
+  devin: "Devin",
+  gemini: "Gemini CLI",
+  "pi-acp": "pi ACP",
+  qoder: "Qoder CLI",
+};
+
+function agentLabel(agentId: string): string {
+  return (AGENT_LABELS[agentId] ?? agentId) || "Agent";
+}
+
+export function formatChatStreamError(
+  error: unknown,
+  agentId = "opencode",
+): string {
   const raw =
     error instanceof Error
       ? error.message
@@ -13,13 +31,14 @@ export function formatChatStreamError(error: unknown): string {
           : String(error);
   const message = raw.trim();
   const lower = message.toLowerCase();
+  const label = agentLabel(agentId);
 
   if (
     /insufficient\s*balance|余额不足|quota\s*exceeded|rate\s*limit|billing|payment.?required|credit/i.test(
       message,
     )
   ) {
-    return "模型服务余额不足（Insufficient Balance）。请在 OpenCode 对应提供商账户充值，或切换已配置且有额度的模型后重试。";
+    return `模型服务余额不足（Insufficient Balance）。请检查 ${label} 对应提供商的额度，或切换已配置且有额度的模型后重试。`;
   }
 
   if (
@@ -27,17 +46,19 @@ export function formatChatStreamError(error: unknown): string {
       lower,
     )
   ) {
-    return "OpenCode 需要登录或凭证已失效。请在终端运行 `opencode auth login`（或对应提供商登录）后重试。";
+    return agentId === "opencode"
+      ? "OpenCode 需要登录或凭证已失效。请在终端运行 `opencode auth login`（或对应提供商登录）后重试。"
+      : `${label} 需要登录或凭证已失效。请完成该 Agent 的登录后重试。`;
   }
 
   if (
     /model.?not.?found|unknown.?model|no.?model|invalid.?model/i.test(lower)
   ) {
-    return "当前模型不可用。请在 OpenCode 中配置可用模型后重试。";
+    return `当前模型不可用。请在 ${label} 中配置可用模型后重试。`;
   }
 
   if (!message || /^an error occurred\.?$/i.test(message)) {
-    return "对话失败。请查看 Bridge 终端日志，并检查 OpenCode 登录状态与模型额度。";
+    return `对话失败。请查看 Bridge 终端日志，并检查 ${label} 的登录状态与模型额度。`;
   }
 
   const cleaned = message

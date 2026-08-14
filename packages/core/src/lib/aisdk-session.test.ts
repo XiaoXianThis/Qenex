@@ -241,6 +241,9 @@ describe("session config REST helpers", () => {
   test("get / set mode / set model", async () => {
     const {
       getAisdkSessionConfig,
+      probeAisdkSessionModelConfig,
+      probeAisdkSessionModelsConfig,
+      setAisdkSessionConfigOption,
       setAisdkSessionMode,
       setAisdkSessionModel,
     } = await import("./aisdk-session.ts");
@@ -290,6 +293,36 @@ describe("session config REST helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
+      if (url.endsWith("/config-option") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        expect(body).toEqual({ configId: "reasoning_effort", value: "high" });
+        return Response.json({
+          models: [{ id: "m2", name: "Model 2" }],
+          currentModelId: "m2",
+          thoughtLevels: [
+            { id: "low", name: "Low" },
+            { id: "high", name: "High" },
+          ],
+          thoughtLevelConfigId: "reasoning_effort",
+          currentThoughtLevelId: "high",
+        });
+      }
+      if (url.endsWith("/probe-model-config") && init?.method === "POST") {
+        return Response.json({
+          modelId: "m2",
+          thoughtLevels: [{ id: "high", name: "High" }],
+          thoughtLevelConfigId: "reasoning_effort",
+          currentThoughtLevelId: "high",
+        });
+      }
+      if (url.endsWith("/probe-models-config") && init?.method === "POST") {
+        return Response.json({
+          probes: [
+            { modelId: "m1", thoughtLevels: [{ id: "low", name: "Low" }] },
+            { modelId: "m2", thoughtLevels: [{ id: "high", name: "High" }] },
+          ],
+        });
+      }
       return new Response("nope", { status: 404 });
     });
 
@@ -303,5 +336,24 @@ describe("session config REST helpers", () => {
 
     const afterModel = await setAisdkSessionModel("ses_c", "m2", host);
     expect(afterModel.currentModelId).toBe("m2");
+
+    const afterThought = await setAisdkSessionConfigOption(
+      "ses_c",
+      "reasoning_effort",
+      "high",
+      host,
+    );
+    expect(afterThought.currentThoughtLevelId).toBe("high");
+
+    const probe = await probeAisdkSessionModelConfig("ses_c", "m2", host);
+    expect(probe.modelId).toBe("m2");
+    expect(probe.currentThoughtLevelId).toBe("high");
+
+    const probes = await probeAisdkSessionModelsConfig(
+      "ses_c",
+      ["m1", "m2"],
+      host,
+    );
+    expect(probes.map((item) => item.modelId)).toEqual(["m1", "m2"]);
   });
 });

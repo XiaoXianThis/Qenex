@@ -49,20 +49,17 @@ intellijPlatform {
 
 tasks {
     processResources {
-        // Bun Bridge sources + production node_modules (staged by scripts/build-jetbrains.mjs)
+        // Self-contained Bun Bridge bundle (staged by scripts/build-jetbrains.mjs)
         val bridgeStage = layout.projectDirectory.dir("build/qenex-bridge-stage")
-        if (bridgeStage.asFile.exists()) {
-            from(bridgeStage) {
-                into("qenex/bridge")
+        doFirst {
+            if (!bridgeStage.file("index.js").asFile.isFile) {
+                throw GradleException(
+                    "Missing build/qenex-bridge-stage/index.js; run `bun run build:jetbrains` first",
+                )
             }
-        } else {
-            // Fallback for compile-only without stage: source tree only
-            from("../bridge/src") {
-                into("qenex/bridge/src")
-            }
-            from("../bridge/package.json") {
-                into("qenex/bridge")
-            }
+        }
+        from(bridgeStage) {
+            into("qenex/bridge")
         }
         from("bridge.config.json")
     }

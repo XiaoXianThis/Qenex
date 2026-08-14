@@ -37,6 +37,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
     private val log = Logger.getInstance(QenexPanel::class.java)
     private val json = Json { ignoreUnknownKeys = true }
     private var bridgeReadySent = false
+    private var webviewServerAcquired = false
     private val panelDisposable = Disposer.newDisposable("QenexPanel")
 
     private val browser: JBCefBrowserBase? = if (JBCefApp.isSupported()) {
@@ -71,7 +72,10 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
 
     fun disposePanel() {
         Disposer.dispose(panelDisposable)
-        WebviewHttpServer.stop()
+        if (webviewServerAcquired) {
+            webviewServerAcquired = false
+            WebviewHttpServer.release()
+        }
         browser?.dispose()
     }
 
@@ -156,6 +160,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
 
         val webviewDir = WebviewResourceLoader.getWebviewDir(javaClass.classLoader)
         val indexUrl = WebviewHttpServer.start(webviewDir)
+        webviewServerAcquired = true
         log.info("Loading Qenex webview from $indexUrl")
         browser.loadURL(indexUrl)
     }
@@ -269,14 +274,15 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
     }
 
     private fun sendBridgeReady() {
-        if (bridgeReadySent) {
+        val manager = BridgeProcessManager.getInstance()
+        if (bridgeReadySent && manager.baseUrl != null) {
             return
         }
         bridgeReadySent = true
 
         try {
             val pageOrigin = browser?.cefBrowser?.url?.let(::originOf)
-            val bridgeUrl = BridgeProcessManager.getInstance().start(pageOrigin)
+            val bridgeUrl = manager.start(pageOrigin)
             val defaultWorkspace = project?.basePath
             log.info("Qenex bridge ready for project: ${defaultWorkspace ?: "<none>"}")
 
@@ -293,6 +299,7 @@ class QenexPanel(private val project: Project?) : JBPanel<QenexPanel>(BorderLayo
             )
             postThemeUpdate()
         } catch (error: Exception) {
+            bridgeReadySent = false
             log.error("Failed to start Qenex bridge", error)
             postToWebview(
                 buildJsonObject {

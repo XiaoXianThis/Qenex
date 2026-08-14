@@ -2,11 +2,13 @@ import { existsSync } from "node:fs";
 import { execSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageBunBridge } from "./lib/stage-bun-bridge.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = join(root, "apps", "desktop");
 const bridgeDir = join(root, "apps", "bridge");
 const bridgeEntry = join(bridgeDir, "src", "index.ts");
+const bridgeStage = join(desktopDir, "bridge");
 
 const args = process.argv.slice(2);
 const shouldPackage = args.includes("--package");
@@ -22,7 +24,7 @@ if (allTargets || explicitTargets.length > 0) {
     "Note: Desktop no longer builds per-target Rust sidecars (M7).",
   );
   console.log(
-    "Bun Bridge source is bundled as Tauri resources; runtime uses system Bun.",
+    "A self-contained Bridge bundle is included as a Tauri resource; runtime uses system Bun.",
   );
 }
 
@@ -42,8 +44,8 @@ if (!existsSync(bridgeEntry)) {
 
 ensureBun();
 
-console.log("Ensuring Bun Bridge dependencies...");
-execSync("bun install", { cwd: bridgeDir, stdio: "inherit" });
+console.log("Bundling Bun Bridge for Desktop resources...");
+stageBunBridge(bridgeStage);
 
 console.log("Building desktop frontend...");
 execSync("bun run build", { cwd: desktopDir, stdio: "inherit" });
@@ -51,7 +53,7 @@ execSync("bun run build", { cwd: desktopDir, stdio: "inherit" });
 ensureIcons(desktopDir);
 
 if (shouldPackage) {
-  console.log("Packaging Tauri app (bundles bridge/src + package.json)...");
+  console.log("Packaging Tauri app (bundles self-contained Bridge runtime)...");
   console.log(
     "Release still requires system Bun at runtime (embedding Bun = 0.3.x).",
   );

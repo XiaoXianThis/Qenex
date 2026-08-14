@@ -97,7 +97,7 @@ if (existsSync(webviewHtml)) {
 }
 
 console.log("[m9] Staging Bun Bridge for processResources…");
-stageBunBridge(stageDir, { includeNodeModules: false });
+stageBunBridge(stageDir);
 
 if (!isWin) {
   chmodSync(join(jetbrainsDir, "gradlew"), 0o755);
@@ -110,15 +110,14 @@ execSync(`${gradlew} processResources compileKotlin`, {
   shell: true,
 });
 
-const resourceIndex = join(
+const bundledIndex = join(
   jetbrainsDir,
   "build",
   "resources",
   "main",
   "qenex",
   "bridge",
-  "src",
-  "index.ts",
+  "index.js",
 );
 const resourcePkg = join(
   jetbrainsDir,
@@ -138,8 +137,8 @@ const rustBin = join(
   "bin",
 );
 
-if (existsSync(resourceIndex) && existsSync(resourcePkg)) {
-  console.log(`OK  packaged resource ${resourceIndex}`);
+if (existsSync(bundledIndex) && existsSync(resourcePkg)) {
+  console.log(`OK  packaged resource ${bundledIndex}`);
 } else {
   console.error("MISSING  processResources output qenex/bridge");
   failed = true;

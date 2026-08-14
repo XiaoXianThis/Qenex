@@ -16,7 +16,7 @@ bun run dev:bridge
 # http://127.0.0.1:8000/health
 ```
 
-默认：`http://127.0.0.1:8000`（仅本机）。环境变量：`QENEX_BRIDGE_PORT` / `QENEX_BRIDGE_HOST` / `QENEX_OPENCODE_BIN` / `QENEX_SESSIONS_DB` / `QENEX_CORS_ORIGINS`（Desktop / IDE 跨域）。
+默认：`http://127.0.0.1:8000`（仅本机）。环境变量：`QENEX_BRIDGE_PORT` / `QENEX_BRIDGE_HOST` / `QENEX_OPENCODE_BIN` / `QENEX_SESSIONS_DB` / `QENEX_CORS_ORIGINS`（Desktop / IDE 跨域）/ `QENEX_SESSION_INIT_TIMEOUT_MS`（Agent 初始化超时，默认 45000ms）/ `QENEX_CHAT_IDLE_TIMEOUT_MS`（流式输出空闲超时，默认 90000ms）。
 
 Desktop sidecar 与打包约定见 [`M7.md`](./M7.md)。
 

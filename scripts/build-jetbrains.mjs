@@ -14,8 +14,7 @@ const isWin = process.platform === "win32";
 const gradlew = isWin ? "gradlew.bat" : "./gradlew";
 
 console.log("[m9] Staging Bun Bridge for JetBrains resources…");
-// Lean resources: src + package.json; BridgeProcessManager runs bun install when needed.
-stageBunBridge(stageDir, { includeNodeModules: false });
+stageBunBridge(stageDir);
 
 console.log("Building JetBrains webview...");
 execSync("bun run build", {

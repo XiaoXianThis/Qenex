@@ -8,13 +8,13 @@
  *   QENEX_WEB_PORT    (default 3000)
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "bun";
 
 const root = import.meta.dir;
 const bridgeDir = join(root, "bridge");
 const webDir = join(root, "web");
-const bridgeEntry = join(bridgeDir, "src", "index.ts");
+const bridgeEntry = join(bridgeDir, "index.js");
 
 if (!existsSync(bridgeEntry)) {
   console.error(`Missing ${bridgeEntry}`);
@@ -40,6 +40,27 @@ const child = spawn({
   stdout: "inherit",
   stderr: "inherit",
 });
+
+async function waitForBridge(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    if (child.exitCode != null) {
+      throw new Error(`Bridge exited during startup (${child.exitCode})`);
+    }
+    try {
+      const response = await fetch(`http://${bridgeHost}:${bridgePort}/health`, {
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return;
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = String(error);
+    }
+    await Bun.sleep(200);
+  }
+  throw new Error(`Bridge health check timed out: ${lastError}`);
+}
 
 function shutdown(signal) {
   console.log(`[qenex] ${signal}, shutting down…`);
@@ -102,7 +123,11 @@ async function serveStatic(url) {
   if (pathname.endsWith("/")) pathname += "index.html";
   if (pathname === "/") pathname = "/index.html";
 
-  const filePath = join(webDir, pathname.replace(/^\//, ""));
+  const filePath = resolve(webDir, pathname.replace(/^\//, ""));
+  const rel = relative(webDir, filePath);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return new Response("Forbidden", { status: 403 });
+  }
   const file = Bun.file(filePath);
   if (await file.exists()) {
     return new Response(file, {
@@ -118,6 +143,14 @@ async function serveStatic(url) {
     });
   }
   return new Response("Not Found", { status: 404 });
+}
+
+try {
+  await waitForBridge();
+} catch (error) {
+  console.error(`[qenex] ${error}`);
+  child.kill();
+  process.exit(1);
 }
 
 Bun.serve({

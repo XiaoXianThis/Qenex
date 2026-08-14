@@ -12,7 +12,7 @@ const vscodeDir = join(root, "apps", "vscode");
 const stageDir = join(vscodeDir, "bridge");
 
 console.log("[m9] Staging Bun Bridge into apps/vscode/bridge…");
-stageBunBridge(stageDir, { includeNodeModules: true });
+stageBunBridge(stageDir);
 
 console.log("Building VS Code webview...");
 execSync("bun run build", {
@@ -23,11 +23,8 @@ execSync("bun run build", {
 console.log("Compiling extension host...");
 execSync("node esbuild.mjs", { cwd: vscodeDir, stdio: "inherit" });
 
-if (!existsSync(join(stageDir, "src", "index.ts"))) {
-  throw new Error("staged bridge missing src/index.ts");
-}
-if (!existsSync(join(stageDir, "node_modules", "ai", "package.json"))) {
-  throw new Error("staged bridge missing node_modules/ai");
+if (!existsSync(join(stageDir, "index.js"))) {
+  throw new Error("staged bridge missing bundled index.js");
 }
 
 console.log("");

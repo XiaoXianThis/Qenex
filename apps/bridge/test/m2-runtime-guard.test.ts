@@ -81,6 +81,8 @@ describe("M2 · frontend wiring", () => {
     expect(toggle).toContain("Auto");
     const thread = read("packages/ui/src/components/assistant-ui/thread.tsx");
     expect(thread).toContain("ApprovalModeToggle");
+    expect(thread).not.toContain("模型等待你的审批");
+    expect(thread).not.toContain("否则会一直停住");
   });
 
   test("UI sources do not call legacy /v2 approval endpoints", () => {

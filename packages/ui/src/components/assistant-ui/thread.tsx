@@ -23,13 +23,12 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { AgentIcon } from "@/components/AgentIcon";
+import { ErrorOverlay } from "@/components/ErrorOverlay";
 import {
   cn,
   formatBridgeError,
   getAgentPreset,
-  isAisdkSessionId,
   useLayoutStore,
-  usePrimaryApproval,
   useSessionConfig,
   useTabsStore,
 } from "@qenex/core";
@@ -365,26 +364,82 @@ export const AisdkThreadMessages: FC = () => {
 /** Live useChat error banner (ThreadPrimitive does not always surface transport errors). */
 export const ChatStreamErrorBanner: FC = () => {
   const chat = useChatHelpers();
-  if (!chat?.error) return null;
+  const [dismissedError, setDismissedError] = useState<unknown>(null);
+  if (!chat?.error || dismissedError === chat.error) return null;
   return (
-    <div
-      data-testid="chat-stream-error"
-      className="border-destructive bg-destructive/10 text-destructive mx-4 mb-4 rounded-md border p-3 text-sm whitespace-pre-wrap"
-    >
-      {formatBridgeError(chat.error)}
-    </div>
+    <ErrorOverlay
+      testId="chat-stream-error"
+      title="对话请求失败"
+      message={formatBridgeError(chat.error)}
+      onDismiss={() => setDismissedError(chat.error)}
+      actions={
+        <>
+          <button
+            type="button"
+            className="cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90"
+            onClick={() => void chat.regenerate?.()}
+          >
+            重新生成
+          </button>
+          <button
+            type="button"
+            className="cursor-pointer rounded-md bg-muted px-2.5 py-1 text-xs text-foreground hover:bg-muted/80"
+            onClick={() => chat.stop?.()}
+          >
+            停止
+          </button>
+        </>
+      }
+    />
+  );
+};
+
+export const SessionConfigErrorOverlay: FC = () => {
+  const { config, agentId, retryAfterAuth } = useSessionConfig();
+  const agent = getAgentPreset(agentId);
+  const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+
+  useEffect(() => {
+    if (!config.error) setDismissedMessage(null);
+  }, [config.error]);
+
+  if (!config.error || config.authChallenge || dismissedMessage === config.error) {
+    return null;
+  }
+
+  return (
+    <ErrorOverlay
+      className="right-auto left-3"
+      testId="session-config-error"
+      title={`${agent.name} 配置失败`}
+      message={config.error}
+      onDismiss={() => setDismissedMessage(config.error)}
+      actions={
+        <button
+          type="button"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={retrying || config.loading}
+          onClick={() => {
+            setRetrying(true);
+            void retryAfterAuth()
+              .catch(() => {
+                // The provider updates config.error with the actionable detail.
+              })
+              .finally(() => setRetrying(false));
+          }}
+        >
+          <RotateCcwIcon className="size-3.5" />
+          {retrying ? "重试中…" : "重试"}
+        </button>
+      }
+    />
   );
 };
 
 /** Status while waiting on model / tool / Ask approval — avoids “假死”无反馈. */
 export const ChatRunStatusBanner: FC = () => {
   const chat = useChatHelpers();
-  const activeTabId = useTabsStore((s) => s.activeTabId);
-  const tabs = useTabsStore((s) => s.tabs);
-  const bridgeSessionId = tabs.find((t) => t.id === activeTabId)?.sessionId;
-  const { approval, pendingCount } = usePrimaryApproval(
-    isAisdkSessionId(bridgeSessionId) ? bridgeSessionId : undefined,
-  );
   const threadRunning = useAuiState((s) => s.thread.isRunning);
   const isRunning =
     chat?.status === "submitted" ||
@@ -400,19 +455,6 @@ export const ChatRunStatusBanner: FC = () => {
     !textFromUiMessage(last!) &&
     (reasoningFromUiMessage(last!).length > 0 ||
       (last!.parts ?? []).some((part) => String(part.type).startsWith("tool")));
-
-  if (approval && (chat?.messages.length ?? 0) > 0) {
-    return (
-      <div
-        data-testid="chat-run-status"
-        className="border-border bg-muted/40 text-foreground mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs"
-      >
-        <span>
-          模型等待你的审批（{pendingCount}）— 请处理底部审批卡片，否则会一直停住
-        </span>
-      </div>
-    );
-  }
 
   if (incompleteAssistant) {
     return (
@@ -472,13 +514,12 @@ export const ThreadScrollToBottom: FC = () => {
 };
 
 export const ThreadWelcome: FC = () => {
-  const { config, agentId, retryAfterAuth } = useSessionConfig();
+  const { agentId } = useSessionConfig();
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const agent = getAgentPreset(agentId);
   const fullText = `和 ${agent.name} 一起构建想象`;
   const [typedText, setTypedText] = useState("");
   const [done, setDone] = useState(false);
-  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     setTypedText("");
@@ -501,47 +542,6 @@ export const ThreadWelcome: FC = () => {
       if (intervalId) clearInterval(intervalId);
     };
   }, [fullText]);
-
-  if (config.error && !config.authChallenge) {
-    return (
-      <div
-        key={activeTabId ?? agentId}
-        className="aui-thread-welcome flex max-w-lg flex-col items-center justify-center gap-4 px-4"
-      >
-        <AgentIcon
-          agentId={agent.id}
-          className="aui-thread-welcome-icon size-24 opacity-20 select-none"
-          draggable={false}
-        />
-        <div className="space-y-2 text-center">
-          <p className="text-destructive text-sm font-medium">
-            {agent.name} 启动失败
-          </p>
-          <pre className="border-destructive/20 bg-destructive/5 text-muted-foreground max-h-40 overflow-auto rounded-md border p-3 text-left text-[11px] leading-relaxed break-words whitespace-pre-wrap">
-            {config.error}
-          </pre>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="gap-1.5"
-          disabled={retrying || config.loading}
-          onClick={() => {
-            setRetrying(true);
-            void retryAfterAuth()
-              .catch(() => {
-                // bootstrap already wrote config.error
-              })
-              .finally(() => setRetrying(false));
-          }}
-        >
-          <RotateCcwIcon className="size-3.5" />
-          {retrying ? "重试中…" : "重试启动"}
-        </Button>
-      </div>
-    );
-  }
 
   return (
     <div

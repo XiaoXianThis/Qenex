@@ -61,26 +61,25 @@ export class QenexWebviewProvider implements WebviewViewProvider {
     };
 
     const nonce = getNonce();
+    const defaultWorkspace = getDefaultWorkspace();
+
+    webviewView.webview.onDidReceiveMessage(
+      (message: unknown) => {
+        void this.handleMessage(
+          message,
+          defaultWorkspace,
+          webviewView.webview.cspSource,
+        );
+      },
+      undefined,
+      this.context.subscriptions,
+    );
 
     try {
-      const bridgeUrl = await this.bridgeManager.start(
-        webviewView.webview.cspSource,
-      );
-      const defaultWorkspace = getDefaultWorkspace();
-
       webviewView.webview.html = await buildWebviewHtml(
         this.context.extensionUri,
         webviewView.webview,
         nonce,
-        bridgeUrl,
-      );
-
-      webviewView.webview.onDidReceiveMessage(
-        (message: unknown) => {
-          void this.handleMessage(message, defaultWorkspace, bridgeUrl);
-        },
-        undefined,
-        this.context.subscriptions,
       );
     } catch (error) {
       const detail =
@@ -93,7 +92,7 @@ export class QenexWebviewProvider implements WebviewViewProvider {
   private async handleMessage(
     raw: unknown,
     defaultWorkspace: string | null,
-    bridgeUrl: string,
+    cspSource: string,
   ): Promise<void> {
     if (!isWebviewMessage(raw) || !this.webview) {
       return;
@@ -103,15 +102,23 @@ export class QenexWebviewProvider implements WebviewViewProvider {
 
     switch (message.type) {
       case "ready": {
-        this.postToWebview({
-          type: "bridge-ready",
-          url: bridgeUrl,
-          defaultWorkspace,
-        });
-        this.postToWebview({
-          type: "theme-update",
-          theme: currentHostThemeSnapshot(),
-        });
+        try {
+          const bridgeUrl = await this.bridgeManager.start(cspSource);
+          this.postToWebview({
+            type: "bridge-ready",
+            url: bridgeUrl,
+            defaultWorkspace,
+          });
+          this.postToWebview({
+            type: "theme-update",
+            theme: currentHostThemeSnapshot(),
+          });
+        } catch (error) {
+          this.postToWebview({
+            type: "bridge-error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
       case "storage-get": {
@@ -189,7 +196,6 @@ async function buildWebviewHtml(
   extensionUri: Uri,
   webview: Webview,
   nonce: string,
-  bridgeUrl: string,
 ): Promise<string> {
   const mediaDir = Uri.joinPath(extensionUri, "media");
   const indexPath = path.join(mediaDir.fsPath, "index.html");
@@ -201,7 +207,7 @@ async function buildWebviewHtml(
     `font-src ${webview.cspSource}`,
     `img-src ${webview.cspSource} data:`,
     `script-src 'nonce-${nonce}' ${webview.cspSource}`,
-    `connect-src ${webview.cspSource} ${bridgeUrl} http://127.0.0.1:* http://localhost:*`,
+    `connect-src ${webview.cspSource} http://127.0.0.1:* http://localhost:*`,
   ].join("; ");
 
   html = html.replace(
@@ -247,7 +253,7 @@ function buildErrorHtml(nonce: string, detail: string): string {
 </head>
 <body>
   <h2>Qenex 启动失败</h2>
-  <p>Bridge 子进程未能启动。请确认已运行 <code>bun run build:vscode</code>，且 8000 端口未被占用。</p>
+  <p>Webview 资源未能加载。请重新构建或安装 Qenex 扩展。</p>
   <pre>${escaped}</pre>
 </body>
 </html>`;

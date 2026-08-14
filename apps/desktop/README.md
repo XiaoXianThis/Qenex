@@ -15,8 +15,8 @@
 
 ```bash
 bun install
-bun run build:desktop          # 前端 + 校验 Bun Bridge 入口
-bun run build:desktop --package       # 额外打包安装程序（resources 含 bridge/src）
+bun run build:desktop          # 前端 + 构建自包含 Bridge bundle
+bun run build:desktop --package       # 额外打包安装程序（resources 含 bridge/index.js）
 ```
 
 产物：
@@ -24,7 +24,7 @@ bun run build:desktop --package       # 额外打包安装程序（resources 含
 | 路径 | 说明 |
 |------|------|
 | `apps/desktop/dist/` | Webview 静态资源 |
-| `apps/desktop/src-tauri/` resources | 打包进安装包的 `bridge/src` + `package.json` |
+| `apps/desktop/bridge/index.js` | 打包进安装包的自包含 Bridge bundle |
 | `apps/desktop/src-tauri/target/release/bundle/` | 安装包（`--package`） |
 
 ## 自动验收
@@ -45,18 +45,19 @@ bun run dev:desktop      # 校验 Bun + Bridge 入口后启动 Tauri + Vite :142
 | 变量 | 作用 |
 |------|------|
 | `QENEX_BUN_BIN` | 指定 bun 可执行文件 |
-| `QENEX_BRIDGE_ENTRY` | 指定 Bridge 入口 `.ts` |
+| `QENEX_BRIDGE_ENTRY` | 指定 Bridge 入口 `.ts` 或 `.js` |
 
-开发态默认用仓库 `apps/bridge`（不用 `target/*/bridge` 那份无 `node_modules` 的拷贝）。打包安装包若缺依赖，会在首次启动时对该资源目录执行 `bun install --production`。
+开发态默认用仓库 `apps/bridge`。发布包在构建时锁定并打入依赖，首次启动不会修改安装目录，也不需要访问包注册表。
 
 ## 架构
 
 ```
 Tauri Host (Rust)                 Webview (@qenex/ui)
 ├── bridge.rs                     ├── createTauriHost()
-│   └── spawn: bun bridge/src     │   ├── getBridgeBaseUrl()
-│       /index.ts                 │   ├── fetch → localhost Bridge
+│   └── spawn: bun bridge/index.js│   ├── getBridgeBaseUrl()
+│                                 │   ├── fetch → localhost Bridge
 ├── cmd_get_bridge_url            │   ├── storage → plugin-store
+├── cmd_restart_bridge            │
 ├── cmd_pick_workspace            │   └── pickWorkspace → dialog
 └── cmd_storage_*                 └── QenexHostProvider → App
 ```
@@ -79,5 +80,5 @@ Bridge 使用动态端口；`QENEX_CORS_ORIGINS` 覆盖 Tauri webview 源。详�
 ## 已知限制
 
 - 发布包 **尚未嵌入 Bun**：目标机器需安装 Bun（或设置 `QENEX_BUN_BIN`）
-- VS Code / JetBrains 仍使用旧 Rust sidecar，迁移见 `apps/bridge/M7.md` IDE checklist
+- 发布包仍依赖本机 ACP Agent（例如 `opencode acp`）
 - 打包后的 `.app` 启动时会合并 login shell PATH（以及 `~/.bun/bin`、`~/.cargo/bin` 等），以便找到 Bun 与 ACP Agent

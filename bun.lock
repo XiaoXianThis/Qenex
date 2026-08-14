@@ -7,11 +7,11 @@
     },
     "apps/bridge": {
       "name": "@qenex/bridge",
-      "version": "0.1.0",
+      "version": "0.3.2",
       "dependencies": {
-        "@mcpc-tech/acp-ai-provider": "^0.3.4",
-        "ai": "^7",
-        "zod": "^4.4.3",
+        "@mcpc-tech/acp-ai-provider": "0.3.4",
+        "ai": "7.0.48",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@types/bun": "^1.3.14",
@@ -20,7 +20,7 @@
     },
     "apps/desktop": {
       "name": "@qenex/desktop",
-      "version": "0.2.3",
+      "version": "0.3.2",
       "dependencies": {
         "@qenex/core": "workspace:*",
         "@qenex/platform": "workspace:*",
@@ -71,7 +71,7 @@
     },
     "apps/vscode": {
       "name": "qenex",
-      "version": "0.2.3",
+      "version": "0.3.2",
       "devDependencies": {
         "@types/node": "^26.1.0",
         "@types/vscode": "^1.85.0",

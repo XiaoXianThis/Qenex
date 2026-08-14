@@ -16,7 +16,7 @@ function read(rel: string): string {
 }
 
 describe("M5 · Bridge config API", () => {
-  test("config / mode / model routes exist", () => {
+  test("config / mode / model / dynamic option routes exist", () => {
     expect(
       existsSync(resolve(repoRoot, "apps/bridge/src/session-config-dto.ts")),
     ).toBe(true);
@@ -24,6 +24,9 @@ describe("M5 · Bridge config API", () => {
     expect(server).toContain("/config");
     expect(server).toContain("/mode");
     expect(server).toContain("/model");
+    expect(server).toContain("/config-option");
+    expect(server).toContain("/probe-model-config");
+    expect(server).toContain("/probe-models-config");
     expect(server).toContain("getConfig");
     expect(server).toContain("setMode");
     expect(server).toContain("setModel");
@@ -31,6 +34,8 @@ describe("M5 · Bridge config API", () => {
     const store = read("apps/bridge/src/session-store.ts");
     expect(store).toContain("provider.setMode");
     expect(store).toContain("provider.setModel");
+    expect(store).toContain("setSessionConfigOption");
+    expect(store).toContain("probeModelConfig");
     expect(store).toContain("normalizeAcpSessionConfig");
     expect(
       existsSync(resolve(repoRoot, "apps/bridge/src/acp-session-config.ts")),
@@ -44,6 +49,8 @@ describe("M5 · frontend uses aisdk session config", () => {
     expect(ctx).toContain("getAisdkSessionConfig");
     expect(ctx).toContain("setAisdkSessionMode");
     expect(ctx).toContain("setAisdkSessionModel");
+    expect(ctx).toContain("setAisdkSessionConfigOption");
+    expect(ctx).toContain("probeAisdkSessionModelConfig");
     expect(ctx).not.toContain('from "../lib/bridge-api.ts";\n  getSessionConfig');
     // Must not call fusion /v2 mode setters for primary path
     expect(ctx).not.toMatch(/\bsetMode\(threadId/);
@@ -58,6 +65,9 @@ describe("M5 · frontend uses aisdk session config", () => {
     expect(aisdk).toContain("/config");
     expect(aisdk).toContain("/mode");
     expect(aisdk).toContain("/model");
+    expect(aisdk).toContain("/config-option");
+    expect(aisdk).toContain("/probe-model-config");
+    expect(aisdk).toContain("/probe-models-config");
   });
 
   test("ModeSyncBridge is gone", () => {

@@ -1,10 +1,12 @@
 /**
- * Stage apps/bridge into destDir with a real local node_modules.
- * Installs in os.tmpdir() first so monorepo workspaces do not hoist deps away.
+ * Stage apps/bridge as a self-contained Bun bundle.
+ *
+ * Dependencies are resolved from the repository's locked install at build time,
+ * so packaged hosts never write into their install directory or access a package
+ * registry on first launch.
  */
 import {
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -12,7 +14,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,37 +38,27 @@ export function listBridgeFiles(dir, base = dir) {
 
 /**
  * @param {string} destDir
- * @param {{ includeNodeModules?: boolean, log?: (...args: unknown[]) => void }} [opts]
+ * @param {{ log?: (...args: unknown[]) => void }} [opts]
  */
 export function stageBunBridge(destDir, opts = {}) {
-  const includeNodeModules = opts.includeNodeModules !== false;
   const log = opts.log ?? console.log.bind(console);
   const tmp = mkdtempSync(join(tmpdir(), "qenex-bridge-stage-"));
   try {
-    mkdirSync(join(tmp, "src"), { recursive: true });
-    cpSync(join(bridgeDir, "src"), join(tmp, "src"), { recursive: true });
     cpSync(join(bridgeDir, "package.json"), join(tmp, "package.json"));
 
-    log("[m9] bun install --production (isolated tmp, not monorepo hoist)…");
-    execSync("bun install --production", { cwd: tmp, stdio: "inherit" });
-
-    const aiPkg = join(tmp, "node_modules", "ai", "package.json");
-    if (!existsSync(aiPkg)) {
-      throw new Error(
-        `staged bridge missing ${aiPkg} — bun install did not create local deps`,
-      );
-    }
-
-    if (!includeNodeModules) {
-      // JetBrains: keep plugin resources lean; runtime bun install on first use.
-      rmSync(join(tmp, "node_modules"), { recursive: true, force: true });
-      for (const lock of ["bun.lock", "bun.lockb", "package-lock.json"]) {
-        rmSync(join(tmp, lock), { force: true });
-      }
-    } else {
-      // Drop CLI shims; Bun runs TypeScript entry directly. vsce also cannot zip them.
-      rmSync(join(tmp, "node_modules", ".bin"), { recursive: true, force: true });
-    }
+    log("[bridge] bundling production runtime from repository lock…");
+    execFileSync(
+      "bun",
+      [
+        "build",
+        join(bridgeDir, "src", "index.ts"),
+        "--target",
+        "bun",
+        "--outfile",
+        join(tmp, "index.js"),
+      ],
+      { cwd: root, stdio: "inherit" },
+    );
 
     rmSync(destDir, { recursive: true, force: true });
     mkdirSync(dirname(destDir), { recursive: true });
@@ -78,8 +70,8 @@ export function stageBunBridge(destDir, opts = {}) {
       `${files.join("\n")}\n`,
       "utf8",
     );
-    log(`[m9] staged ${files.length} bridge files → ${destDir}`);
-    return { files, destDir, hasNodeModules: includeNodeModules };
+    log(`[bridge] staged ${files.length} files → ${destDir}`);
+    return { files, destDir, bundledEntry: join(destDir, "index.js") };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

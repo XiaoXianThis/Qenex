@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
@@ -16,6 +16,7 @@ import {
   createComposerAttachmentAdapter,
   ensureAisdkSession,
   formatBridgeError,
+  getAgentPreset,
   getAisdkSession,
   invalidateSessionBoot,
   isAisdkSessionId,
@@ -27,6 +28,7 @@ import {
 } from "@qenex/core";
 import { ChatHelpersProvider } from "@/components/ChatHelpersContext";
 import { ApprovalPollBridge } from "@/components/ApprovalPollBridge";
+import { ErrorOverlay } from "@/components/ErrorOverlay";
 
 type AgentRuntimeProviderProps = {
   session: RuntimeSessionConfig;
@@ -57,6 +59,17 @@ function resolveChatUrl(base: string, input: string | URL | Request): string {
   return normalizedBase ? `${normalizedBase}${path}` : path;
 }
 
+function messageTextLength(message: UIMessage | undefined): number {
+  if (!message) return 0;
+  return (message.parts ?? []).reduce(
+    (length, part) =>
+      part.type === "text" && typeof part.text === "string"
+        ? length + part.text.length
+        : length,
+    0,
+  );
+}
+
 function AisdkRuntimeInner({
   session,
   sessionId,
@@ -71,6 +84,14 @@ function AisdkRuntimeInner({
   const host = useHost();
   const autoAllow = useApprovalPrefsStore((s) => s.autoAllow);
   const approvalMode = approvalModeFromAutoAllow(autoAllow);
+  const setMessagesRef = useRef<
+    | ((
+        messages:
+          | UIMessage[]
+          | ((current: UIMessage[]) => UIMessage[]),
+      ) => void)
+    | null
+  >(null);
 
   const transport = useMemo(() => {
     return new AssistantChatTransport({
@@ -90,7 +111,34 @@ function AisdkRuntimeInner({
     id: sessionId,
     messages: initialMessages,
     transport,
+    // Limit React/AUI mirror updates while retaining every append-only delta.
+    throttle: 32,
+    onFinish: ({ message, isAbort, isDisconnect, isError }) => {
+      if (isAbort || isDisconnect || isError) return;
+      const finishedMessageId = message.id;
+      void listAisdkSessionMessages(sessionId, host)
+        .then((persisted) => {
+          const canonical = persisted as UIMessage[];
+          if (canonical.length === 0) return;
+          setMessagesRef.current?.((current) => {
+            const currentLast = current.at(-1);
+            if (currentLast?.id !== finishedMessageId) return current;
+            const canonicalLast = canonical.at(-1);
+            if (
+              canonicalLast?.role !== "assistant" ||
+              messageTextLength(canonicalLast) < messageTextLength(currentLast)
+            ) {
+              return current;
+            }
+            return canonical;
+          });
+        })
+        .catch((error) => {
+          console.warn("Failed to reconcile completed chat stream:", error);
+        });
+    },
   });
+  setMessagesRef.current = chat.setMessages;
   const attachmentAdapter = useMemo(() => createComposerAttachmentAdapter(), []);
   const runtime = useAISDKRuntime(chat, {
     adapters: { attachments: attachmentAdapter },
@@ -252,24 +300,32 @@ function SessionBootstrap({
   ]);
 
   if (error) {
+    // Inactive keepalive slots receive no children. They must retain their
+    // runtime state without mounting a full-height error surface into the page.
+    if (children == null) {
+      return <PendingRuntimeProvider>{children}</PendingRuntimeProvider>;
+    }
+    const agent = getAgentPreset(session.agentId);
     return (
       <PendingRuntimeProvider>
-        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="text-destructive max-w-md text-sm whitespace-pre-wrap">
-            {error}
-          </p>
-          {session.cwd ? (
-            <p
-              className="text-muted-foreground max-w-md truncate font-mono text-xs"
-              title={session.cwd}
-            >
-              当前路径：{session.cwd}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap items-center justify-center gap-2">
+        <div className="relative h-full min-h-0">
+          {children}
+          <ErrorOverlay
+            className="top-14"
+            title={`${agent.name} 启动失败`}
+            message={error}
+            detail={
+              session.cwd ? (
+                <span className="block truncate font-mono" title={session.cwd}>
+                  当前路径：{session.cwd}
+                </span>
+              ) : null
+            }
+            actions={
+              <>
             <button
               type="button"
-              className="border-border hover:bg-muted cursor-pointer rounded-md border px-3 py-1.5 text-sm"
+              className="cursor-pointer rounded-md bg-muted px-2.5 py-1 text-xs text-foreground hover:bg-muted/80"
               onClick={() => {
                 void (async () => {
                   const picked = await host.pickWorkspace();
@@ -283,13 +339,14 @@ function SessionBootstrap({
             </button>
             <button
               type="button"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer rounded-md px-3 py-1.5 text-sm"
+              className="cursor-pointer rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90"
               onClick={() => setRetryNonce((n) => n + 1)}
             >
               重试
             </button>
-          </div>
-          {children}
+              </>
+            }
+          />
         </div>
       </PendingRuntimeProvider>
     );

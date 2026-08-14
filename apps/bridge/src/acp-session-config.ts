@@ -28,6 +28,7 @@ export type NormalizedAcpSessionConfig = {
   modes?: AcpModeState;
   models?: AcpModelState;
   thoughtLevels?: AcpThoughtState;
+  fastOptions?: AcpThoughtState;
 };
 
 type SelectOption = {
@@ -65,19 +66,25 @@ export function flattenAcpSelectOptions(options: unknown): SelectOption[] {
   return out;
 }
 
+function normalizeConfigKey(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
+    : "";
+}
+
 function findConfigOption(
   configOptions: unknown,
-  category: string,
+  aliases: string[],
 ): Record<string, unknown> | null {
   if (!Array.isArray(configOptions)) return null;
-  const byCategory = configOptions.find(
-    (opt) => isRecord(opt) && opt.category === category,
-  );
-  if (isRecord(byCategory)) return byCategory;
-  const byId = configOptions.find(
-    (opt) => isRecord(opt) && opt.id === category,
-  );
-  return isRecord(byId) ? byId : null;
+  const keys = new Set(aliases.map(normalizeConfigKey));
+  const found = configOptions.find((option) => {
+    if (!isRecord(option)) return false;
+    return [option.category, option.id, option.name].some((value) =>
+      keys.has(normalizeConfigKey(value)),
+    );
+  });
+  return isRecord(found) ? found : null;
 }
 
 function modesFromLegacy(modes: unknown): AcpModeState | undefined {
@@ -185,13 +192,26 @@ export function normalizeAcpSessionConfig(session: {
 }): NormalizedAcpSessionConfig {
   const legacyModes = modesFromLegacy(session.modes);
   const legacyModels = modelsFromLegacy(session.models);
-  const modeOpt = findConfigOption(session.configOptions, "mode");
-  const modelOpt = findConfigOption(session.configOptions, "model");
-  const thoughtOpt = findConfigOption(session.configOptions, "thought_level");
+  const modeOpt = findConfigOption(session.configOptions, ["mode"]);
+  const modelOpt = findConfigOption(session.configOptions, ["model"]);
+  const thoughtOpt = findConfigOption(session.configOptions, [
+    "thought_level",
+    "thinking_level",
+    "reasoning_effort",
+    "reasoning",
+    "thinking",
+    "effort",
+  ]);
+  const fastOpt = findConfigOption(session.configOptions, [
+    "fast",
+    "fast_mode",
+    "speed",
+  ]);
 
   return {
     modes: legacyModes ?? modesFromConfigOption(modeOpt),
     models: legacyModels ?? modelsFromConfigOption(modelOpt),
     thoughtLevels: thoughtFromConfigOption(thoughtOpt),
+    fastOptions: thoughtFromConfigOption(fastOpt),
   };
 }

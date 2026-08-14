@@ -3,6 +3,7 @@
 import {
   ChatStreamErrorBanner,
   ChatRunStatusBanner,
+  SessionConfigErrorOverlay,
   ThreadWelcome,
 } from "@/components/assistant-ui/thread";
 import { ThreadMessagesArea, ThreadMessagesEditPreview } from "@/layout/puck/panels";
@@ -209,6 +210,13 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
         </div>
       ) : null}
 
+      {!layoutEditing ? (
+        <>
+          <ChatStreamErrorBanner />
+          <SessionConfigErrorOverlay />
+        </>
+      ) : null}
+
       <ThreadPrimitive.Viewport
         ref={viewportRef}
         turnAnchor={layoutEditing ? "bottom" : "top"}
@@ -256,7 +264,6 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
                 {/* Always mount: do not gate on thread isNewChatView (that delayed user bubbles). */}
                 <ThreadMessagesArea />
                 <ChatRunStatusBanner />
-                <ChatStreamErrorBanner />
               </div>
             </>
           )}

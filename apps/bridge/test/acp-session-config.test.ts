@@ -86,6 +86,35 @@ describe("acp-session-config", () => {
     expect(normalized.models?.currentModelId).toBe("legacy-model");
   });
 
+  test("normalizes thought and fast aliases across agents", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "reasoning-effort",
+          name: "Reasoning Effort",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "high", name: "High" },
+          ],
+        },
+        {
+          id: "fast_mode",
+          name: "Fast Mode",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thoughtLevels?.configId).toBe("reasoning-effort");
+    expect(normalized.thoughtLevels?.currentId).toBe("high");
+    expect(normalized.fastOptions?.configId).toBe("fast_mode");
+    expect(normalized.fastOptions?.currentId).toBe("false");
+  });
+
   test("sessionInfoToConfigDto surfaces descriptions", () => {
     const dto = sessionInfoToConfigDto({
       sessionId: "ses_x",
@@ -103,9 +132,29 @@ describe("acp-session-config", () => {
         currentModelId: "m1",
         availableModels: [{ modelId: "m1", name: "M1" }],
       },
+      thoughtLevels: {
+        configId: "reasoning_effort",
+        currentId: "high",
+        available: [
+          { id: "low", name: "Low" },
+          { id: "high", name: "High" },
+        ],
+      },
+      fastOptions: {
+        configId: "fast",
+        currentId: "true",
+        available: [
+          { id: "false", name: "Off" },
+          { id: "true", name: "On" },
+        ],
+      },
     });
     expect(dto.currentModeId).toBe("plan");
     expect(dto.modes.find((m) => m.id === "plan")?.description).toBe("no edits");
     expect(dto.models).toEqual([{ id: "m1", name: "M1" }]);
+    expect(dto.currentThoughtLevelId).toBe("high");
+    expect(dto.thoughtLevelConfigId).toBe("reasoning_effort");
+    expect(dto.currentFastId).toBe("true");
+    expect(dto.fastConfigId).toBe("fast");
   });
 });

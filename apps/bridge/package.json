@@ -19,9 +19,9 @@
     "test:m9": "bun run test/m9-acceptance.ts"
   },
   "dependencies": {
-    "@mcpc-tech/acp-ai-provider": "^0.3.4",
-    "ai": "^7",
-    "zod": "^4.4.3"
+    "@mcpc-tech/acp-ai-provider": "0.3.4",
+    "ai": "7.0.48",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

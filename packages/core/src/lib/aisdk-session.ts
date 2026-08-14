@@ -8,6 +8,7 @@ import {
   EMPTY_SESSION_CONFIG,
   parseSessionOptions,
   type SessionConfig,
+  type SessionOption,
 } from "./session-config.ts";
 
 /** Minimal UIMessage shape for Bridge history (avoid coupling core to `ai` package). */
@@ -164,6 +165,10 @@ export function formatBridgeError(
         return `切换 Agent 模式失败：${err.message}`;
       case "set_model_failed":
         return `切换模型失败：${err.message}`;
+      case "config_option_unsupported":
+        return `当前 Agent 不支持这项配置：${err.message}`;
+      case "set_config_option_failed":
+        return `切换配置失败：${err.message}`;
       default:
         return err.message || fallback;
     }
@@ -178,6 +183,17 @@ export function formatBridgeError(
 async function bridgeUrl(host: QenexHost, path: string): Promise<string> {
   const base = (await host.getBridgeBaseUrl()).replace(/\/$/, "");
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function hostFetch(
+  host: QenexHost,
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  return host.fetch(url, {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(60_000),
+  });
 }
 
 async function readBridgeJson(res: Response): Promise<unknown> {
@@ -212,7 +228,7 @@ export async function createAisdkSession(
   options?: { agentId?: string; agentCommand?: string[] },
 ): Promise<AisdkSessionInfo> {
   const url = await bridgeUrl(host, "/api/sessions");
-  const res = await host.fetch(url, {
+  const res = await hostFetch(host, url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -239,7 +255,7 @@ export async function getAisdkSession(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}`,
   );
-  const res = await host.fetch(url);
+  const res = await hostFetch(host, url);
   if (res.status === 404) return null;
   const json = await readBridgeJson(res);
   if (!res.ok) {
@@ -256,7 +272,7 @@ export async function deleteAisdkSession(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}`,
   );
-  const res = await host.fetch(url, { method: "DELETE" });
+  const res = await hostFetch(host, url, { method: "DELETE" });
   if (!res.ok && res.status !== 404) {
     const json = await readBridgeJson(res);
     throwBridgeError(res, json, `deleteSession failed (${res.status})`);
@@ -271,7 +287,7 @@ export async function listAisdkSessionMessages(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
   );
-  const res = await host.fetch(url);
+  const res = await hostFetch(host, url);
   const json = await readBridgeJson(res);
   if (!res.ok) {
     throwBridgeError(res, json, `listSessionMessages failed (${res.status})`);
@@ -289,7 +305,7 @@ export async function updateAisdkSessionTitle(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}`,
   );
-  const res = await host.fetch(url, {
+  const res = await hostFetch(host, url, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title }),
@@ -336,7 +352,7 @@ export async function getAisdkSessionConfig(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/config`,
   );
-  const res = await host.fetch(url);
+  const res = await hostFetch(host, url);
   const json = await readBridgeJson(res);
   if (!res.ok) {
     throwBridgeError(res, json, `getSessionConfig failed (${res.status})`);
@@ -353,7 +369,7 @@ export async function setAisdkSessionMode(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/mode`,
   );
-  const res = await host.fetch(url, {
+  const res = await hostFetch(host, url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ modeId }),
@@ -374,7 +390,7 @@ export async function setAisdkSessionModel(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/model`,
   );
-  const res = await host.fetch(url, {
+  const res = await hostFetch(host, url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ modelId }),
@@ -386,6 +402,111 @@ export async function setAisdkSessionModel(
   return toAisdkSessionConfig(json as AisdkSessionConfigResponse);
 }
 
+export async function setAisdkSessionConfigOption(
+  sessionId: string,
+  configId: string,
+  value: string,
+  host: QenexHost = getBridgeHost(),
+): Promise<SessionConfig> {
+  const url = await bridgeUrl(
+    host,
+    `/api/sessions/${encodeURIComponent(sessionId)}/config-option`,
+  );
+  const res = await hostFetch(host, url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ configId, value }),
+  });
+  const json = await readBridgeJson(res);
+  if (!res.ok) {
+    throwBridgeError(res, json, `setSessionConfigOption failed (${res.status})`);
+  }
+  return toAisdkSessionConfig(json as AisdkSessionConfigResponse);
+}
+
+export type AisdkModelConfigProbe = {
+  modelId: string;
+  thoughtLevels: SessionOption[];
+  thoughtLevelConfigId: string | null;
+  currentThoughtLevelId: string | null;
+  fastOptions: SessionOption[];
+  fastConfigId: string | null;
+  currentFastId: string | null;
+};
+
+function toAisdkModelConfigProbe(
+  payload: AisdkSessionConfigResponse & { modelId?: string },
+  fallbackModelId: string,
+): AisdkModelConfigProbe {
+  const config = toAisdkSessionConfig(payload);
+  return {
+    modelId: payload.modelId ?? fallbackModelId,
+    thoughtLevels: config.thoughtLevels,
+    thoughtLevelConfigId: config.thoughtLevelConfigId,
+    currentThoughtLevelId: config.currentThoughtLevelId,
+    fastOptions: config.fastOptions,
+    fastConfigId: config.fastConfigId,
+    currentFastId: config.currentFastId,
+  };
+}
+
+export async function probeAisdkSessionModelConfig(
+  sessionId: string,
+  modelId: string,
+  host: QenexHost = getBridgeHost(),
+): Promise<AisdkModelConfigProbe> {
+  const url = await bridgeUrl(
+    host,
+    `/api/sessions/${encodeURIComponent(sessionId)}/probe-model-config`,
+  );
+  const res = await hostFetch(host, url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ modelId }),
+  });
+  const json = await readBridgeJson(res);
+  if (!res.ok) {
+    throwBridgeError(res, json, `probeSessionModelConfig failed (${res.status})`);
+  }
+  return toAisdkModelConfigProbe(
+    json as AisdkSessionConfigResponse & { modelId?: string },
+    modelId,
+  );
+}
+
+export async function probeAisdkSessionModelsConfig(
+  sessionId: string,
+  modelIds: string[],
+  host: QenexHost = getBridgeHost(),
+): Promise<AisdkModelConfigProbe[]> {
+  if (modelIds.length === 0) return [];
+  if (modelIds.length === 1) {
+    return [await probeAisdkSessionModelConfig(sessionId, modelIds[0]!, host)];
+  }
+  const url = await bridgeUrl(
+    host,
+    `/api/sessions/${encodeURIComponent(sessionId)}/probe-models-config`,
+  );
+  const res = await hostFetch(host, url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ modelIds }),
+  });
+  const json = await readBridgeJson(res);
+  if (!res.ok) {
+    throwBridgeError(res, json, `probeSessionModelsConfig failed (${res.status})`);
+  }
+  const probes = Array.isArray(
+    (json as { probes?: unknown[] }).probes,
+  )
+    ? ((json as { probes: Array<AisdkSessionConfigResponse & { modelId?: string }> })
+        .probes)
+    : [];
+  return probes.map((probe, index) =>
+    toAisdkModelConfigProbe(probe, modelIds[index] ?? ""),
+  );
+}
+
 export async function listPendingApprovals(
   sessionId: string,
   host: QenexHost = getBridgeHost(),
@@ -394,7 +515,7 @@ export async function listPendingApprovals(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
   );
-  const res = await host.fetch(url);
+  const res = await hostFetch(host, url);
   const json = await readBridgeJson(res);
   if (!res.ok) {
     throwBridgeError(res, json, `listPendingApprovals failed (${res.status})`);
@@ -413,7 +534,7 @@ export async function respondToApproval(
     host,
     `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
   );
-  const res = await host.fetch(url, {
+  const res = await hostFetch(host, url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ optionId }),
@@ -428,7 +549,7 @@ export async function aisdkHealthCheck(
   host: QenexHost = getBridgeHost(),
 ): Promise<{ ok: boolean; opencode: string | null }> {
   const url = await bridgeUrl(host, "/health");
-  const res = await host.fetch(url);
+  const res = await hostFetch(host, url);
   if (!res.ok) {
     throw new BridgeClientError(
       "health_failed",

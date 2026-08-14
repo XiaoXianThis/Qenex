@@ -1,13 +1,19 @@
 mod bridge;
 
 use bridge::{
-    get_bridge_url, get_default_workspace, open_store, set_last_workspace, start_bridge, store_key,
-    BridgeState,
+    get_bridge_url, get_default_workspace, open_store, restart_bridge, set_last_workspace,
+    start_bridge, store_key, BridgeState,
 };
 use tauri::{AppHandle, Manager, RunEvent};
 
 #[tauri::command]
 async fn cmd_get_bridge_url(app: AppHandle) -> Result<String, String> {
+    get_bridge_url(&app).await
+}
+
+#[tauri::command]
+async fn cmd_restart_bridge(app: AppHandle) -> Result<String, String> {
+    restart_bridge(&app)?;
     get_bridge_url(&app).await
 }
 
@@ -69,6 +75,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             cmd_get_bridge_url,
+            cmd_restart_bridge,
             cmd_pick_workspace,
             cmd_get_default_workspace,
             cmd_storage_get,

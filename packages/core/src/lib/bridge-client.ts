@@ -21,7 +21,8 @@ export async function bridgeFetch(
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
-  return getBridgeHost().fetch(path, init);
+  const signal = init?.signal ?? AbortSignal.timeout(60_000);
+  return getBridgeHost().fetch(path, { ...init, signal });
 }
 
 export type BridgeErrorBody = {

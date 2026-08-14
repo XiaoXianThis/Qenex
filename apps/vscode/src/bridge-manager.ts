@@ -21,8 +21,12 @@ export class BridgeManager {
   }
 
   async start(cspSource: string): Promise<string> {
-    if (this.port) {
+    if (this.port && this.isRunning()) {
       return `http://127.0.0.1:${this.port}`;
+    }
+    if (this.port && !this.isRunning()) {
+      this.port = null;
+      this.process = null;
     }
     if (this.startPromise) {
       return this.startPromise;
@@ -30,10 +34,17 @@ export class BridgeManager {
     this.startPromise = this.doStart(cspSource);
     try {
       return await this.startPromise;
-    } catch (error) {
+    } finally {
       this.startPromise = null;
-      throw error;
     }
+  }
+
+  private isRunning(): boolean {
+    return Boolean(
+      this.process &&
+        this.process.exitCode === null &&
+        this.process.signalCode === null,
+    );
   }
 
   async stop(): Promise<void> {
@@ -52,7 +63,9 @@ export class BridgeManager {
     const pathEnv = augmentedPath();
     const bun = findBun(pathEnv);
     const entry = await resolveBridgeEntry(this.context.extensionPath);
-    const bridgeCwd = path.dirname(path.dirname(entry)); // …/bridge/src → …/bridge
+    const bridgeCwd = entry.endsWith(`${path.sep}index.js`)
+      ? path.dirname(entry)
+      : path.dirname(path.dirname(entry)); // …/bridge/src → …/bridge
 
     // webview.cspSource may be "'self' https://*.vscode-cdn.net" — tokenize + allow vscode-webview://
     const cors = buildCorsOrigins(cspSource, port);
@@ -82,23 +95,37 @@ export class BridgeManager {
     child.stderr?.on("data", (chunk: Buffer) => {
       console.error("[qenex-bridge]", chunk.toString().trimEnd());
     });
+    let exitedEarly: Error | null = null;
     child.on("error", (error) => {
+      exitedEarly = error;
       console.error("[qenex-bridge] process error:", error);
     });
-
-    let exitedEarly: Error | null = null;
     child.on("exit", (code, signal) => {
-      if (code !== 0 && code !== null) {
-        exitedEarly = new Error(
-          `Bridge exited with code ${code}${signal ? ` (signal ${signal})` : ""}`,
-        );
+      exitedEarly = new Error(
+        `Bridge exited${code === null ? "" : ` with code ${code}`}${signal ? ` (signal ${signal})` : ""}`,
+      );
+      if (this.process === child) {
+        this.process = null;
+        this.port = null;
       }
     });
 
     this.process = child;
-    await waitForHealth(port, 30_000, () => exitedEarly);
-    this.port = port;
-    return `http://127.0.0.1:${port}`;
+    try {
+      await waitForHealth(port, 30_000, () => exitedEarly);
+      if (this.process !== child || !this.isRunning()) {
+        throw exitedEarly ?? new Error("Bridge exited during startup");
+      }
+      this.port = port;
+      return `http://127.0.0.1:${port}`;
+    } catch (error) {
+      if (this.process === child) {
+        this.process = null;
+        this.port = null;
+      }
+      if (child.pid) await killProcessTree(child.pid);
+      throw error;
+    }
   }
 }
 
@@ -112,7 +139,16 @@ function findBun(pathEnv: string): string {
   }
   const fromPath = whichInPath("bun", pathEnv);
   if (fromPath) return fromPath;
-  const homeBun = path.join(homedir(), ".bun", "bin", "bun");
+  if (process.platform === "win32") {
+    const fromPathExe = whichInPath("bun.exe", pathEnv);
+    if (fromPathExe) return fromPathExe;
+  }
+  const homeBun = path.join(
+    homedir(),
+    ".bun",
+    "bin",
+    process.platform === "win32" ? "bun.exe" : "bun",
+  );
   if (existsSync(homeBun)) return homeBun;
   throw new Error(
     "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.",
@@ -171,24 +207,8 @@ async function resolveBridgeEntry(extensionPath: string): Promise<string> {
     return fromRepo;
   }
 
-  const packaged = path.join(extensionPath, "bridge", "src", "index.ts");
-  const packagedRoot = path.join(extensionPath, "bridge");
+  const packaged = path.join(extensionPath, "bridge", "index.js");
   if (existsSync(packaged)) {
-    const ai = path.join(packagedRoot, "node_modules", "ai", "package.json");
-    if (!existsSync(ai)) {
-      // Best-effort local install for incomplete stage
-      const bun = findBun(augmentedPath());
-      const install = spawnSync(bun, ["install", "--production"], {
-        cwd: packagedRoot,
-        encoding: "utf8",
-      });
-      if (install.status !== 0 || !existsSync(ai)) {
-        throw new Error(
-          `Packaged bridge at ${packagedRoot} missing node_modules/ai` +
-            (install.stderr ? `\n${install.stderr}` : ""),
-        );
-      }
-    }
     return packaged;
   }
 
@@ -311,8 +331,27 @@ function killProcessTree(pid: number): Promise<void> {
     try {
       process.kill(pid, "SIGTERM");
     } catch {
-      // already exited
+      resolve();
+      return;
     }
-    resolve();
+    let poll: ReturnType<typeof setInterval> | undefined;
+    const deadline = setTimeout(() => {
+      if (poll) clearInterval(poll);
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already exited
+      }
+      resolve();
+    }, 3_000);
+    poll = setInterval(() => {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        clearInterval(poll);
+        clearTimeout(deadline);
+        resolve();
+      }
+    }, 50);
   });
 }

@@ -5,10 +5,10 @@ import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageBunBridge } from "./lib/stage-bun-bridge.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const buildDir = join(root, "build");
-const bridgeSrc = join(root, "apps", "bridge");
 const isWin = process.platform === "win32";
 
 console.log("Cleaning build/...");
@@ -26,10 +26,7 @@ cpSync(webOut, join(buildDir, "web"), { recursive: true });
 
 console.log("Staging Bun Bridge...");
 const stagedBridge = join(buildDir, "bridge");
-mkdirSync(stagedBridge, { recursive: true });
-cpSync(join(bridgeSrc, "src"), join(stagedBridge, "src"), { recursive: true });
-cpSync(join(bridgeSrc, "package.json"), join(stagedBridge, "package.json"));
-execSync("bun install --production", { cwd: stagedBridge, stdio: "inherit" });
+stageBunBridge(stagedBridge);
 
 cpSync(
   join(root, "scripts", "templates", "server-run.mjs"),
@@ -82,7 +79,7 @@ Env overrides:
   QENEX_BRIDGE_HOST / QENEX_BRIDGE_PORT / QENEX_WEB_PORT
 
 Contents:
-  bridge/   Bun Bridge source + production deps
+  bridge/   Prebundled Bun Bridge runtime
   web/      Static frontend
   run.mjs   Integrated runner
   start.sh / start.ps1

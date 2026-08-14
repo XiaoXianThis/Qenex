@@ -110,11 +110,14 @@ object WebviewHttpServer {
     @Volatile
     private var baseUrl: String? = null
 
-    fun start(webviewDir: Path): String {
-        baseUrl?.let { return "$it/index.html" }
+    private var clients: Int = 0
 
+    fun start(webviewDir: Path): String {
         synchronized(this) {
-            baseUrl?.let { return "$it/index.html" }
+            baseUrl?.let {
+                clients += 1
+                return "$it/index.html"
+            }
 
             val httpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
             httpServer.createContext("/") { exchange ->
@@ -152,17 +155,30 @@ object WebviewHttpServer {
             val url = "http://127.0.0.1:$port"
             server = httpServer
             baseUrl = url
+            clients = 1
             log.info("Qenex webview server started at $url")
             return "$url/index.html"
         }
     }
 
+    fun release() {
+        synchronized(this) {
+            if (clients > 0) clients -= 1
+            if (clients == 0) stopLocked()
+        }
+    }
+
     fun stop() {
         synchronized(this) {
-            server?.stop(0)
-            server = null
-            baseUrl = null
+            clients = 0
+            stopLocked()
         }
+    }
+
+    private fun stopLocked() {
+        server?.stop(0)
+        server = null
+        baseUrl = null
     }
 
     private fun contentTypeFor(file: Path): String {

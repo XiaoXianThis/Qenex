@@ -25,17 +25,11 @@ if (manager.includes("acp-to-agui")) {
 }
 
 const ignore = readFileSync(join(vscodeDir, ".vscodeignore"), "utf8");
-if (
-  ignore.includes("**/*.ts") &&
-  !ignore.includes("!bridge/") &&
-  !ignore.includes("!bridge/**")
-) {
-  console.error(
-    "FAIL  .vscodeignore excludes **/*.ts without allowing bridge/",
-  );
+if (!ignore.includes("!bridge/**")) {
+  console.error("FAIL  .vscodeignore does not allow the Bridge bundle");
   failed = true;
 } else {
-  console.log("OK  .vscodeignore allows bridge TypeScript sources");
+  console.log("OK  .vscodeignore allows the Bridge bundle");
 }
 
 const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
@@ -59,7 +53,7 @@ execSync("bunx tsc --noEmit -p tsconfig.json", {
 });
 
 console.log("[m9] Staging Bun Bridge into apps/vscode/bridge…");
-stageBunBridge(stageDir, { includeNodeModules: true });
+stageBunBridge(stageDir);
 
 console.log("Building VS Code webview...");
 execSync("bun run build", {
@@ -73,9 +67,8 @@ execSync("node esbuild.mjs", { cwd: vscodeDir, stdio: "inherit" });
 const required = [
   join(vscodeDir, "media", "index.html"),
   join(vscodeDir, "out", "extension.js"),
-  join(stageDir, "src", "index.ts"),
+  join(stageDir, "index.js"),
   join(stageDir, "package.json"),
-  join(stageDir, "node_modules", "ai", "package.json"),
   join(root, "apps", "bridge", "src", "index.ts"),
 ];
 

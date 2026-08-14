@@ -18,6 +18,15 @@ describe("formatChatStreamError", () => {
     );
   });
 
+  test("attributes auth failures to the active agent", () => {
+    const msg = formatChatStreamError(
+      new Error("Authentication token expired"),
+      "devin",
+    );
+    expect(msg).toContain("Devin");
+    expect(msg).not.toContain("OpenCode");
+  });
+
   test("replaces opaque AI SDK default", () => {
     expect(formatChatStreamError(new Error("An error occurred."))).toContain(
       "对话失败",

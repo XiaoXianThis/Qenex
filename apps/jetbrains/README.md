@@ -14,12 +14,7 @@ bun run build:jetbrains   # 暂存 bridge → webview → compileKotlin
 cd apps/jetbrains && ./gradlew runIde
 ```
 
-`runIde` **优先**使用仓库 `apps/bridge`（不依赖插件资源里的 `node_modules`）。  
-若仍失败，删掉 sandbox 里残缺缓存后再开：
-
-```bash
-rm -rf apps/jetbrains/build/idea-sandbox/*/system/qenex/bundled-bridge
-```
+`runIde` **优先**使用仓库 `apps/bridge`；发布包使用构建时生成的自包含 Bridge bundle。
 
 可选覆盖：
 
@@ -32,12 +27,12 @@ export QENEX_BUN_BIN=$HOME/.bun/bin/bun
 
 ```
 Kotlin Host                       Webview (@qenex/ui)
-├── spawn: bun bridge/src/index.ts ├── createJetbrainsHost()
+├── spawn: bun bridge/index.js      ├── createJetbrainsHost()
 │   env: QENEX_BRIDGE_PORT / CORS  │   ├── getBridgeBaseUrl()
 └── bridge-ready { url }           └── fetch → localhost Bridge
 ```
 
-打包资源：`qenex/bridge/`（源码 + production `node_modules` + `.qenex-bridge-files`）；运行时仍用系统 Bun。
+打包资源：`qenex/bridge/index.js`（自包含 bundle + 清单）；运行时仍用系统 Bun，用户机器无需联网安装依赖。
 
 ## 验收
 

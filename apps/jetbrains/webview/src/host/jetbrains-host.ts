@@ -48,6 +48,18 @@ type HostToWebviewMessage =
 
 function resolveUrl(path: string, baseUrl: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) {
+    try {
+      const target = new URL(path);
+      const bridge = new URL(baseUrl);
+      if (
+        (target.hostname === "127.0.0.1" || target.hostname === "localhost") &&
+        (bridge.hostname === "127.0.0.1" || bridge.hostname === "localhost")
+      ) {
+        return `${bridge.origin}${target.pathname}${target.search}${target.hash}`;
+      }
+    } catch {
+      // Preserve malformed/external absolute URLs for native fetch to report.
+    }
     return path;
   }
   const base = baseUrl.replace(/\/$/, "");
@@ -55,9 +67,20 @@ function resolveUrl(path: string, baseUrl: string): string {
   return `${base}${normalized}`;
 }
 
+function wasAborted(error: unknown, init?: RequestInit): boolean {
+  return (
+    init?.signal?.aborted === true ||
+    (error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError"))
+  );
+}
+
 let bridgeBaseUrl: string | null = null;
 let defaultWorkspace: string | null = null;
-const bridgeReadyWaiters: Array<(url: string) => void> = [];
+const bridgeReadyWaiters: Array<{
+  resolve: (url: string) => void;
+  reject: (error: Error) => void;
+}> = [];
 
 let requestCounter = 0;
 const pendingRequests = new Map<
@@ -166,7 +189,7 @@ function handleHostMessage(message: HostToWebviewMessage): void {
       bridgeBaseUrl = message.url;
       defaultWorkspace = message.defaultWorkspace;
       for (const waiter of bridgeReadyWaiters) {
-        waiter(message.url);
+        waiter.resolve(message.url);
       }
       bridgeReadyWaiters.length = 0;
       return;
@@ -230,6 +253,10 @@ export function installJetbrainsMessageBridge(): void {
     }
     if (message.type === "bridge-error") {
       console.error("[qenex] bridge failed to start:", message.message);
+      bridgeBaseUrl = null;
+      const error = new Error(message.message);
+      for (const waiter of bridgeReadyWaiters) waiter.reject(error);
+      bridgeReadyWaiters.length = 0;
       return;
     }
     handleHostMessage(message as HostToWebviewMessage);
@@ -252,14 +279,37 @@ export function createJetbrainsHost(): QenexHost {
       if (bridgeBaseUrl) {
         return bridgeBaseUrl;
       }
-      return new Promise((resolve) => {
-        bridgeReadyWaiters.push(resolve);
+      const bridge = await waitForBridge();
+      bridge.postMessage({ type: "ready" });
+      return new Promise((resolve, reject) => {
+        const waiter = { resolve, reject };
+        bridgeReadyWaiters.push(waiter);
+        window.setTimeout(() => {
+          const index = bridgeReadyWaiters.indexOf(waiter);
+          if (index >= 0) {
+            bridgeReadyWaiters.splice(index, 1);
+            reject(new Error("Bridge startup timed out"));
+          }
+        }, 35_000);
       });
     },
 
     async fetch(path, init) {
       const baseUrl = await this.getBridgeBaseUrl();
-      return fetch(resolveUrl(path, baseUrl), init);
+      try {
+        return await fetch(resolveUrl(path, baseUrl), init);
+      } catch (error) {
+        if (wasAborted(error, init)) throw error;
+        bridgeBaseUrl = null;
+        const method = init?.method?.toUpperCase() ?? "GET";
+        if (method !== "GET" && method !== "HEAD") throw error;
+        const restarted = await this.getBridgeBaseUrl();
+        try {
+          return await fetch(resolveUrl(path, restarted), init);
+        } catch {
+          throw error;
+        }
+      }
     },
 
     async pickWorkspace() {

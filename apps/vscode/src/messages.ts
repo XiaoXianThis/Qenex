@@ -22,6 +22,10 @@ export type WebviewToExtensionMessage =
 /** Messages from extension host to webview */
 export type ExtensionToWebviewMessage =
   | {
+      type: "bridge-error";
+      message: string;
+    }
+  | {
       type: "bridge-ready";
       url: string;
       defaultWorkspace: string | null;

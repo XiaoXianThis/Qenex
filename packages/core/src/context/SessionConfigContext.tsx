@@ -12,15 +12,13 @@ import {
   formatBridgeError,
   getAisdkSessionConfig,
   isAisdkSessionId,
+  probeAisdkSessionModelConfig,
+  probeAisdkSessionModelsConfig,
   setAisdkSessionMode,
   setAisdkSessionModel,
+  setAisdkSessionConfigOption,
+  type AisdkModelConfigProbe,
 } from "../lib/aisdk-session.ts";
-import {
-  probeModelConfig,
-  probeModelsConfig,
-  setConfigOption,
-  type ModelConfigProbe,
-} from "../lib/bridge-api.ts";
 import { isCursorAgentId } from "../config/agents.ts";
 import {
   EMPTY_SESSION_CONFIG,
@@ -34,6 +32,45 @@ type ModelConfigSnapshot = {
   thoughtLevels: SessionOption[];
   fastOptions: SessionOption[];
 };
+
+function preferenceModelId(
+  modelId: string,
+  thoughtLevels: SessionOption[],
+): string {
+  for (const level of thoughtLevels) {
+    const suffix = `[${level.id}]`;
+    if (modelId.endsWith(suffix)) return modelId.slice(0, -suffix.length);
+  }
+  return modelId;
+}
+
+function readThoughtPreference(
+  agentId: string,
+  modelId: string,
+  thoughtLevels: SessionOption[],
+): string | null {
+  const canonicalId = preferenceModelId(modelId, thoughtLevels);
+  return (
+    modelThoughtPrefsActions.get(agentId, canonicalId) ??
+    (canonicalId === modelId
+      ? null
+      : modelThoughtPrefsActions.get(agentId, modelId))
+  );
+}
+
+function readFastPreference(
+  agentId: string,
+  modelId: string,
+  thoughtLevels: SessionOption[],
+): string | null {
+  const canonicalId = preferenceModelId(modelId, thoughtLevels);
+  return (
+    modelThoughtPrefsActions.getFast(agentId, canonicalId) ??
+    (canonicalId === modelId
+      ? null
+      : modelThoughtPrefsActions.getFast(agentId, modelId))
+  );
+}
 
 type SessionConfigContextValue = {
   config: SessionConfig;
@@ -81,17 +118,19 @@ export function SessionConfigProvider({
   agentSessionId: _agentSessionId,
   children,
 }: SessionConfigProviderProps) {
-  const usesPerModelConfigProbe = isCursorAgentId(agentId);
-  const usesPerModelConfigProbeRef = useRef(usesPerModelConfigProbe);
-  usesPerModelConfigProbeRef.current = usesPerModelConfigProbe;
   const [config, setConfig] = useState<SessionConfig>({
     ...EMPTY_SESSION_CONFIG,
     loading: true,
   });
+  const usesPerModelConfigProbe =
+    isCursorAgentId(agentId) ||
+    (config.models.length > 1 &&
+      (config.thoughtLevels.length > 0 || config.fastOptions.length > 0));
+  const usesPerModelConfigProbeRef = useRef(usesPerModelConfigProbe);
+  usesPerModelConfigProbeRef.current = usesPerModelConfigProbe;
   const [thoughtLevelsByModel, setThoughtLevelsByModel] = useState<
     Record<string, SessionOption[]>
   >(() => {
-    if (!isCursorAgentId(agentId)) return {};
     const seeded: Record<string, SessionOption[]> = {};
     for (const [modelId, entry] of Object.entries(
       modelConfigCacheActions.getAgent(agentId),
@@ -103,7 +142,6 @@ export function SessionConfigProvider({
   const [fastOptionsByModel, setFastOptionsByModel] = useState<
     Record<string, SessionOption[]>
   >(() => {
-    if (!isCursorAgentId(agentId)) return {};
     const seeded: Record<string, SessionOption[]> = {};
     for (const [modelId, entry] of Object.entries(
       modelConfigCacheActions.getAgent(agentId),
@@ -176,7 +214,7 @@ export function SessionConfigProvider({
   );
 
   const applyProbePrefs = useCallback(
-    (probe: ModelConfigProbe) => {
+    (probe: AisdkModelConfigProbe) => {
       const modelId = probe.modelId;
       if (
         probe.currentThoughtLevelId &&
@@ -261,7 +299,47 @@ export function SessionConfigProvider({
     }));
 
     try {
-      const next = await getAisdkSessionConfig(threadId);
+      let next = await getAisdkSessionConfig(threadId);
+      if (signal?.aborted) return "error";
+      const initialModelId = next.currentModelId;
+      if (initialModelId && next.thoughtLevelConfigId) {
+        const preferredThought = readThoughtPreference(
+          agentId,
+          initialModelId,
+          next.thoughtLevels,
+        );
+        if (
+          preferredThought &&
+          preferredThought !== next.currentThoughtLevelId &&
+          next.thoughtLevels.some((level) => level.id === preferredThought)
+        ) {
+          next = await setAisdkSessionConfigOption(
+            threadId,
+            next.thoughtLevelConfigId,
+            preferredThought,
+          );
+        }
+      }
+      if (signal?.aborted) return "error";
+      const fastModelId = next.currentModelId ?? initialModelId;
+      if (fastModelId && next.fastConfigId) {
+        const preferredFast = readFastPreference(
+          agentId,
+          fastModelId,
+          next.thoughtLevels,
+        );
+        if (
+          preferredFast &&
+          preferredFast !== next.currentFastId &&
+          next.fastOptions.some((option) => option.id === preferredFast)
+        ) {
+          next = await setAisdkSessionConfigOption(
+            threadId,
+            next.fastConfigId,
+            preferredFast,
+          );
+        }
+      }
       if (signal?.aborted) return "error";
       if (next.currentModelId) {
         cacheModelConfig(
@@ -283,7 +361,7 @@ export function SessionConfigProvider({
       });
       return "error";
     }
-  }, [threadId, cacheModelConfig]);
+  }, [threadId, agentId, cacheModelConfig]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -314,9 +392,13 @@ export function SessionConfigProvider({
       thoughtId &&
       config.thoughtLevels.length > 0 &&
       config.thoughtLevels.some((level) => level.id === thoughtId) &&
-      !modelThoughtPrefsActions.get(agentId, modelId)
+      !readThoughtPreference(agentId, modelId, config.thoughtLevels)
     ) {
-      modelThoughtPrefsActions.set(agentId, modelId, thoughtId);
+      modelThoughtPrefsActions.set(
+        agentId,
+        preferenceModelId(modelId, config.thoughtLevels),
+        thoughtId,
+      );
     }
 
     const fastId = config.currentFastId;
@@ -325,9 +407,13 @@ export function SessionConfigProvider({
       fastId &&
       config.fastOptions.length > 0 &&
       config.fastOptions.some((option) => option.id === fastId) &&
-      !modelThoughtPrefsActions.getFast(agentId, modelId)
+      !readFastPreference(agentId, modelId, config.thoughtLevels)
     ) {
-      modelThoughtPrefsActions.setFast(agentId, modelId, fastId);
+      modelThoughtPrefsActions.setFast(
+        agentId,
+        preferenceModelId(modelId, config.thoughtLevels),
+        fastId,
+      );
     }
   }, [
     agentId,
@@ -389,8 +475,8 @@ export function SessionConfigProvider({
       }
       const probes =
         modelIds.length === 1
-          ? [await probeModelConfig(threadId, modelIds[0]!)]
-          : await probeModelsConfig(threadId, modelIds);
+          ? [await probeAisdkSessionModelConfig(threadId, modelIds[0]!)]
+          : await probeAisdkSessionModelsConfig(threadId, modelIds);
       for (const probe of probes) {
         cacheModelConfig(
           probe.modelId,
@@ -464,10 +550,10 @@ export function SessionConfigProvider({
       if (!isAisdkSessionId(threadId)) {
         return;
       }
-      modelThoughtPrefsActions.setPreferredMode(agentId, modeId);
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
         const next = await setAisdkSessionMode(threadId, modeId);
+        modelThoughtPrefsActions.setPreferredMode(agentId, modeId);
         setConfig(next);
       } catch (error) {
         setConfig((current) => ({
@@ -487,24 +573,35 @@ export function SessionConfigProvider({
         return;
       }
 
-      if (config.currentModelId) {
-        modelThoughtPrefsActions.set(agentId, config.currentModelId, value);
-      }
-
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
-        const next = await setConfigOption(threadId, configId, value);
+        const next = await setAisdkSessionConfigOption(
+          threadId,
+          configId,
+          value,
+        );
+        if (next.currentModelId) {
+          modelThoughtPrefsActions.set(
+            agentId,
+            next.currentModelId,
+            next.currentThoughtLevelId ?? value,
+          );
+          cacheModelConfig(
+            next.currentModelId,
+            next.thoughtLevels,
+            next.fastOptions,
+          );
+        }
         setConfig(next);
       } catch (error) {
         setConfig((current) => ({
           ...current,
           loading: false,
-          error:
-            error instanceof Error ? error.message : "切换思考强度失败",
+          error: formatBridgeError(error, "切换思考强度失败"),
         }));
       }
     },
-    [threadId, config.thoughtLevelConfigId, config.currentModelId, agentId],
+    [threadId, config.thoughtLevelConfigId, agentId, cacheModelConfig],
   );
 
   const changeFast = useCallback(
@@ -514,23 +611,35 @@ export function SessionConfigProvider({
         return;
       }
 
-      if (config.currentModelId) {
-        modelThoughtPrefsActions.setFast(agentId, config.currentModelId, value);
-      }
-
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
-        const next = await setConfigOption(threadId, configId, value);
+        const next = await setAisdkSessionConfigOption(
+          threadId,
+          configId,
+          value,
+        );
+        if (next.currentModelId) {
+          modelThoughtPrefsActions.setFast(
+            agentId,
+            next.currentModelId,
+            next.currentFastId ?? value,
+          );
+          cacheModelConfig(
+            next.currentModelId,
+            next.thoughtLevels,
+            next.fastOptions,
+          );
+        }
         setConfig(next);
       } catch (error) {
         setConfig((current) => ({
           ...current,
           loading: false,
-          error: error instanceof Error ? error.message : "切换 Fast 模式失败",
+          error: formatBridgeError(error, "切换 Fast 模式失败"),
         }));
       }
     },
-    [threadId, config.fastConfigId, config.currentModelId, agentId],
+    [threadId, config.fastConfigId, agentId, cacheModelConfig],
   );
 
   const changeModel = useCallback(
@@ -538,12 +647,17 @@ export function SessionConfigProvider({
       if (!isAisdkSessionId(threadId)) {
         return;
       }
-      modelThoughtPrefsActions.setPreferredModel(agentId, modelId);
       setConfig((current) => ({ ...current, loading: true, error: null }));
       try {
         let next = await setAisdkSessionModel(threadId, modelId);
+        modelThoughtPrefsActions.setPreferredModel(agentId, modelId);
 
-        const preferredThought = modelThoughtPrefsActions.get(agentId, modelId);
+        const preferenceKey = preferenceModelId(modelId, next.thoughtLevels);
+        const preferredThought = readThoughtPreference(
+          agentId,
+          modelId,
+          next.thoughtLevels,
+        );
         const thoughtConfigId = next.thoughtLevelConfigId;
         const canApplyThought =
           !!preferredThought &&
@@ -552,7 +666,7 @@ export function SessionConfigProvider({
           next.currentThoughtLevelId !== preferredThought;
 
         if (canApplyThought && preferredThought && thoughtConfigId) {
-          next = await setConfigOption(
+          next = await setAisdkSessionConfigOption(
             threadId,
             thoughtConfigId,
             preferredThought,
@@ -566,12 +680,16 @@ export function SessionConfigProvider({
         ) {
           modelThoughtPrefsActions.set(
             agentId,
-            modelId,
+            preferenceKey,
             next.currentThoughtLevelId,
           );
         }
 
-        const preferredFast = modelThoughtPrefsActions.getFast(agentId, modelId);
+        const preferredFast = readFastPreference(
+          agentId,
+          modelId,
+          next.thoughtLevels,
+        );
         const fastConfigId = next.fastConfigId;
         const canApplyFast =
           !!preferredFast &&
@@ -580,7 +698,11 @@ export function SessionConfigProvider({
           next.currentFastId !== preferredFast;
 
         if (canApplyFast && preferredFast && fastConfigId) {
-          next = await setConfigOption(threadId, fastConfigId, preferredFast);
+          next = await setAisdkSessionConfigOption(
+            threadId,
+            fastConfigId,
+            preferredFast,
+          );
         } else if (
           !preferredFast &&
           next.currentFastId &&
@@ -588,7 +710,7 @@ export function SessionConfigProvider({
         ) {
           modelThoughtPrefsActions.setFast(
             agentId,
-            modelId,
+            preferenceKey,
             next.currentFastId,
           );
         }

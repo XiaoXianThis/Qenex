@@ -39,6 +39,10 @@ export function sessionInfoToConfigDto(info: SessionInfo): SessionConfigDto {
     name: (t.name && t.name.trim()) || t.id,
     ...(t.description ? { description: t.description } : {}),
   }));
+  const fastOptions = (info.fastOptions?.available ?? []).map((option) => ({
+    id: option.id,
+    name: (option.name && option.name.trim()) || option.id,
+  }));
 
   return {
     sessionId: info.sessionId,
@@ -47,11 +51,11 @@ export function sessionInfoToConfigDto(info: SessionInfo): SessionConfigDto {
     currentModeId: info.modes?.currentModeId ?? modes[0]?.id ?? null,
     currentModelId: info.models?.currentModelId ?? models[0]?.id ?? null,
     thoughtLevels,
-    fastOptions: [],
+    fastOptions,
     thoughtLevelConfigId: info.thoughtLevels?.configId ?? null,
     currentThoughtLevelId:
       info.thoughtLevels?.currentId ?? thoughtLevels[0]?.id ?? null,
-    fastConfigId: null,
-    currentFastId: null,
+    fastConfigId: info.fastOptions?.configId ?? null,
+    currentFastId: info.fastOptions?.currentId ?? fastOptions[0]?.id ?? null,
   };
 }
