@@ -1,5 +1,5 @@
 /**
- * M2 web acceptance: production build contains Ask/Auto + approvals API markers.
+ * M2 web acceptance: production build contains approval settings + API markers.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -37,8 +37,8 @@ const blob = assets
 const checks: Array<[string, boolean]> = [
   ["contains approvals path", blob.includes("/approvals")],
   ["contains approvalMode", blob.includes("approvalMode")],
-  ["contains Ask mode label", blob.includes("Ask")],
-  ["contains Auto mode label", blob.includes("Auto")],
+  ["contains 无需审批", blob.includes("无需审批")],
+  ["contains 自动允许", blob.includes("自动允许")],
   ["contains 需要审批", blob.includes("需要审批")],
   ["contains 不再询问 or 允许", /不再询问|允许/.test(blob)],
   ["does not contain useAgUiRuntime", !blob.includes("useAgUiRuntime")],

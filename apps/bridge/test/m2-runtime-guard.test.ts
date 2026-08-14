@@ -75,12 +75,12 @@ describe("M2 · frontend wiring", () => {
     expect(src).not.toContain("/v2/tasks");
   });
 
-  test("Ask/Auto toggle present in composer thread", () => {
-    const toggle = read("packages/ui/src/components/ApprovalModeToggle.tsx");
-    expect(toggle).toContain("Ask");
-    expect(toggle).toContain("Auto");
+  test("Ask/Auto lives in settings, not composer", () => {
+    const settings = read("packages/ui/src/components/AgentSettingsDialog.tsx");
+    expect(settings).toContain("无需审批，自动允许");
+    expect(settings).toContain("setAutoAllow");
     const thread = read("packages/ui/src/components/assistant-ui/thread.tsx");
-    expect(thread).toContain("ApprovalModeToggle");
+    expect(thread).not.toContain("ApprovalModeToggle");
     expect(thread).not.toContain("模型等待你的审批");
     expect(thread).not.toContain("否则会一直停住");
   });

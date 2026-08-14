@@ -36,7 +36,6 @@ import {
   useTabsStore,
 } from "@qenex/core";
 import { useChatHelpers } from "@/components/ChatHelpersContext";
-import { ApprovalModeToggle } from "@/components/ApprovalModeToggle";
 import { ComposerAutocomplete } from "@/components/assistant-ui/composer-autocomplete";
 import { MessageArtifacts } from "@/components/assistant-ui/message-artifacts";
 import {
@@ -76,6 +75,8 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type ComponentType,
   type FC,
@@ -706,8 +707,28 @@ const ThreadComposerBody: FC<{
   showSessionConfig: boolean;
 }> = ({ draft, setDraft, chat, layoutEditing, showSessionConfig }) => {
   const aui = useAui();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachmentCount = useAuiState((s) => s.composer.attachments.length);
   const threadRunning = useAuiState((s) => s.thread.isRunning);
+
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.height = "0px";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    let lastWidth = el.getBoundingClientRect().width;
+    const ro = new ResizeObserver(() => {
+      const width = el.getBoundingClientRect().width;
+      if (width === lastWidth) return;
+      lastWidth = width;
+      fit();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [draft]);
 
   const isRunning =
     chat?.status === "submitted" ||
@@ -750,8 +771,9 @@ const ThreadComposerBody: FC<{
           <ComposerAttachments />
           <ComposerAutocomplete value={draft} onChange={setDraft}>
             <textarea
+              ref={inputRef}
               placeholder="发消息… 输入 @ 引用文件"
-              className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-32 min-h-8 w-full resize-none bg-transparent px-2.5 py-1 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="aui-composer-input caret-primary placeholder:text-foreground/50 max-h-[calc(12lh+0.5rem)] min-h-8 w-full resize-none overflow-y-auto bg-transparent px-2.5 py-1 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60"
               rows={1}
               autoFocus={!layoutEditing}
               enterKeyHint="send"
@@ -774,9 +796,6 @@ const ThreadComposerBody: FC<{
           </ComposerAutocomplete>
         </div>
         <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
-          {!layoutEditing ? (
-            <ApprovalModeToggle className="shrink-0" disabled={!chat} />
-          ) : null}
           {showSessionConfig && !layoutEditing ? (
             <SessionConfigBar
               className="px-0"

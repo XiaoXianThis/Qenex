@@ -998,12 +998,12 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                       approvalPrefsActions.setAutoAllow(e.target.checked)
                     }
                   />
-                  <span>无需审批，自动允许（Auto）</span>
+                  <span>无需审批，自动允许</span>
                 </label>
                 <p className="text-muted-foreground text-xs">
-                  开启后聊天以 Bridge Auto 模式发送：敏感工具在服务端自动批准（优先
-                  allow_once），不再弹出审批卡片。也可在 Composer 用 Ask / Auto
-                  切换。
+                  仅对发出 ACP 权限请求的 Agent 生效（如 Claude 手动、OpenCode）。开启后服务端自动批准（优先
+                  allow_once），不再弹出审批卡片。Cursor / Codex
+                  等自行决定是否写盘，不受此项控制。默认关闭。
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">
