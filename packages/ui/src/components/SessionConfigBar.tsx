@@ -98,7 +98,7 @@ function ConfigSelect({
         size="sm"
         aria-label={ariaLabel}
         className={cn(
-          "h-6 max-w-[9rem] min-w-0 shrink-0 items-center border bg-background px-2 py-0 text-xs shadow-none transition-none data-[size=sm]:h-6 [&>svg:last-child]:size-3",
+          "h-5.5 max-w-[9rem] min-w-0 shrink-0 items-center border bg-background px-2 py-0 text-xs shadow-none transition-none data-[size=sm]:h-5.5 [&>svg:last-child]:size-3",
           triggerClassName,
         )}
       >
@@ -727,7 +727,7 @@ function ModelPicker({
           disabled={disabled}
           aria-label="模型"
           className={cn(
-            "flex h-6 max-w-[16rem] min-w-0 shrink-0 cursor-pointer items-center gap-1 rounded-none border-0 bg-transparent px-2 py-0 text-xs outline-none transition-none",
+            "flex h-5.5 max-w-[16rem] min-w-0 shrink-0 cursor-pointer items-center gap-1 rounded-none border-0 bg-transparent px-2 py-0 text-xs outline-none transition-none",
             "hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
           )}
         >
@@ -1111,8 +1111,8 @@ function SessionConfigSkeleton() {
       aria-hidden
       aria-busy="true"
     >
-      <div className="h-6 w-[4.5rem] animate-pulse rounded-full bg-foreground/8 dark:bg-foreground/10" />
-      <div className="h-6 w-28 animate-pulse rounded-full bg-foreground/6 dark:bg-foreground/8" />
+      <div className="h-5.5 w-[4.5rem] animate-pulse rounded-full bg-foreground/8 dark:bg-foreground/10" />
+      <div className="h-5.5 w-28 animate-pulse rounded-full bg-foreground/6 dark:bg-foreground/8" />
     </div>
   );
 }
@@ -1184,8 +1184,8 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-x-1 gap-y-1 overflow-x-auto">
+      <div className="flex min-w-0 items-end gap-2">
+        <div className="flex min-w-0 flex-1 items-end gap-x-1 gap-y-1 overflow-x-auto">
           {showSkeleton ? <SessionConfigSkeleton /> : null}
 
           {showControls ? (
@@ -1275,7 +1275,7 @@ export function SessionConfigBar({ className, trailing }: SessionConfigBarProps)
         ) : null}
 
         {trailing ? (
-          <div className="flex shrink-0 items-center gap-1.5">{trailing}</div>
+          <div className="flex shrink-0 items-end gap-2.5">{trailing}</div>
         ) : null}
       </div>
 

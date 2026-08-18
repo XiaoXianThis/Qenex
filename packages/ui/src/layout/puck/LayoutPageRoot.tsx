@@ -116,7 +116,7 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
       <button
         type="button"
         onClick={onResetLayout}
-        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+        className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
       >
         <RotateCcw className="h-4 w-4" />
         恢复默认布局
@@ -197,7 +197,11 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
         {tabSessions.map((session) => {
           const isActive = session.tabId === activeTabId;
           return (
-            <AgentRuntimeProvider key={session.tabId} session={session}>
+            <AgentRuntimeProvider
+              key={session.tabId}
+              session={session}
+              isActive={isActive}
+            >
               {isActive ? page : null}
             </AgentRuntimeProvider>
           );
@@ -209,7 +213,11 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
   // Provider 包住整页（含稳定挂载的顶部栏），避免顶部区里的 AUI 面板脱离上下文
   if (activeSession) {
     return (
-      <AgentRuntimeProvider key={activeSession.tabId} session={activeSession}>
+      <AgentRuntimeProvider
+        key={activeSession.tabId}
+        session={activeSession}
+        isActive
+      >
         {page}
       </AgentRuntimeProvider>
     );

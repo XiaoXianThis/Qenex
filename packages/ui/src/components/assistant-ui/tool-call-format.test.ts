@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildEditDiffLines,
+  buildResultDiffLines,
   classifyTool,
   countDiffStats,
+  detectToolCodeLanguage,
   fileBasename,
   fileExtLabel,
   formatResultText,
@@ -11,10 +14,13 @@ import {
   pickCommand,
   pickPath,
   pickPattern,
+  prettifyToolCodeText,
   shouldDefaultToolPreview,
   shouldKeepToolExpanded,
   truncateText,
+  unwrapAcpToolEnvelope,
 } from "./tool-call-format.ts";
+import { buildToolCallModel } from "./tool-call-view.tsx";
 
 describe("parseToolArgs", () => {
   test("parses object JSON", () => {
@@ -146,6 +152,141 @@ describe("formatResultText", () => {
     expect(
       formatResultText({ stdout: "out", stderr: "err" }),
     ).toBe("out\nerr");
+  });
+
+  test("Codex formatted_output", () => {
+    expect(
+      formatResultText({ formatted_output: "hello\nworld\n", exit_code: 0 }),
+    ).toBe("hello\nworld\n");
+    expect(
+      formatResultText({ formatted_output: "boom", exit_code: 1 }),
+    ).toBe("boom\nexit 1");
+  });
+
+  test("nested ACP content blocks", () => {
+    expect(
+      formatResultText([
+        {
+          type: "content",
+          content: { type: "text", text: "search hit" },
+        },
+      ]),
+    ).toBe("search hit");
+  });
+
+  test("diff objects become readable text", () => {
+    expect(
+      formatResultText({
+        type: "diff",
+        path: "a.ts",
+        oldText: "old",
+        newText: "new",
+      }),
+    ).toContain("a.ts");
+  });
+});
+
+describe("unwrapAcpToolEnvelope", () => {
+  test("unwraps provider { toolCallId, toolName, args }", () => {
+    const { toolName, args } = unwrapAcpToolEnvelope({
+      toolCallId: "exec-1",
+      toolName: "Web search: foo",
+      args: { query: "foo", type: "webSearch" },
+    });
+    expect(toolName).toBe("Web search: foo");
+    expect(args).toEqual({ query: "foo", type: "webSearch" });
+  });
+
+  test("leaves flat args alone", () => {
+    expect(unwrapAcpToolEnvelope({ path: "a.ts" })).toEqual({
+      args: { path: "a.ts" },
+    });
+  });
+});
+
+describe("buildToolCallModel envelope", () => {
+  test("Codex shell uses inner command + formatted_output", () => {
+    const model = buildToolCallModel(
+      "acp.acp_provider_agent_dynamic_tool",
+      JSON.stringify({
+        toolCallId: "t1",
+        toolName: "pwd",
+        args: { command: "pwd", cwd: "/tmp" },
+      }),
+      { formatted_output: "/tmp\n", exit_code: 0 },
+    );
+    expect(model.kind).toBe("shell");
+    expect(model.command).toBe("pwd");
+    expect(model.output).toBe("/tmp\n");
+    expect(model.empty).toBe(false);
+  });
+
+  test("Codex web search with query is not an empty card", () => {
+    const model = buildToolCallModel(
+      "Web search",
+      JSON.stringify({
+        toolCallId: "t2",
+        toolName: "Web search: DeepSeek",
+        args: { type: "webSearch", query: "DeepSeek V4", action: {} },
+      }),
+      null,
+    );
+    expect(model.kind).toBe("grep");
+    expect(pickPattern(model.args)).toBe("DeepSeek V4");
+    expect(model.empty).toBe(false);
+  });
+
+  test("Cursor diff result fills edit body", () => {
+    const model = buildToolCallModel(
+      "Edit File",
+      JSON.stringify({
+        toolCallId: "t3",
+        toolName: "Edit File",
+        args: {},
+      }),
+      [
+        {
+          type: "diff",
+          path: "/tmp/a.txt",
+          oldText: "",
+          newText: "hello",
+        },
+      ],
+    );
+    expect(model.kind).toBe("edit");
+    expect(model.path).toBe("/tmp/a.txt");
+    expect(model.diffLines.some((l) => l.kind === "add")).toBe(true);
+    expect(model.empty).toBe(false);
+  });
+
+  test("apply_patch input is shown when not unified diff", () => {
+    const lines = buildEditDiffLines({
+      input: "*** Begin Patch\n*** Update File: a.ts\n+hi\n*** End Patch",
+    });
+    expect(lines.length).toBeGreaterThan(1);
+    expect(buildResultDiffLines({ type: "diff", path: "a.ts", newText: "x" }).length).toBeGreaterThan(0);
+  });
+});
+
+describe("detectToolCodeLanguage / prettifyToolCodeText", () => {
+  test("detects JSON by shape", () => {
+    expect(detectToolCodeLanguage('{"a":1}')).toBe("json");
+    expect(detectToolCodeLanguage("[1,2]")).toBe("json");
+    expect(detectToolCodeLanguage("plain text")).toBe("text");
+  });
+
+  test("shell kind uses bash", () => {
+    expect(detectToolCodeLanguage("ls -la", { kind: "shell" })).toBe("bash");
+  });
+
+  test("path extension maps to language", () => {
+    expect(detectToolCodeLanguage("", { path: "src/a.ts" })).toBe("typescript");
+  });
+
+  test("prettifyToolCodeText formats JSON", () => {
+    const { text, language } = prettifyToolCodeText('{"a":1}');
+    expect(language).toBe("json");
+    expect(text).toBe('{\n  "a": 1\n}');
   });
 });
 

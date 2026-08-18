@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AgentCatalogCache,
   catalogCacheKey,
+  liveCatalogForProbe,
   restoreProbedModel,
   shouldSelfProbeCurrentModel,
   shouldSkipModelConfigProbe,
@@ -50,6 +51,82 @@ describe("catalog cache isolation", () => {
       cache.get("cursor-agent", cwd)?.modes?.availableModes?.map((m) => m.id),
     ).toEqual(["agent"]);
     expect(cache.get("generic-acp", cwd)).toBeUndefined();
+  });
+});
+
+describe("liveCatalogForProbe", () => {
+  test("reuses a live session catalog for the same agentId+cwd", () => {
+    const catalog = liveCatalogForProbe(
+      [
+        {
+          info: {
+            sessionId: "ses_live",
+            agent: "opencode",
+            cwd: "/tmp/app",
+            createdAt: "2026-08-18T00:00:00.000Z",
+            modes: {
+              currentModeId: "build",
+              availableModes: [{ id: "build", name: "build" }],
+            },
+            models: {
+              currentModelId: "opencode/laguna",
+              availableModels: [
+                { modelId: "opencode/laguna", name: "Laguna" },
+              ],
+            },
+          },
+        },
+      ],
+      "opencode",
+      "/tmp/app",
+    );
+    expect(catalog?.models?.currentModelId).toBe("opencode/laguna");
+    expect(catalog?.modes?.availableModes?.map((m) => m.id)).toEqual(["build"]);
+  });
+
+  test("ignores other agents, other cwds, and empty catalogs", () => {
+    expect(
+      liveCatalogForProbe(
+        [
+          {
+            info: {
+              sessionId: "ses_other_agent",
+              agent: "cursor-agent",
+              cwd: "/tmp/app",
+              createdAt: "2026-08-18T00:00:00.000Z",
+              models: {
+                currentModelId: "gpt-5",
+                availableModels: [{ modelId: "gpt-5", name: "GPT-5" }],
+              },
+            },
+          },
+          {
+            info: {
+              sessionId: "ses_other_cwd",
+              agent: "opencode",
+              cwd: "/tmp/other",
+              createdAt: "2026-08-18T00:00:00.000Z",
+              models: {
+                currentModelId: "opencode/laguna",
+                availableModels: [
+                  { modelId: "opencode/laguna", name: "Laguna" },
+                ],
+              },
+            },
+          },
+          {
+            info: {
+              sessionId: "ses_empty",
+              agent: "opencode",
+              cwd: "/tmp/app",
+              createdAt: "2026-08-18T00:00:00.000Z",
+            },
+          },
+        ],
+        "opencode",
+        "/tmp/app",
+      ),
+    ).toBeUndefined();
   });
 });
 

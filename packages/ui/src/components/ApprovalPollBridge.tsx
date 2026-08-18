@@ -14,11 +14,29 @@ import {
   usePrimaryApproval,
 } from "@qenex/core";
 import { ApprovalPanelBody } from "@/layout/panels/ApprovalPanel";
+import { useChatHelpers } from "@/components/ChatHelpersContext";
 
-const POLL_MS = 350;
+export const APPROVAL_POLL_ACTIVE_MS = 350;
+export const APPROVAL_POLL_IDLE_MS = 2000;
+
+export function approvalPollIntervalMs(input: {
+  isActive: boolean;
+  autoAllow: boolean;
+  hasPending: boolean;
+  chatBusy: boolean;
+}): number | null {
+  // Auto-allow must keep draining background Ask cards or SSE hangs.
+  if (!input.isActive) {
+    return input.autoAllow ? APPROVAL_POLL_IDLE_MS : null;
+  }
+  if (input.hasPending || input.chatBusy) return APPROVAL_POLL_ACTIVE_MS;
+  return APPROVAL_POLL_IDLE_MS;
+}
 
 type ApprovalPollBridgeProps = {
   sessionId: string;
+  /** Inactive keepalive slots skip poll unless Auto-allow is on. */
+  isActive?: boolean;
 };
 
 /**
@@ -28,15 +46,28 @@ type ApprovalPollBridgeProps = {
  * Auto mode only affects *new* Bridge decisions; any pending Ask card must still
  * be visible (or auto-resolved) so the stream cannot hang invisibly.
  */
-export function ApprovalPollBridge({ sessionId }: ApprovalPollBridgeProps) {
+export function ApprovalPollBridge({
+  sessionId,
+  isActive = true,
+}: ApprovalPollBridgeProps) {
   const host = useHost();
   const autoAllow = useApprovalPrefsStore((s) => s.autoAllow);
   const puckData = useLayoutStore((s) => s.puckData);
   const panelInLayout = findPanelZone(puckData, "approval") != null;
   const { approval, pendingCount } = usePrimaryApproval(sessionId);
   const pending = Boolean(approval);
+  const chat = useChatHelpers();
+  const chatBusy =
+    chat?.status === "submitted" || chat?.status === "streaming";
+  const intervalMs = approvalPollIntervalMs({
+    isActive,
+    autoAllow,
+    hasPending: pending,
+    chatBusy,
+  });
 
   useEffect(() => {
+    if (intervalMs == null) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -51,7 +82,7 @@ export function ApprovalPollBridge({ sessionId }: ApprovalPollBridgeProps) {
       if (active) {
         timer = setTimeout(() => {
           void poll();
-        }, POLL_MS);
+        }, intervalMs);
       }
     };
 
@@ -60,12 +91,16 @@ export function ApprovalPollBridge({ sessionId }: ApprovalPollBridgeProps) {
     return () => {
       active = false;
       if (timer) clearTimeout(timer);
-      approvalActions.clear(sessionId);
-      layoutActions.setPanelVisibleEphemeral("approval", false);
     };
-  }, [host, sessionId]);
+  }, [host, sessionId, intervalMs]);
 
-  // Auto-resolve leftovers when user switched to Auto while a card was pending.
+  useEffect(() => {
+    return () => {
+      approvalActions.clear(sessionId);
+    };
+  }, [sessionId]);
+
+  // Auto-resolve leftovers, including background tabs so SSE does not stall.
   useEffect(() => {
     if (!autoAllow || !approval) return;
     const picked = pickAutoAllowOption(approval.options);
@@ -88,11 +123,15 @@ export function ApprovalPollBridge({ sessionId }: ApprovalPollBridgeProps) {
   }, [autoAllow, approval, host, sessionId]);
 
   useEffect(() => {
+    if (!isActive) return;
     layoutActions.setPanelVisibleEphemeral("approval", pending && !autoAllow);
-  }, [pending, autoAllow]);
+    return () => {
+      layoutActions.setPanelVisibleEphemeral("approval", false);
+    };
+  }, [isActive, pending, autoAllow]);
 
   // Hide floating card only when Auto is actively draining it, or layout hosts it.
-  if (panelInLayout || autoAllow || !approval) {
+  if (!isActive || panelInLayout || autoAllow || !approval) {
     return null;
   }
 

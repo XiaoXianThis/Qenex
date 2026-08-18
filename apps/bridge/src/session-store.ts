@@ -1,8 +1,7 @@
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 import type { UIMessage } from "ai";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   applyCompatCatalog,
   resolveAgentCompat,
@@ -12,7 +11,6 @@ import {
   cliLoginCommand,
   isAuthRequiredErrorCode,
   normalizeAuthMethods,
-  pickInteractiveAuthMethodId,
   type ConfigDiscovery,
   type ResumeBehavior,
 } from "./agent/compat/types.ts";
@@ -45,61 +43,7 @@ import {
   type SessionConfigDto,
 } from "./session-config-dto.ts";
 import { classifySessionInitError } from "./session-errors.ts";
-import { SessionDb, resolveSessionsDbPath } from "./session-db.ts";
-
-// #region agent log
-let debugAuthSeq = 0;
-function debugGeminiAuthSnapshot(): Record<string, unknown> {
-  try {
-    const settingsPath = join(homedir(), ".gemini/settings.json");
-    const accountsPath = join(homedir(), ".gemini/google_accounts.json");
-    const settings = existsSync(settingsPath)
-      ? (JSON.parse(readFileSync(settingsPath, "utf8")) as {
-          security?: { auth?: { selectedType?: string } };
-        })
-      : null;
-    const accounts = existsSync(accountsPath)
-      ? (JSON.parse(readFileSync(accountsPath, "utf8")) as {
-          active?: unknown;
-          old?: unknown[];
-        })
-      : null;
-    return {
-      selectedType: settings?.security?.auth?.selectedType ?? null,
-      activeAccountSet: accounts?.active != null,
-      oldAccountCount: Array.isArray(accounts?.old) ? accounts.old.length : 0,
-      oauthCredsExist:
-        existsSync(join(homedir(), ".gemini/oauth_creds.json")) ||
-        existsSync(join(homedir(), ".gemini/credentials.json")),
-    };
-  } catch {
-    return { snapshotError: true };
-  }
-}
-function debugLog(
-  location: string,
-  message: string,
-  data: Record<string, unknown>,
-  hypothesisId: string,
-): void {
-  fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "ef4db2",
-    },
-    body: JSON.stringify({
-      sessionId: "ef4db2",
-      runId: "pre-fix",
-      hypothesisId,
-      location,
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-}
-// #endregion
+import { SessionDb, resolveSessionsDbPath, type GetMessagesOptions } from "./session-db.ts";
 
 export type SessionInfo = {
   sessionId: string;
@@ -152,6 +96,45 @@ export type SessionStoreOptions = {
 
 export function catalogCacheKey(agentId: string, cwd: string): string {
   return `${agentId}::${cwd}`;
+}
+
+/**
+ * Prefer an already-running ACP process's advertised catalog over a throwaway
+ * `session/new` probe. Incomplete live entries (typical `session/load`) are
+ * skipped so reopen-after-restart can still throwaway-probe.
+ */
+export function liveCatalogForProbe(
+  live: Iterable<{ info: SessionInfo }>,
+  agentId: string,
+  cwd: string,
+): NormalizedAcpSessionConfig | undefined {
+  for (const entry of live) {
+    if (entry.info.agent !== agentId || entry.info.cwd !== cwd) continue;
+    const info = entry.info;
+    const hasModes = (info.modes?.availableModes?.length ?? 0) > 0;
+    const hasModels = (info.models?.availableModels?.length ?? 0) > 0;
+    if (
+      !hasModes &&
+      !hasModels &&
+      !info.thoughtLevels &&
+      !info.fastOptions &&
+      !info.contextOptions &&
+      !info.thinkingOptions &&
+      !info.modelConfigById
+    ) {
+      continue;
+    }
+    return {
+      modes: info.modes,
+      models: info.models,
+      thoughtLevels: info.thoughtLevels,
+      fastOptions: info.fastOptions,
+      contextOptions: info.contextOptions,
+      thinkingOptions: info.thinkingOptions,
+      modelConfigById: info.modelConfigById,
+    };
+  }
+  return undefined;
 }
 
 /** Mode/model catalogs keyed by agentId + cwd (never agentVersion). */
@@ -362,58 +345,12 @@ export async function initProviderSessionWithInteractiveAuth(
 }> {
   let provider = input.provider;
   const { agentId, signal } = input;
-  const seq = ++debugAuthSeq;
-  // #region agent log
-  debugLog(
-    "session-store.ts:initProviderSessionWithInteractiveAuth",
-    "interactive-auth-start",
-    {
-      seq,
-      agentId,
-      launchCommand: input.launchCommand,
-      signalAborted: Boolean(signal?.aborted),
-      gemini: debugGeminiAuthSnapshot(),
-    },
-    "B",
-  );
-  // #endregion
   try {
     const session = await initProviderSession(provider, signal);
-    // #region agent log
-    debugLog(
-      "session-store.ts:initProviderSessionWithInteractiveAuth",
-      "first-init-ok",
-      {
-        seq,
-        agentId,
-        sessionId: session.sessionId,
-        gemini: debugGeminiAuthSnapshot(),
-      },
-      "A",
-    );
-    // #endregion
     return { session, provider };
   } catch (firstErr) {
     const authMethods = readProviderAuthMethods(provider);
     const classified = classifySessionInitError(firstErr, agentId, { authMethods });
-    // #region agent log
-    debugLog(
-      "session-store.ts:initProviderSessionWithInteractiveAuth",
-      "first-init-failed",
-      {
-        seq,
-        agentId,
-        classifiedCode: classified.code,
-        classifiedMessage: classified.message,
-        firstErr: errorText(firstErr).slice(0, 400),
-        authMethods,
-        isAuthRequired: isAuthRequiredErrorCode(classified.code),
-        signalAborted: Boolean(signal?.aborted),
-        gemini: debugGeminiAuthSnapshot(),
-      },
-      "A",
-    );
-    // #endregion
     if (!isAuthRequiredErrorCode(classified.code)) {
       throw classified;
     }
@@ -421,24 +358,7 @@ export async function initProviderSessionWithInteractiveAuth(
       input.launchCommand,
       resolveAgentCompat(agentId).loginArgv,
     );
-    const methodId = pickInteractiveAuthMethodId(
-      authMethodsFromClassified(classified) ?? authMethods,
-    );
     if (!loginCmd) {
-      // #region agent log
-      debugLog(
-        "session-store.ts:initProviderSessionWithInteractiveAuth",
-        "skip-second-authenticate",
-        {
-          seq,
-          agentId,
-          methodId,
-          reason: "initSession already ran provider lazy-auth",
-          gemini: debugGeminiAuthSnapshot(),
-        },
-        "A",
-      );
-      // #endregion
       throw classified;
     }
     try {
@@ -448,35 +368,8 @@ export async function initProviderSessionWithInteractiveAuth(
         provider = input.respawn();
       }
       const retrySession = await initProviderSession(provider, signal);
-      // #region agent log
-      debugLog(
-        "session-store.ts:initProviderSessionWithInteractiveAuth",
-        "retry-init-ok",
-        {
-          seq,
-          agentId,
-          sessionId: retrySession.sessionId,
-          gemini: debugGeminiAuthSnapshot(),
-        },
-        "D",
-      );
-      // #endregion
       return { session: retrySession, provider };
     } catch (authErr) {
-      // #region agent log
-      debugLog(
-        "session-store.ts:initProviderSessionWithInteractiveAuth",
-        "auth-or-retry-failed",
-        {
-          seq,
-          agentId,
-          err: errorText(authErr).slice(0, 400),
-          code: authErr instanceof BridgeError ? authErr.code : null,
-          gemini: debugGeminiAuthSnapshot(),
-        },
-        "D",
-      );
-      // #endregion
       return rethrowAuthFailure(
         classified,
         authErr,
@@ -925,6 +818,10 @@ export class SessionStore {
         (entry.info.thoughtLevels?.available?.length ?? 0) > 0 ||
         (entry.info.fastOptions?.available?.length ?? 0) > 0;
       const currentModelId = entry.info.models?.currentModelId ?? null;
+      this.#rememberModelConfig(
+        sessionId,
+        sessionInfoToConfigDto(entry.info),
+      );
       if (
         shouldSelfProbeCurrentModel({
           configDiscovery: compat.configDiscovery,
@@ -933,20 +830,31 @@ export class SessionStore {
         }) &&
         currentModelId
       ) {
-        try {
-          await this.#setModelUnlocked(
-            entry,
-            currentModelId,
-            input.signal ?? new AbortController().signal,
+        // Do not block HTTP 201. GET /config and model-config still pick up
+        // thought/fast after this queued probe (or via ensureSessionCatalog).
+        void this.#withSessionOp(sessionId, "set-model", async (signal) => {
+          const live = this.#sessions.get(sessionId);
+          if (!live) return;
+          try {
+            const dto = await this.#setModelUnlocked(
+              live,
+              currentModelId,
+              signal,
+            );
+            this.#rememberModelConfig(sessionId, dto);
+          } catch (err) {
+            console.error(
+              "[qenex-bridge] create self-probe failed:",
+              errorText(err),
+            );
+          }
+        }).catch((err) => {
+          console.error(
+            "[qenex-bridge] create self-probe failed:",
+            errorText(err),
           );
-        } catch {
-          /* Session is still usable; UI can GET …/models/:id/config later. */
-        }
+        });
       }
-      this.#rememberModelConfig(
-        sessionId,
-        sessionInfoToConfigDto(entry.info),
-      );
       return entry.info;
     } catch (err) {
       const authMethods = readProviderAuthMethods(provider);
@@ -1126,10 +1034,13 @@ export class SessionStore {
     }
   }
 
-  getMessages(sessionId: string): UIMessage[] {
+  getMessages(
+    sessionId: string,
+    options?: GetMessagesOptions,
+  ): UIMessage[] {
     // Existence check (DB or memory).
     this.getInfo(sessionId);
-    return this.#db.getMessages(sessionId);
+    return this.#db.getMessages(sessionId, options);
   }
 
   /** Session mode/model config for the frontend SessionConfigBar. */
@@ -1630,7 +1541,8 @@ export class SessionStore {
   }
 
   /**
-   * When loadSession omits catalogs, fill from agent+cwd cache or a throwaway session/new probe.
+   * When loadSession omits catalogs, fill from agent+cwd cache, a live
+   * session's session/new advertisement, or a throwaway session/new probe.
    */
   async #ensureSessionCatalog(entry: SessionEntry): Promise<void> {
     entry.info = applyInfoCatalog(entry.info);
@@ -1775,6 +1687,11 @@ export class SessionStore {
     if (pending) return pending;
 
     const promise = (async (): Promise<NormalizedAcpSessionConfig> => {
+      const live = liveCatalogForProbe(this.#sessions.values(), agentId, cwd);
+      if (live) {
+        this.#rememberCatalog(agentId, cwd, live);
+        return live;
+      }
       const spawned = spawnAgentProvider({
         cwd,
         agentId,
@@ -1897,6 +1814,33 @@ export class SessionStore {
     }
     this.#modelConfigBySession.delete(sessionId);
     this.#db.deleteSession(sessionId);
+  }
+
+  /**
+   * Drop the live ACP process and keep SQLite. Idempotent when already cold.
+   * Chat / getConfig / ensureOpen reopen via the existing session/load path.
+   */
+  hibernate(sessionId: string): SessionInfo {
+    const live = this.#sessions.get(sessionId);
+    const inDb = this.#db.getSession(sessionId) != null;
+    if (!live && !inDb) {
+      throw new BridgeError(
+        "session_not_found",
+        `Session not found: ${sessionId}`,
+        404,
+      );
+    }
+    if (live) {
+      this.#sessions.delete(sessionId);
+      live.approvals.cancelAll();
+      try {
+        live.provider.cleanup();
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
+    this.#modelConfigBySession.delete(sessionId);
+    return this.getInfo(sessionId);
   }
 
   /**

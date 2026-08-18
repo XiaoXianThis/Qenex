@@ -6,6 +6,7 @@ import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@qenex/core";
 import {
   buildEditDiffLines,
+  buildResultDiffLines,
   classifyTool,
   countDiffStats,
   fileBasename,
@@ -18,12 +19,14 @@ import {
   pickContentPreview,
   pickGlob,
   pickPath,
+  pickPathFromResult,
   pickPattern,
-  truncateText,
+  unwrapAcpToolEnvelope,
   type DiffLine,
   type ToolArgs,
   type ToolViewKind,
 } from "@/components/assistant-ui/tool-call-format";
+import { ToolCodeBlock } from "@/components/assistant-ui/tool-code-block";
 
 export type ToolCallModel = {
   kind: ToolViewKind;
@@ -42,13 +45,16 @@ export function buildToolCallModel(
   result?: unknown,
   progressText?: string | null,
 ): ToolCallModel {
-  const args = parseToolArgs(argsText);
-  const kind = classifyTool(toolName, args);
+  const parsed = parseToolArgs(argsText);
+  const unwrapped = unwrapAcpToolEnvelope(parsed);
+  const args = unwrapped.args;
+  const displayName = unwrapped.toolName || toolName;
+  const kind = classifyTool(displayName, args);
   const resultText = formatResultText(result);
   const progress =
     resultText == null && progressText ? progressText : null;
   const output = resultText ?? progress;
-  const diffLines =
+  let diffLines: DiffLine[] =
     kind === "edit"
       ? buildEditDiffLines(args)
       : kind === "write"
@@ -62,18 +68,22 @@ export function buildToolCallModel(
               marker: "+" as const,
             }))
         : [];
+  if (kind === "edit" && diffLines.length === 0) {
+    diffLines = buildResultDiffLines(result);
+  }
   const stats = countDiffStats(diffLines);
   const empty =
     !hasMeaningfulArgs(args) &&
     !output &&
-    !pickContentPreview(args);
+    !pickContentPreview(args) &&
+    diffLines.length === 0;
 
   return {
     kind,
     args,
     output,
     empty,
-    path: pickPath(args),
+    path: pickPath(args) ?? pickPathFromResult(result),
     command: pickCommand(args),
     diffLines,
     stats,
@@ -185,27 +195,25 @@ function DiffLinesView({ lines }: { lines: DiffLine[] }) {
   );
 }
 
-function CodeBlock({ text }: { text: string }) {
-  const { text: shown, truncated } = truncateText(text);
-  const lines = shown.split("\n");
+function CodeBlock({
+  text,
+  kind,
+  path,
+  streaming,
+}: {
+  text: string;
+  kind?: ToolViewKind;
+  path?: string;
+  streaming?: boolean;
+}) {
   return (
-    <div className="font-mono text-[11px] leading-[1.55]">
-      {lines.map((line, i) => (
-        <div key={`${i}-${line.slice(0, 24)}`} className="flex min-w-0">
-          <span className="text-muted-foreground/70 w-8 shrink-0 select-none pe-2 text-right tabular-nums">
-            {i + 1}
-          </span>
-          <span className="text-foreground/85 min-w-0 flex-1 whitespace-pre-wrap break-all pe-2">
-            {line || " "}
-          </span>
-        </div>
-      ))}
-      {truncated ? (
-        <div className="text-muted-foreground px-3 py-1.5 text-[10px]">
-          … 已截断
-        </div>
-      ) : null}
-    </div>
+    <ToolCodeBlock
+      text={text}
+      kind={kind}
+      path={path}
+      streaming={streaming}
+      className="px-2"
+    />
   );
 }
 
@@ -324,7 +332,13 @@ export function ToolCallCardHeaderTrigger({
   );
 }
 
-export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
+export function ToolCallCardBody({
+  model,
+  streaming = false,
+}: {
+  model: ToolCallModel;
+  streaming?: boolean;
+}) {
   const { kind, args, output, path, command, diffLines } = model;
 
   if (kind === "shell") {
@@ -337,9 +351,9 @@ export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
           </div>
         ) : null}
         {output ? (
-          <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-all opacity-90">
-            {truncateText(output).text}
-          </pre>
+          <div className="mt-1.5 max-h-48 overflow-auto opacity-90">
+            <CodeBlock text={output} kind="shell" streaming={streaming} />
+          </div>
         ) : null}
       </div>
     );
@@ -351,7 +365,7 @@ export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
         {diffLines.length > 0 ? (
           <DiffLinesView lines={diffLines} />
         ) : output ? (
-          <CodeBlock text={output} />
+          <CodeBlock text={output} kind={kind} path={path} streaming={streaming} />
         ) : null}
       </div>
     );
@@ -360,7 +374,11 @@ export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
   if (kind === "read") {
     return (
       <div className="bg-background/40 max-h-64 overflow-auto">
-        {output ? <CodeBlock text={output} /> : path ? <SoftMeta value={path} /> : null}
+        {output ? (
+          <CodeBlock text={output} kind="read" path={path} streaming={streaming} />
+        ) : path ? (
+          <SoftMeta value={path} />
+        ) : null}
       </div>
     );
   }
@@ -373,7 +391,9 @@ export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
         {pattern ? <SoftMeta label="pattern" value={pattern} /> : null}
         {path ? <SoftMeta label="path" value={path} /> : null}
         {glob ? <SoftMeta label="glob" value={glob} /> : null}
-        {output ? <CodeBlock text={output} /> : null}
+        {output ? (
+          <CodeBlock text={output} kind="grep" streaming={streaming} />
+        ) : null}
       </div>
     );
   }
@@ -383,12 +403,18 @@ export function ToolCallCardBody({ model }: { model: ToolCallModel }) {
   const content = pickContentPreview(args);
   return (
     <div className="bg-background/40 max-h-64 overflow-auto py-1">
-      {raw ? <CodeBlock text={raw} /> : null}
+      {raw ? (
+        <CodeBlock text={raw} kind="generic" streaming={streaming} />
+      ) : null}
       {entries.map(([key, value]) => (
         <SoftMeta key={key} label={key} value={value} />
       ))}
-      {content ? <CodeBlock text={content} /> : null}
-      {output ? <CodeBlock text={output} /> : null}
+      {content ? (
+        <CodeBlock text={content} kind={kind} path={path} streaming={streaming} />
+      ) : null}
+      {output ? (
+        <CodeBlock text={output} kind={kind} path={path} streaming={streaming} />
+      ) : null}
     </div>
   );
 }
@@ -399,6 +425,7 @@ export type ToolCallBodyProps = {
   result?: unknown;
   progressText?: string | null;
   className?: string;
+  streaming?: boolean;
 };
 
 /** 完整卡片（用于展开后的 Read/Grep 等，header 不可点） */
@@ -408,6 +435,7 @@ export function ToolCallBody({
   result,
   progressText,
   className,
+  streaming = false,
 }: ToolCallBodyProps) {
   const model = buildToolCallModel(toolName, argsText, result, progressText);
   if (model.empty) return null;
@@ -434,25 +462,12 @@ export function ToolCallBody({
         </span>
         <ChangeStats {...model.stats} />
       </div>
-    ) : model.kind === "grep" ? (
-      <div className="border-border/60 bg-muted/30 flex items-center gap-2 border-b px-2.5 py-1.5">
-        <span className="text-foreground/90 truncate text-xs">
-          {pickPattern(model.args) ? (
-            <>
-              <span className="text-muted-foreground">pattern </span>
-              <span className="font-mono">{pickPattern(model.args)}</span>
-            </>
-          ) : (
-            "Search"
-          )}
-        </span>
-      </div>
     ) : null;
 
   return (
     <ToolCardShell className={className}>
       {staticHeader}
-      <ToolCallCardBody model={model} />
+      <ToolCallCardBody model={model} streaming={streaming} />
     </ToolCardShell>
   );
 }

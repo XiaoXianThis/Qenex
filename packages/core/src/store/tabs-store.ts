@@ -2,6 +2,7 @@ import { proxy } from "valtio";
 import { useSnapshot } from "valtio/react";
 import {
   deleteAisdkSession,
+  hibernateAisdkSession,
   invalidateSessionBoot,
   isAisdkSessionId,
 } from "../lib/aisdk-session.ts";
@@ -86,6 +87,15 @@ function deleteSessionInBackground(tab: SessionTab) {
   });
 }
 
+function hibernateSessionInBackground(tab: SessionTab) {
+  if (!isAisdkSessionId(tab.sessionId)) {
+    return;
+  }
+  void hibernateAisdkSession(tab.sessionId, getBridgeHost()).catch((error) => {
+    console.warn("Failed to hibernate Bridge session:", error);
+  });
+}
+
 /** 有聊天内容则归档进历史，否则直接删除 */
 function dismissTab(tabId: string) {
   const tab = tabsStore.tabs.find((t) => t.id === tabId);
@@ -97,6 +107,8 @@ function dismissTab(tabId: string) {
     removeTabLocally(tabId);
     return;
   }
+
+  hibernateSessionInBackground(tab);
 
   const remaining = tabsStore.tabs.map((t) =>
     t.id === tabId ? { ...t, status: "archived" as const } : t,

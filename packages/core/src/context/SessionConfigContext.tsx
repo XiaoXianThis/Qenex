@@ -571,13 +571,6 @@ export function SessionConfigProvider({
         next = await setAisdkSessionModel(threadId, plan.setModel);
         if (signal?.aborted) return "error";
       }
-      if (applyAgentPrefs) {
-        const modelId = next.currentModelId ?? plan.setModel;
-        if (modelId) {
-          next = await applyPreferredThoughtFast(next, modelId);
-          if (signal?.aborted) return "error";
-        }
-      }
 
       seedModelConfigs(next.modelConfigs);
 
@@ -623,10 +616,6 @@ export function SessionConfigProvider({
           thinkingConfigId: snapshot.thinkingConfigId ?? next.thinkingConfigId,
           currentThinkingId: snapshot.currentThinkingId ?? next.currentThinkingId,
         };
-        if (applyAgentPrefs) {
-          next = await applyPreferredThoughtFast(next, next.currentModelId);
-          if (signal?.aborted) return "error";
-        }
         if (next.currentModelId && hasModelConfigOptions(next)) {
           cacheModelConfig(
             next.currentModelId,
@@ -638,6 +627,26 @@ export function SessionConfigProvider({
         }
       }
       setConfig(next);
+
+      // Thought/fast prefs: independent request after config is published so they
+      // do not sit in front of the first chat token. Mode/model stay above.
+      if (applyAgentPrefs) {
+        const modelId = next.currentModelId ?? plan.setModel;
+        if (modelId) {
+          const snapshot = next;
+          queueMicrotask(() => {
+            void applyPreferredThoughtFast(snapshot, modelId)
+              .then((updated) => {
+                if (signal?.aborted) return;
+                setConfig(updated);
+              })
+              .catch((error) => {
+                if (signal?.aborted) return;
+                console.warn("Failed to apply preferred thought/fast:", error);
+              });
+          });
+        }
+      }
       return "ok";
     } catch (error) {
       if (signal?.aborted) return "error";

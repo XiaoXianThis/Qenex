@@ -8,18 +8,38 @@ import { acpInitializeFromCompat } from "./compat/types.ts";
 import { resolveAgentCompat } from "./compat/registry.ts";
 import { resolveLaunchCommand } from "./detect.ts";
 
-function cleanEnv(
+const SPAWN_ENV_ALLOWLIST = [
+  "PATH",
+  "Path",
+  "HOME",
+  "USERPROFILE",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "ACP_AI_PROVIDER_DEBUG",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "CODEX_API_KEY",
+] as const;
+
+/** Subprocess env: allowlisted parent keys plus launch/compat extras. */
+export function cleanEnv(
   extra?: Record<string, string | undefined>,
 ): Record<string, string> | undefined {
-  const merged: Record<string, string | undefined> = {
-    ...process.env,
-    ...extra,
-  };
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(merged)) {
-    if (typeof v === "string") out[k] = v;
+  for (const key of SPAWN_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (typeof value === "string") out[key] = value;
+  }
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (typeof value === "string") out[key] = value;
+    }
   }
   if (!out.PATH && process.env.PATH) out.PATH = process.env.PATH;
+  if (!out.HOME && process.env.HOME) out.HOME = process.env.HOME;
   return Object.keys(out).length ? out : undefined;
 }
 

@@ -112,6 +112,114 @@ describe("SessionDb", () => {
     db = new SessionDb(path); // afterEach closes
   });
 
+  test("replaceMessages upserts changes and skips identical rows", () => {
+    db.upsertSession({
+      sessionId: "ses_inc",
+      agent: "opencode",
+      cwd: "/tmp/i",
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+    const first: UIMessage[] = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "one" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "two" }] },
+    ];
+    db.replaceMessages("ses_inc", first);
+    const raw = new Database(path);
+    const createdBefore = raw
+      .query(
+        `SELECT message_id, created_at, parts_json FROM messages
+         WHERE session_id = ? ORDER BY sort_index`,
+      )
+      .all("ses_inc") as Array<{
+      message_id: string;
+      created_at: string;
+      parts_json: string;
+    }>;
+    expect(createdBefore).toHaveLength(2);
+
+    db.replaceMessages("ses_inc", first);
+    const createdSame = raw
+      .query(
+        `SELECT message_id, created_at FROM messages
+         WHERE session_id = ? ORDER BY sort_index`,
+      )
+      .all("ses_inc") as Array<{ message_id: string; created_at: string }>;
+    expect(createdSame.map((row) => row.created_at)).toEqual(
+      createdBefore.map((row) => row.created_at),
+    );
+
+    db.replaceMessages("ses_inc", [
+      first[0]!,
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "two!" }] },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "three" }] },
+    ]);
+    const after = raw
+      .query(
+        `SELECT message_id, created_at, parts_json FROM messages
+         WHERE session_id = ? ORDER BY sort_index`,
+      )
+      .all("ses_inc") as Array<{
+      message_id: string;
+      created_at: string;
+      parts_json: string;
+    }>;
+    expect(after.map((row) => row.message_id)).toEqual(["u1", "a1", "u2"]);
+    expect(after[0]?.created_at).toBe(createdBefore[0]?.created_at);
+    expect(after[1]?.parts_json).toContain("two!");
+    expect(after[2]?.message_id).toBe("u2");
+    raw.close();
+  });
+
+  test("replaceMessages deletes ids missing from the new list", () => {
+    db.upsertSession({
+      sessionId: "ses_del",
+      agent: "opencode",
+      cwd: "/tmp/d2",
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+    db.replaceMessages("ses_del", [
+      { id: "keep", role: "user", parts: [{ type: "text", text: "a" }] },
+      { id: "drop", role: "assistant", parts: [{ type: "text", text: "b" }] },
+    ]);
+    db.replaceMessages("ses_del", [
+      { id: "keep", role: "user", parts: [{ type: "text", text: "a" }] },
+    ]);
+    const loaded = db.getMessages("ses_del");
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.id).toBe("keep");
+  });
+
+  test("getMessages paginates with limit and before", () => {
+    db.upsertSession({
+      sessionId: "ses_page",
+      agent: "opencode",
+      cwd: "/tmp/p",
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+    db.replaceMessages("ses_page", [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "1" }] },
+      { id: "m2", role: "assistant", parts: [{ type: "text", text: "2" }] },
+      { id: "m3", role: "user", parts: [{ type: "text", text: "3" }] },
+      { id: "m4", role: "assistant", parts: [{ type: "text", text: "4" }] },
+    ]);
+    expect(db.getMessages("ses_page").map((m) => m.id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+    expect(db.getMessages("ses_page", { limit: 2 }).map((m) => m.id)).toEqual([
+      "m3",
+      "m4",
+    ]);
+    expect(
+      db.getMessages("ses_page", { limit: 2, before: "m3" }).map((m) => m.id),
+    ).toEqual(["m1", "m2"]);
+    expect(
+      db.getMessages("ses_page", { limit: 2, before: "missing" }),
+    ).toEqual([]);
+  });
+
   test("migrates legacy session_id into local + remote ids", () => {
     const legacyPath = join(
       mkdtempSync(join(tmpdir(), "qenex-session-legacy-")),

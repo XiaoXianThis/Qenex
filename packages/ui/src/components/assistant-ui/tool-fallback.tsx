@@ -19,10 +19,12 @@ import {
   buildToolCallModel,
 } from "@/components/assistant-ui/tool-call-view";
 import { shouldDefaultToolPreview } from "@/components/assistant-ui/tool-call-format";
+import { isToolCallShimmerActive } from "@/components/assistant-ui/tool-call-status";
 import {
   Collapsible,
   CollapsibleContent,
 } from "@/components/ui/collapsible";
+import { useChatHelpers } from "@/components/ChatHelpersContext";
 import {
   cn,
   displayApprovalOptionLabel,
@@ -137,9 +139,16 @@ function ToolFallbackDuration({
   );
 }
 
+function useChatBusy() {
+  const chat = useChatHelpers();
+  return chat?.status === "submitted" || chat?.status === "streaming";
+}
+
 function ToolFallbackTrigger({
   toolName,
   status,
+  result,
+  isError,
   className,
   ...props
 }: Omit<
@@ -148,12 +157,18 @@ function ToolFallbackTrigger({
 > & {
   toolName: string;
   status?: ToolCallMessagePartStatus;
+  result?: unknown;
+  isError?: boolean;
 }) {
   const statusType = status?.type ?? "complete";
-  const isRunning = statusType === "running";
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
   const isRequiresAction = statusType === "requires-action";
+  const chatBusy = useChatBusy();
+  const active = isToolCallShimmerActive(
+    { status, result, isError },
+    chatBusy,
+  );
 
   const label = isCancelled
     ? `Cancelled ${toolName}`
@@ -170,8 +185,8 @@ function ToolFallbackTrigger({
         className,
       )}
       label={label}
-      meta={!isRunning && !isRequiresAction ? <ToolFallbackDuration /> : undefined}
-      active={isRunning || isRequiresAction}
+      meta={!active ? <ToolFallbackDuration /> : undefined}
+      active={active}
       {...props}
     />
   );
@@ -522,11 +537,15 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   argsText,
   result,
   status,
+  isError,
 }) => {
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
-  const isRunning = status?.type === "running";
-  const isRequiresAction = status?.type === "requires-action";
+  const chatBusy = useChatBusy();
+  const active = isToolCallShimmerActive(
+    { status, result, isError },
+    chatBusy,
+  );
 
   const liveProgress = useToolProgress(toolCallId);
   const model = buildToolCallModel(
@@ -536,7 +555,6 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
     isCancelled ? null : liveProgress,
   );
   const defaultPreview = shouldDefaultToolPreview(model.kind);
-  const active = isRunning || isRequiresAction;
 
   // Shell / 写文件 / 编辑：默认预览 → 点击完全展开
   if (defaultPreview) {
@@ -549,7 +567,9 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
           <ToolCallCardHeaderTrigger model={model} active={active} />
           <ToolFallbackContent compact>
             <ToolFallbackError status={status} />
-            {!model.empty ? <ToolCallCardBody model={model} /> : null}
+            {!model.empty ? (
+              <ToolCallCardBody model={model} streaming={active} />
+            ) : null}
           </ToolFallbackContent>
         </ToolCardShell>
       </ToolFallbackRoot>
@@ -559,7 +579,12 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   // Read / Grep / generic：默认收起 → 点击完全展开
   return (
     <ToolFallbackRoot>
-      <ToolFallbackTrigger toolName={toolName} status={status} />
+      <ToolFallbackTrigger
+        toolName={toolName}
+        status={status}
+        result={result}
+        isError={isError}
+      />
       <ToolFallbackContent>
         <ToolFallbackError status={status} />
         <ToolCallBody
@@ -568,6 +593,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
           result={isCancelled ? undefined : result}
           progressText={isCancelled ? null : liveProgress}
           className={cn(isCancelled && "opacity-60")}
+          streaming={active}
         />
       </ToolFallbackContent>
     </ToolFallbackRoot>

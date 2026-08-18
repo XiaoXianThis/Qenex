@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { AcpToolOutputRecovery } from "./acp-tool-output.ts";
 import { BridgeError } from "../../errors.ts";
 import type {
   ApprovalManager,
@@ -123,26 +124,15 @@ export function installClientHandlers(
 
   const originalSessionUpdate = model.client.sessionUpdate?.bind(model.client);
   if (originalSessionUpdate) {
+    const recovery = new AcpToolOutputRecovery();
     model.client.sessionUpdate = (params) => {
       const update = params.update;
       if (Array.isArray(update?.configOptions)) {
         onConfigOptions?.(update.configOptions);
       }
-      // Provider 0.3.4: failed-tool formatter assumes rawOutput is iterable.
-      // OpenCode (and others) can send `{}` after a rejection; prefer ACP content.
-      // Remove when provider handles non-iterable rawOutput (pin > 0.3.4 with fix).
-      if (
-        update?.sessionUpdate === "tool_call_update" &&
-        update.status === "failed" &&
-        !Array.isArray(update.rawOutput)
-      ) {
-        return originalSessionUpdate({
-          ...params,
-          update: {
-            ...update,
-            rawOutput: Array.isArray(update.content) ? update.content : [],
-          },
-        });
+      const patched = recovery.patch(update);
+      if (patched !== undefined && patched !== update) {
+        return originalSessionUpdate({ ...params, update: patched });
       }
       return originalSessionUpdate(params);
     };

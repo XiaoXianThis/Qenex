@@ -14,6 +14,7 @@ import {
   ReasoningText,
   ReasoningTrigger,
 } from "@/components/assistant-ui/reasoning";
+import { isToolCallShimmerActive } from "@/components/assistant-ui/tool-call-status";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import {
   ToolGroupContent,
@@ -71,6 +72,7 @@ import {
   SquareIcon,
   KeyRound,
 } from "lucide-react";
+import { threadMessagesFingerprint } from "@/components/assistant-ui/thread-fingerprint";
 import {
   createContext,
   useContext,
@@ -136,6 +138,9 @@ const ThreadReasoningGroup: FC<
 const ToolSequenceGroup: FC<
   PropsWithChildren<{ group: ThreadGroupPart }>
 > = ({ group, children }) => {
+  const chat = useChatHelpers();
+  const chatBusy =
+    chat?.status === "submitted" || chat?.status === "streaming";
   const toolCount = useAuiState((s) =>
     group.indices.reduce(
       (count, index) =>
@@ -148,8 +153,7 @@ const ToolSequenceGroup: FC<
       const part = s.message.parts[index];
       return (
         part?.type === "tool-call" &&
-        (part.status?.type === "running" ||
-          part.status?.type === "requires-action")
+        isToolCallShimmerActive(part, chatBusy)
       );
     }),
   );
@@ -204,12 +208,18 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
 export const ThreadMessages: FC = () => {
   const chat = useChatHelpers();
   // Primitive fingerprint — never return a new array from useAuiState.
-  const threadIdFingerprint = useAuiState((s) =>
-    s.thread.messages.map((message) => message.id).join("\n"),
-  );
-  const threadIds = threadIdFingerprint
-    ? threadIdFingerprint.split("\n")
-    : [];
+  const idsSnapshotRef = useRef<{ fp: string; ids: string[] }>({
+    fp: "",
+    ids: [],
+  });
+  const threadIds = useAuiState((s) => {
+    const fp = threadMessagesFingerprint(s.thread.messages);
+    const prev = idsSnapshotRef.current;
+    if (prev.fp === fp) return prev.ids;
+    const ids = s.thread.messages.map((message) => message.id);
+    idsSnapshotRef.current = { fp, ids };
+    return ids;
+  });
 
   // Drive the list from live useChat messages so sendMessage paints the user
   // bubble in the same turn (true optimism — not a parallel fake bubble).
@@ -795,10 +805,10 @@ const ThreadComposerBody: FC<{
             />
           </ComposerAutocomplete>
         </div>
-        <div className="aui-composer-action-wrapper flex items-center gap-2 px-0.5">
+        <div className="aui-composer-action-wrapper flex items-end gap-2">
           {showSessionConfig && !layoutEditing ? (
             <SessionConfigBar
-              className="px-0"
+              className="ps-0.5 pe-0.5 pb-0.5"
               trailing={
                 <>
                   <ComposerAddAttachment />
@@ -812,7 +822,7 @@ const ThreadComposerBody: FC<{
               }
             />
           ) : (
-            <div className="ms-auto flex items-center gap-2">
+            <div className="ms-auto flex items-end gap-2.5 pe-0.5 pb-0.5">
               <ComposerAddAttachment />
               <ComposerSendActions
                 canSend={canSend}

@@ -146,6 +146,20 @@ describe("new session preferred bootstrap", () => {
     ).toEqual({ setMode: null, setModel: null });
   });
 
+  test("mode/model plan does not include thought/fast", () => {
+    const plan = planNewSessionBootstrapActions({
+      isNewSession: true,
+      currentModeId: "build",
+      currentModelId: "m1",
+      modes,
+      models,
+      preferredMode: "plan",
+      preferredModel: "m2",
+    });
+    expect(plan).toEqual({ setMode: "plan", setModel: "m2" });
+    expect("setThought" in plan).toBe(false);
+  });
+
   test("skips preferred ids missing from the catalog", () => {
     expect(preferredCatalogId("missing", "m1", models)).toBeNull();
     expect(

@@ -99,7 +99,7 @@ Resume：
 
 1. **ACP 协商** — provider initialize 声明的能力
 2. **session 广告** — `session/new` 或 `session/load` 带回的 `configOptions` / legacy `modes`·`models`
-3. **Compat 补偿或禁用** — 例如 Cursor 的 per-model 探测；OpenCode `session/load` 常缺目录时，用 `agentId::cwd` 缓存或一次性 throwaway `session/new` 回填（`session-store` `#ensureSessionCatalog`）
+3. **Compat 补偿或禁用** — 例如 Cursor 的 per-model 探测；OpenCode `session/load` 常缺目录时，用 `agentId::cwd` 缓存，或同 agent+cwd 的 **live session** 广告/catalog（不再起 throwaway 进程）；没有 live session 时才一次性 throwaway `session/new` 回填（`session-store` `#ensureSessionCatalog`）
 4. **保守默认** — 列表为空则 UI 不展示对应选择器，不要假装 Agent 支持
 
 catalog 缓存 key 固定为 **`agentId::cwd`**（不要加 agentVersion）。同一 Agent 在不同工作目录下的目录必须隔离。

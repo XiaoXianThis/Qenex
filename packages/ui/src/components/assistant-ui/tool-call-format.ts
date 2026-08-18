@@ -1,3 +1,5 @@
+import { resolveShikiLang } from "@/components/assistant-ui/shiki-langs";
+
 /** Cursor 风格工具调用：解析 args、分类、抽取展示字段 */
 
 export type ToolViewKind =
@@ -40,6 +42,7 @@ const CONTENT_KEYS = [
   "oldStr",
   "diff",
   "patch",
+  "input",
 ] as const;
 
 const GLOB_KEYS = ["glob", "glob_pattern", "globPattern", "include"] as const;
@@ -48,6 +51,29 @@ const HIDDEN_GENERIC_KEYS = new Set<string>([
   ...CONTENT_KEYS,
   "__tool_use_purpose",
 ]);
+
+/**
+ * ACP provider wraps every call as `{ toolCallId, toolName, args: rawInput }`.
+ * Classification and pickers must use the inner `args`.
+ */
+export function unwrapAcpToolEnvelope(args: ToolArgs): {
+  toolName?: string;
+  args: ToolArgs;
+} {
+  const inner = args.args;
+  if (
+    typeof args.toolCallId === "string" &&
+    inner &&
+    typeof inner === "object" &&
+    !Array.isArray(inner)
+  ) {
+    return {
+      toolName: typeof args.toolName === "string" ? args.toolName : undefined,
+      args: inner as ToolArgs,
+    };
+  }
+  return { args };
+}
 
 export function parseToolArgs(argsText?: string): ToolArgs {
   if (!argsText?.trim()) return {};
@@ -77,6 +103,16 @@ function firstString(args: ToolArgs, keys: readonly string[]): string | undefine
 
 export function pickPath(args: ToolArgs): string | undefined {
   return firstString(args, PATH_KEYS);
+}
+
+export function pickPathFromResult(result: unknown): string | undefined {
+  const items = Array.isArray(result) ? result : [result];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const path = (item as { path?: unknown }).path;
+    if (typeof path === "string" && path.trim()) return path;
+  }
+  return undefined;
 }
 
 export function pickCommand(args: ToolArgs): string | undefined {
@@ -337,55 +373,128 @@ export function buildSimpleDiffLines(
   return lines;
 }
 
+function firstDiffishString(args: ToolArgs): string | null {
+  for (const key of ["diff", "patch", "input"] as const) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
 export function buildEditDiffLines(args: ToolArgs): DiffLine[] {
-  const diffish =
-    typeof args.diff === "string"
-      ? args.diff
-      : typeof args.patch === "string"
-        ? args.patch
-        : null;
+  const diffish = firstDiffishString(args);
   if (diffish) {
     const parsed = parseUnifiedDiff(diffish);
     if (parsed) return parsed;
+    return diffish.split("\n").map((text, i) => ({
+      kind: "ctx" as const,
+      text,
+      lineNo: i + 1,
+      marker: " " as const,
+    }));
   }
   const { oldText, newText } = pickOldNew(args);
   return buildSimpleDiffLines(oldText, newText);
 }
 
+/** Cursor/ACP result payloads that are already a diff, not args. */
+export function buildResultDiffLines(result: unknown): DiffLine[] {
+  const items = Array.isArray(result) ? result : [result];
+  const lines: DiffLine[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const isDiff =
+      o.type === "diff" ||
+      (typeof o.path === "string" &&
+        (typeof o.newText === "string" || typeof o.oldText === "string"));
+    if (!isDiff) continue;
+    if (typeof o.path === "string") {
+      lines.push({
+        kind: "meta",
+        text: o.path,
+        lineNo: null,
+        marker: "",
+      });
+    }
+    lines.push(
+      ...buildSimpleDiffLines(
+        typeof o.oldText === "string" ? o.oldText : undefined,
+        typeof o.newText === "string" ? o.newText : undefined,
+      ),
+    );
+  }
+  return lines;
+}
+
+function formatDiffResult(o: Record<string, unknown>): string {
+  const path = typeof o.path === "string" ? o.path : "";
+  const oldText = typeof o.oldText === "string" ? o.oldText : "";
+  const newText = typeof o.newText === "string" ? o.newText : "";
+  const parts: string[] = [];
+  if (path) parts.push(path);
+  if (oldText) parts.push(oldText);
+  if (newText) parts.push(newText);
+  return parts.join("\n");
+}
+
+function exitCodeOf(o: Record<string, unknown>): number | undefined {
+  const code = o.exit_code ?? o.exitCode;
+  return typeof code === "number" ? code : undefined;
+}
+
+/** Pull readable text out of ACP / Codex / Cursor tool payloads. */
+function textFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 8 || value == null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => textFromUnknown(item, depth + 1))
+      .filter((text): text is string => Boolean(text));
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+  if (typeof value !== "object") return null;
+  const o = value as Record<string, unknown>;
+
+  if (typeof o.formatted_output === "string") {
+    const code = exitCodeOf(o);
+    if (code != null && code !== 0) {
+      const body = o.formatted_output.replace(/\s+$/, "");
+      return body ? `${body}\nexit ${code}` : `exit ${code}`;
+    }
+    return o.formatted_output;
+  }
+  if (typeof o.text === "string") return o.text;
+  if (o.type === "content") return textFromUnknown(o.content, depth + 1);
+  if (typeof o.content === "string") return o.content;
+  if (typeof o.output === "string") return o.output;
+  if (typeof o.stdout === "string") {
+    const err =
+      typeof o.stderr === "string" && o.stderr.trim() ? `\n${o.stderr}` : "";
+    return `${o.stdout}${err}`;
+  }
+  if (
+    o.type === "diff" ||
+    (typeof o.path === "string" &&
+      (typeof o.newText === "string" || typeof o.oldText === "string"))
+  ) {
+    return formatDiffResult(o);
+  }
+  if (o.content != null && typeof o.content === "object") {
+    return textFromUnknown(o.content, depth + 1);
+  }
+  return null;
+}
+
 /** 把 result / progress 收成可读纯文本 */
 export function formatResultText(result: unknown): string | null {
+  const extracted = textFromUnknown(result);
+  if (extracted != null) return extracted;
   if (result === undefined || result === null) return null;
-  if (typeof result === "string") return result;
-  if (typeof result === "number" || typeof result === "boolean") {
-    return String(result);
-  }
-  if (Array.isArray(result)) {
-    // ACP content blocks: [{ type: "text", text: "..." }, ...]
-    const texts = result
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (item && typeof item === "object") {
-          const o = item as Record<string, unknown>;
-          if (typeof o.text === "string") return o.text;
-          if (typeof o.content === "string") return o.content;
-        }
-        return null;
-      })
-      .filter((t): t is string => Boolean(t));
-    if (texts.length > 0) return texts.join("\n");
-  }
   if (typeof result === "object") {
-    const o = result as Record<string, unknown>;
-    if (typeof o.text === "string") return o.text;
-    if (typeof o.content === "string") return o.content;
-    if (typeof o.output === "string") return o.output;
-    if (typeof o.stdout === "string") {
-      const err =
-        typeof o.stderr === "string" && o.stderr.trim()
-          ? `\n${o.stderr}`
-          : "";
-      return `${o.stdout}${err}`;
-    }
     try {
       return JSON.stringify(result, null, 2);
     } catch {
@@ -401,6 +510,51 @@ export function truncateText(text: string, maxChars = 4000): {
 } {
   if (text.length <= maxChars) return { text, truncated: false };
   return { text: `${text.slice(0, maxChars)}\n…`, truncated: true };
+}
+
+export function detectToolCodeLanguage(
+  text: string,
+  opts?: { kind?: ToolViewKind; path?: string },
+): string {
+  if (opts?.kind === "shell") return "bash";
+
+  const path = opts?.path?.trim();
+  if (path) {
+    const base = fileBasename(path);
+    const dot = base.lastIndexOf(".");
+    if (dot > 0 && dot < base.length - 1) {
+      return resolveShikiLang(base.slice(dot + 1));
+    }
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) return "text";
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return "json";
+  return "text";
+}
+
+export function prettifyToolCodeText(
+  text: string,
+  language?: string,
+  opts?: { kind?: ToolViewKind; path?: string },
+): { text: string; language: string } {
+  const resolved =
+    language?.trim() ||
+    detectToolCodeLanguage(text, { kind: opts?.kind, path: opts?.path });
+
+  if (resolved !== "json") {
+    return { text, language: resolved };
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) return { text: "", language: "json" };
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return { text: JSON.stringify(parsed, null, 2), language: "json" };
+  } catch {
+    return { text: trimmed, language: "json" };
+  }
 }
 
 /** generic 视图用的 KV（跳过超大 content 字段） */

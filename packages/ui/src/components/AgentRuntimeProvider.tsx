@@ -26,6 +26,7 @@ import {
   tabsActions,
   useApprovalPrefsStore,
   useHost,
+  warmupAisdkSession,
   type AuthChallenge,
   type RuntimeSessionConfig,
 } from "@qenex/core";
@@ -38,6 +39,8 @@ import { KeyRound, Loader2 } from "lucide-react";
 type AgentRuntimeProviderProps = {
   session: RuntimeSessionConfig;
   children: React.ReactNode;
+  /** Visible tab only. Inactive keepalive slots stay mounted but skip poll/warmup. */
+  isActive?: boolean;
 };
 
 const PENDING_ADAPTER: ChatModelAdapter = {
@@ -75,15 +78,23 @@ function messageTextLength(message: UIMessage | undefined): number {
   );
 }
 
+/** Only refetch persisted history when the finished stream looks empty/broken. */
+function shouldReconcileCompletedStream(message: UIMessage): boolean {
+  if (message.role !== "assistant") return true;
+  return messageTextLength(message) === 0;
+}
+
 function AisdkRuntimeInner({
   session,
   sessionId,
   initialMessages,
+  isActive,
   children,
 }: {
   session: RuntimeSessionConfig;
   sessionId: string;
   initialMessages: UIMessage[];
+  isActive: boolean;
   children: ReactNode;
 }) {
   const host = useHost();
@@ -120,6 +131,7 @@ function AisdkRuntimeInner({
     throttle: 32,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
       if (isAbort || isDisconnect || isError) return;
+      if (!shouldReconcileCompletedStream(message)) return;
       const finishedMessageId = message.id;
       void listAisdkSessionMessages(sessionId, host)
         .then((persisted) => {
@@ -193,7 +205,7 @@ function AisdkRuntimeInner({
   return (
     <ChatHelpersProvider chat={chat}>
       <AssistantRuntimeProvider runtime={runtime}>
-        <ApprovalPollBridge sessionId={sessionId} />
+        <ApprovalPollBridge sessionId={sessionId} isActive={isActive} />
         {children}
       </AssistantRuntimeProvider>
     </ChatHelpersProvider>
@@ -202,9 +214,11 @@ function AisdkRuntimeInner({
 
 function SessionBootstrap({
   session,
+  isActive,
   children,
 }: {
   session: RuntimeSessionConfig;
+  isActive: boolean;
   children: ReactNode;
 }) {
   const host = useHost();
@@ -223,6 +237,8 @@ function SessionBootstrap({
     resolve: () => void;
     reject: (error: Error) => void;
   } | null>(null);
+  const bootedSessionIdRef = useRef<string | null>(null);
+  const pendingWarmupSessionIdRef = useRef<string | null>(null);
 
   const settleRetry = (error?: Error) => {
     const waiter = retryWaiterRef.current;
@@ -235,40 +251,27 @@ function SessionBootstrap({
   useEffect(() => {
     let cancelled = false;
 
+    if (retryNonce > 0) {
+      bootedSessionIdRef.current = null;
+      pendingWarmupSessionIdRef.current = null;
+      invalidateSessionBoot(session.tabId, session.cwd, session.agentId);
+    }
+
+    // bindBridgeSession updates threadId; don't re-bootstrap / GET messages.
+    if (
+      retryNonce === 0 &&
+      isAisdkSessionId(session.threadId) &&
+      bootedSessionIdRef.current === session.threadId
+    ) {
+      return;
+    }
+
     setBoot(null);
     setError(null);
     tabsActions.setAgentLoading(session.tabId, true);
 
-        // Retry must force a fresh POST /api/sessions.
-    if (retryNonce > 0) {
-      invalidateSessionBoot(session.tabId, session.cwd, session.agentId);
-    }
-
     void (async () => {
       try {
-        // #region agent log
-        fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "ef4db2",
-          },
-          body: JSON.stringify({
-            sessionId: "ef4db2",
-            runId: "pre-fix",
-            hypothesisId: "B",
-            location: "AgentRuntimeProvider.tsx:boot",
-            message: "session-boot-start",
-            data: {
-              tabId: session.tabId,
-              agentId: session.agentId,
-              retryNonce,
-              threadId: session.threadId,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         // Soft reload: reuse Bridge session still in SQLite / memory.
         if (retryNonce === 0 && isAisdkSessionId(session.threadId)) {
           const existing = await getAisdkSession(session.threadId, host);
@@ -292,6 +295,8 @@ function SessionBootstrap({
             if (messages.length > 0) {
               tabsActions.markTabHasChatContent(session.tabId);
             }
+            bootedSessionIdRef.current = existing.sessionId;
+            pendingWarmupSessionIdRef.current = existing.sessionId;
             setAuthChallenge(null);
             setAuthOpen(false);
             setBoot({ sessionId: existing.sessionId, messages });
@@ -307,86 +312,27 @@ function SessionBootstrap({
         });
         if (cancelled) return;
 
-        let messages: UIMessage[] = [];
-        try {
-          messages = (await listAisdkSessionMessages(
-            info.sessionId,
-            host,
-          )) as UIMessage[];
-        } catch (err) {
-          console.warn("Failed to load session history:", err);
-        }
-        if (cancelled) return;
-
         tabsActions.bindBridgeSession(
           session.tabId,
           info.sessionId,
           info.title,
         );
-        if (messages.length > 0) {
-          tabsActions.markTabHasChatContent(session.tabId);
-        }
+        bootedSessionIdRef.current = info.sessionId;
         setAuthChallenge(null);
         setAuthOpen(false);
-        setBoot({ sessionId: info.sessionId, messages });
+        setBoot({ sessionId: info.sessionId, messages: [] });
         settleRetry();
       } catch (err) {
         if (cancelled) return;
         tabsActions.setAgentLoading(session.tabId, false);
         if (isAuthRequiredError(err)) {
           const agent = getAgentPreset(session.agentId);
-          // #region agent log
-          fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "ef4db2",
-            },
-            body: JSON.stringify({
-              sessionId: "ef4db2",
-              runId: "pre-fix",
-              hypothesisId: "A",
-              location: "AgentRuntimeProvider.tsx:boot",
-              message: "session-boot-auth-required",
-              data: {
-                tabId: session.tabId,
-                agentId: session.agentId,
-                retryNonce,
-                cancelled,
-              },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
           setAuthChallenge(authChallengeFromError(err, agent.name));
           setAuthOpen(true);
           setError(null);
           settleRetry(new Error("仍需登录：请在浏览器完成授权后再试"));
           return;
         }
-        // #region agent log
-        fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "ef4db2",
-          },
-          body: JSON.stringify({
-            sessionId: "ef4db2",
-            runId: "pre-fix",
-            hypothesisId: "C",
-            location: "AgentRuntimeProvider.tsx:boot",
-            message: "session-boot-other-error",
-            data: {
-              tabId: session.tabId,
-              agentId: session.agentId,
-              retryNonce,
-              error: formatBridgeError(err).slice(0, 400),
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         setAuthChallenge(null);
         setError(formatBridgeError(err));
         settleRetry(
@@ -407,6 +353,16 @@ function SessionBootstrap({
     session.agentCommand,
     retryNonce,
   ]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const sessionId = pendingWarmupSessionIdRef.current;
+    if (!sessionId || boot?.sessionId !== sessionId) return;
+    pendingWarmupSessionIdRef.current = null;
+    void warmupAisdkSession(sessionId, host).catch((error) => {
+      console.warn("Failed to warmup Bridge session:", error);
+    });
+  }, [isActive, boot, host]);
 
   useEffect(() => {
     if (boot || error || authChallenge) {
@@ -544,6 +500,7 @@ function SessionBootstrap({
       session={session}
       sessionId={boot.sessionId}
       initialMessages={boot.messages}
+      isActive={isActive}
     >
       {children}
     </AisdkRuntimeInner>
@@ -558,6 +515,7 @@ function SessionBootstrap({
 export function AgentRuntimeProvider({
   session,
   children,
+  isActive = true,
 }: AgentRuntimeProviderProps) {
   return (
     <SessionConfigProvider
@@ -568,7 +526,9 @@ export function AgentRuntimeProvider({
       agentCommand={session.agentCommand}
       agentSessionId={session.agentSessionId}
     >
-      <SessionBootstrap session={session}>{children}</SessionBootstrap>
+      <SessionBootstrap session={session} isActive={isActive}>
+        {children}
+      </SessionBootstrap>
     </SessionConfigProvider>
   );
 }

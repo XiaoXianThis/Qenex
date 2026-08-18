@@ -16,6 +16,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@qenex/core";
+import { mermaidChromeClassName } from "@/components/assistant-ui/code-block-fallback";
 
 export type MermaidDiagramProps = SyntaxHighlighterProps & {
   className?: string;
@@ -23,10 +24,6 @@ export type MermaidDiagramProps = SyntaxHighlighterProps & {
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 4;
-
-/** 与 Shiki 代码块下半截对齐：同边框、圆角、底色 */
-const mermaidChromeClassName =
-  "aui-mermaid-diagram border-border/50 bg-muted/30 flex min-h-32 items-center justify-center gap-3 overflow-x-auto rounded-t-none rounded-b-xl border border-t-0 p-3.5";
 
 type MermaidZoomProps = {
   svg: string;

@@ -5,19 +5,78 @@ import "@assistant-ui/react-markdown/styles/dot.css";
 import {
   type CodeHeaderProps,
   MarkdownTextPrimitive,
+  type SyntaxHighlighterProps as AUIProps,
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
-import { useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState } from "@assistant-ui/react";
 import remarkGfm from "remark-gfm";
-import { type FC, type HTMLAttributes, memo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  type FC,
+  type HTMLAttributes,
+  memo,
+  useState,
+} from "react";
+
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { SyntaxHighlighter } from "@/components/assistant-ui/shiki-highlighter";
-import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
+import {
+  MermaidSkeleton,
+  ShikiPlainFallback,
+} from "@/components/assistant-ui/code-block-fallback";
 import { useChatHelpers } from "@/components/ChatHelpersContext";
 import { cn } from "@qenex/core";
+
+const LazySyntaxHighlighter = lazy(() =>
+  import("@/components/assistant-ui/shiki-highlighter").then((mod) => ({
+    default: mod.SyntaxHighlighter,
+  })),
+);
+
+const LazyMermaidDiagram = lazy(() =>
+  import("@/components/assistant-ui/mermaid-diagram").then((mod) => ({
+    default: mod.MermaidDiagram,
+  })),
+);
+
+const SyntaxHighlighter: FC<AUIProps> = (props) => {
+  const aui = useAui();
+  const hasPart = aui.part.source !== null;
+  const isStreaming = useAuiState(
+    (s) => hasPart && s.part.status.type === "running",
+  );
+  const fallback = (
+    <ShikiPlainFallback code={props.code.trim()} streaming={isStreaming} />
+  );
+  if (isStreaming) return fallback;
+  return (
+    <Suspense fallback={fallback}>
+      <LazySyntaxHighlighter {...props} />
+    </Suspense>
+  );
+};
+
+SyntaxHighlighter.displayName = "SyntaxHighlighter";
+
+const MermaidDiagram: FC<AUIProps> = (props) => {
+  const aui = useAui();
+  const hasPart = aui.part.source !== null;
+  const isComplete = useAuiState(
+    (s) => !hasPart || s.part.status.type !== "running",
+  );
+  const fallback = <MermaidSkeleton />;
+  if (!isComplete) return fallback;
+  return (
+    <Suspense fallback={fallback}>
+      <LazyMermaidDiagram {...props} />
+    </Suspense>
+  );
+};
+
+MermaidDiagram.displayName = "MermaidDiagram";
 
 const MarkdownTextImpl = () => {
   // useSmooth can stall mid-reveal after the chat stream ends (text part left as
@@ -235,7 +294,7 @@ const defaultComponents = memoizeMarkdownComponents({
   th: ({ className, ...props }) => (
     <th
       className={cn(
-        "aui-md-th bg-muted px-3 py-1.5 text-start font-medium first:rounded-ss-lg last:rounded-se-lg [[align=center]]:text-center [[align=right]]:text-right",
+        "aui-md-th border-muted-foreground/20 border-s border-t border-b bg-muted px-3 py-1.5 text-start font-medium first:rounded-ss-lg last:rounded-se-lg last:border-e [[align=center]]:text-center [[align=right]]:text-right",
         className,
       )}
       {...props}

@@ -50,6 +50,63 @@ function parseResumeBehavior(raw: string | null | undefined): ResumeBehavior {
   return "native-load";
 }
 
+export type GetMessagesOptions = {
+  /** Latest N messages (still returned in sort_index ASC). */
+  limit?: number;
+  /** Exclusive upper bound: only rows before this message id. Requires limit. */
+  before?: string;
+};
+
+type MessageQueryRow = {
+  message_id: string;
+  role: string;
+  parts_json: string;
+  metadata_json: string | null;
+};
+
+function mapMessageRow(row: MessageQueryRow): UIMessage {
+  let parts: UIMessage["parts"] = [];
+  try {
+    parts = JSON.parse(row.parts_json) as UIMessage["parts"];
+  } catch {
+    parts = [{ type: "text", text: "" }];
+  }
+  let metadata: UIMessage["metadata"];
+  if (row.metadata_json) {
+    try {
+      metadata = JSON.parse(row.metadata_json) as UIMessage["metadata"];
+    } catch {
+      metadata = undefined;
+    }
+  }
+  return {
+    id: row.message_id,
+    role: row.role as UIMessage["role"],
+    parts,
+    ...(metadata !== undefined ? { metadata } : {}),
+  };
+}
+
+function dedupeMessagesKeepLast(messages: UIMessage[]): UIMessage[] {
+  const deduped: UIMessage[] = [];
+  const indexById = new Map<string, number>();
+  for (const message of messages) {
+    const id =
+      typeof message.id === "string" && message.id.length > 0
+        ? message.id
+        : `msg_${deduped.length}`;
+    const normalized = message.id === id ? message : { ...message, id };
+    const existing = indexById.get(id);
+    if (existing != null) {
+      deduped[existing] = normalized;
+    } else {
+      indexById.set(id, deduped.length);
+      deduped.push(normalized);
+    }
+  }
+  return deduped;
+}
+
 function mapSessionRow(row: SessionQueryRow): PersistedSessionRow {
   return {
     sessionId: row.session_id,
@@ -301,43 +358,72 @@ export class SessionDb {
       .run(new Date().toISOString(), sessionId);
   }
 
+  /**
+   * Make the stored row set match `messages` (keep-last id dedupe).
+   * Unchanged rows are not rewritten; missing ids are deleted; new/changed
+   * rows are upserted.
+   */
   replaceMessages(sessionId: string, messages: UIMessage[]): void {
     const now = new Date().toISOString();
-    // AI SDK onEnd can include continued assistant rows that share an id with
-    // an earlier entry — keep the last occurrence per message id.
-    const deduped: UIMessage[] = [];
-    const indexById = new Map<string, number>();
-    for (const message of messages) {
-      const id =
-        typeof message.id === "string" && message.id.length > 0
-          ? message.id
-          : `msg_${deduped.length}`;
-      const normalized = message.id === id ? message : { ...message, id };
-      const existing = indexById.get(id);
-      if (existing != null) {
-        deduped[existing] = normalized;
-      } else {
-        indexById.set(id, deduped.length);
-        deduped.push(normalized);
-      }
-    }
+    const deduped = dedupeMessagesKeepLast(messages);
 
     const tx = this.#db.transaction(() => {
-      this.#db
-        .query(`DELETE FROM messages WHERE session_id = ?`)
-        .run(sessionId);
-      const insert = this.#db.query(
+      const existing = this.#db
+        .query(
+          `SELECT message_id, role, parts_json, metadata_json, sort_index
+           FROM messages WHERE session_id = ?`,
+        )
+        .all(sessionId) as Array<{
+        message_id: string;
+        role: string;
+        parts_json: string;
+        metadata_json: string | null;
+        sort_index: number;
+      }>;
+      const existingById = new Map(
+        existing.map((row) => [row.message_id, row]),
+      );
+      const keepIds = new Set(deduped.map((message) => message.id));
+
+      const del = this.#db.query(
+        `DELETE FROM messages WHERE session_id = ? AND message_id = ?`,
+      );
+      for (const row of existing) {
+        if (!keepIds.has(row.message_id)) {
+          del.run(sessionId, row.message_id);
+        }
+      }
+
+      const upsert = this.#db.query(
         `INSERT INTO messages (
           session_id, message_id, role, parts_json, metadata_json, sort_index, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id, message_id) DO UPDATE SET
+          role = excluded.role,
+          parts_json = excluded.parts_json,
+          metadata_json = excluded.metadata_json,
+          sort_index = excluded.sort_index`,
       );
       deduped.forEach((message, index) => {
-        insert.run(
+        const partsJson = JSON.stringify(message.parts ?? []);
+        const metadataJson =
+          message.metadata != null ? JSON.stringify(message.metadata) : null;
+        const prev = existingById.get(message.id);
+        if (
+          prev &&
+          prev.role === message.role &&
+          prev.parts_json === partsJson &&
+          (prev.metadata_json ?? null) === metadataJson &&
+          prev.sort_index === index
+        ) {
+          return;
+        }
+        upsert.run(
           sessionId,
           message.id,
           message.role,
-          JSON.stringify(message.parts ?? []),
-          message.metadata != null ? JSON.stringify(message.metadata) : null,
+          partsJson,
+          metadataJson,
           index,
           now,
         );
@@ -349,43 +435,54 @@ export class SessionDb {
     tx();
   }
 
-  getMessages(sessionId: string): UIMessage[] {
-    const rows = this.#db
-      .query(
-        `SELECT message_id, role, parts_json, metadata_json
-         FROM messages
-         WHERE session_id = ?
-         ORDER BY sort_index ASC`,
-      )
-      .all(sessionId) as Array<{
-      message_id: string;
-      role: string;
-      parts_json: string;
-      metadata_json: string | null;
-    }>;
+  getMessages(
+    sessionId: string,
+    options?: GetMessagesOptions,
+  ): UIMessage[] {
+    const limit = options?.limit;
+    const before = options?.before?.trim() || undefined;
 
-    return rows.map((row) => {
-      let parts: UIMessage["parts"] = [];
-      try {
-        parts = JSON.parse(row.parts_json) as UIMessage["parts"];
-      } catch {
-        parts = [{ type: "text", text: "" }];
-      }
-      let metadata: UIMessage["metadata"];
-      if (row.metadata_json) {
-        try {
-          metadata = JSON.parse(row.metadata_json) as UIMessage["metadata"];
-        } catch {
-          metadata = undefined;
-        }
-      }
-      return {
-        id: row.message_id,
-        role: row.role as UIMessage["role"],
-        parts,
-        ...(metadata !== undefined ? { metadata } : {}),
-      };
-    });
+    if (limit == null) {
+      const rows = this.#db
+        .query(
+          `SELECT message_id, role, parts_json, metadata_json
+           FROM messages
+           WHERE session_id = ?
+           ORDER BY sort_index ASC`,
+        )
+        .all(sessionId) as MessageQueryRow[];
+      return rows.map(mapMessageRow);
+    }
+
+    const rows = (
+      before
+        ? (this.#db
+            .query(
+              `SELECT message_id, role, parts_json, metadata_json
+               FROM messages
+               WHERE session_id = ?
+                 AND sort_index < COALESCE(
+                   (SELECT sort_index FROM messages
+                    WHERE session_id = ? AND message_id = ?),
+                   -1
+                 )
+               ORDER BY sort_index DESC
+               LIMIT ?`,
+            )
+            .all(sessionId, sessionId, before, limit) as MessageQueryRow[])
+        : (this.#db
+            .query(
+              `SELECT message_id, role, parts_json, metadata_json
+               FROM messages
+               WHERE session_id = ?
+               ORDER BY sort_index DESC
+               LIMIT ?`,
+            )
+            .all(sessionId, limit) as MessageQueryRow[])
+    );
+
+    rows.reverse();
+    return rows.map(mapMessageRow);
   }
 
   countMessages(sessionId: string): number {

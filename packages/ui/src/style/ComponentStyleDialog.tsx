@@ -1,9 +1,5 @@
 "use client";
 
-import { css } from "@codemirror/lang-css";
-import type { Extension } from "@codemirror/state";
-import { color } from "@uiw/codemirror-extensions-color";
-import CodeMirror from "@uiw/react-codemirror";
 import {
   activeStyleComponentTarget,
   extractComponentCss,
@@ -26,9 +22,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@qenex/core";
-import { useEffect, useState, type FC } from "react";
+import { lazy, Suspense, useEffect, useState, type FC } from "react";
 
-const STYLE_EDITOR_EXTENSIONS: Extension[] = [css(), color];
+const CssEditor = lazy(() =>
+  import("@/style/css-code-editor").then((mod) => ({ default: mod.CssEditor })),
+);
 
 export const ComponentStyleDialog: FC = () => {
   const session = useStyleStore((s) => s.componentStyleEdit);
@@ -130,22 +128,28 @@ export const ComponentStyleDialog: FC = () => {
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
-          <div className="overflow-hidden rounded-md border border-border">
-            <CodeMirror
-              value={draft}
-              height="360px"
-              theme={editorTheme}
-              extensions={STYLE_EDITOR_EXTENSIONS}
-              basicSetup={{
-                lineNumbers: true,
-                foldGutter: false,
-                highlightActiveLine: true,
-                highlightActiveLineGutter: true,
-              }}
-              className="text-[13px] [&_.cm-scroller]:overflow-auto"
-              onChange={setDraft}
+          {open ? (
+            <Suspense
+              fallback={
+                <div
+                  className="overflow-hidden rounded-md border border-border"
+                  style={{ height: 360 }}
+                />
+              }
+            >
+              <CssEditor
+                value={draft}
+                height="360px"
+                theme={editorTheme}
+                onChange={setDraft}
+              />
+            </Suspense>
+          ) : (
+            <div
+              className="overflow-hidden rounded-md border border-border"
+              style={{ height: 360 }}
             />
-          </div>
+          )}
         </div>
 
         <DialogFooter className="shrink-0 border-t border-border px-5 py-3 sm:justify-end">

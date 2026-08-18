@@ -6,6 +6,27 @@ import svgr from "vite-plugin-svgr";
 
 const host = process.env.TAURI_DEV_HOST;
 
+function vendorManualChunks(id: string): string | undefined {
+  if (!id.includes("node_modules")) return;
+  if (
+    id.includes("@codemirror") ||
+    id.includes("@uiw/codemirror") ||
+    id.includes("@uiw/react-codemirror")
+  ) {
+    return "codemirror";
+  }
+  if (id.includes("beautiful-mermaid")) return "mermaid";
+  if (id.includes("@shikijs/langs")) return;
+  if (
+    id.includes("react-shiki") ||
+    id.includes("@shikijs/") ||
+    id.includes("shiki/wasm") ||
+    /[/\\]shiki[/\\]/.test(id)
+  ) {
+    return "shiki";
+  }
+}
+
 export default defineConfig({
   base: "./",
   plugins: [
@@ -49,5 +70,10 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: vendorManualChunks,
+      },
+    },
   },
 });

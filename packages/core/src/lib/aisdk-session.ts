@@ -547,6 +547,44 @@ export async function getAisdkSessionConfig(
   return toAisdkSessionConfig(json as AisdkSessionConfigResponse);
 }
 
+/**
+ * Fire-and-forget process warmup: GET /config triggers Bridge ensureOpen
+ * without changing user data. Does not persist messages or config.
+ */
+export async function warmupAisdkSession(
+  sessionId: string,
+  host: QenexHost = getBridgeHost(),
+): Promise<void> {
+  await getAisdkSessionConfig(sessionId, host);
+}
+
+/**
+ * Park the ACP process for an archived session. 404 is ignored (already gone).
+ * Does not delete SQLite history.
+ */
+export async function hibernateAisdkSession(
+  sessionId: string,
+  host: QenexHost = getBridgeHost(),
+): Promise<void> {
+  const url = await bridgeUrl(
+    host,
+    `/api/sessions/${encodeURIComponent(sessionId)}/hibernate`,
+  );
+  const res = await hostFetch(host, url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (res.status === 404) {
+    await res.arrayBuffer().catch(() => undefined);
+    return;
+  }
+  const json = await readBridgeJson(res);
+  if (!res.ok) {
+    throwBridgeError(res, json, `hibernateSession failed (${res.status})`);
+  }
+}
+
 export async function setAisdkSessionMode(
   sessionId: string,
   modeId: string,

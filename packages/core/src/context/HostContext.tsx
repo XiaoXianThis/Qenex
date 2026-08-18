@@ -79,6 +79,38 @@ function syncPreferredAgentAfterHydrate() {
   }
 }
 
+type DiscoveredAgentRow = {
+  id: string;
+  name: string;
+  readiness: string;
+};
+
+/**
+ * Post-theme hydrate: agents first (tabs depend on them), then tabs/layout/prefs.
+ * Registry discover runs in the background and must not delay `onReady`.
+ */
+export async function hydrateHostAppState(input: {
+  hydrateAgents: () => Promise<void>;
+  discoverAgents: () => Promise<{ agents: DiscoveredAgentRow[] }>;
+  mergeDetectedAgents: (agents: DiscoveredAgentRow[]) => void;
+  hydrateParallelStores: () => Promise<void>;
+  afterStoresHydrated?: () => void;
+  ensureInitialTab: () => Promise<void>;
+}): Promise<void> {
+  await input.hydrateAgents();
+  void input
+    .discoverAgents()
+    .then((discovered) => {
+      input.mergeDetectedAgents(discovered.agents);
+    })
+    .catch(() => {
+      // Bridge may be starting; ignore discover failures at hydrate time.
+    });
+  await input.hydrateParallelStores();
+  input.afterStoresHydrated?.();
+  await input.ensureInitialTab();
+}
+
 export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
   const [hydrated, setHydrated] = useState(false);
 
@@ -118,34 +150,37 @@ export function QenexHostProvider({ host, children }: QenexHostProviderProps) {
           applyPersistedDocumentTheme();
         }
 
-        // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确
-        await hydrateAgentsStore();
-        // Best-effort: merge PATH/vendor-ready agents into presets.
-        try {
-          const discovered = await discoverLocalAgents(false);
-          agentsActions.mergeDetectedAgents(discovered.agents);
-        } catch {
-          // Bridge may be starting; ignore discover failures at hydrate time.
-        }
-        await Promise.all([
-          hydrateTabsStore(),
-          hydrateLayoutStore(),
-          hydrateModelThoughtPrefsStore(),
-          hydrateModelConfigCacheStore(),
-          hydrateApprovalPrefsStore(),
-          hydrateUiPrefsStore(),
-        ]);
-        syncPreferredAgentAfterHydrate();
-
-        stopAgentsPersist = startAgentsPersist();
-        stopTabsPersist = startTabsPersist();
-        stopLayoutPersist = startLayoutPersist();
-        stopStylePersist = startStylePersist();
-        stopModelThoughtPrefsPersist = startModelThoughtPrefsPersist();
-        stopModelConfigCachePersist = startModelConfigCachePersist();
-        stopApprovalPrefsPersist = startApprovalPrefsPersist();
-        stopUiPrefsPersist = startUiPrefsPersist();
-        await tabsActions.ensureInitialTab();
+        // agents 需先于 tabs，以便 createTab / preferredAgent 解析正确。
+        // discover 与 tabs/prefs 并行，不挡住 setHydrated。
+        await hydrateHostAppState({
+          hydrateAgents: hydrateAgentsStore,
+          discoverAgents: () => discoverLocalAgents(false),
+          mergeDetectedAgents: (agents) => {
+            agentsActions.mergeDetectedAgents(agents);
+          },
+          hydrateParallelStores: async () => {
+            await Promise.all([
+              hydrateTabsStore(),
+              hydrateLayoutStore(),
+              hydrateModelThoughtPrefsStore(),
+              hydrateModelConfigCacheStore(),
+              hydrateApprovalPrefsStore(),
+              hydrateUiPrefsStore(),
+            ]);
+          },
+          afterStoresHydrated: () => {
+            syncPreferredAgentAfterHydrate();
+            stopAgentsPersist = startAgentsPersist();
+            stopTabsPersist = startTabsPersist();
+            stopLayoutPersist = startLayoutPersist();
+            stopStylePersist = startStylePersist();
+            stopModelThoughtPrefsPersist = startModelThoughtPrefsPersist();
+            stopModelConfigCachePersist = startModelConfigCachePersist();
+            stopApprovalPrefsPersist = startApprovalPrefsPersist();
+            stopUiPrefsPersist = startUiPrefsPersist();
+          },
+          ensureInitialTab: () => tabsActions.ensureInitialTab(),
+        });
       } catch (error) {
         console.error("[qenex] host hydrate failed:", error);
       } finally {

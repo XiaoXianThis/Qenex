@@ -1,8 +1,5 @@
 "use client";
 
-import { json } from "@codemirror/lang-json";
-import type { Extension } from "@codemirror/state";
-import CodeMirror from "@uiw/react-codemirror";
 import { AgentIcon } from "@/components/AgentIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,6 +47,8 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -58,7 +57,11 @@ import {
   type FC,
 } from "react";
 
-const JSON_EDITOR_EXTENSIONS: Extension[] = [json()];
+const JsonCodeEditor = lazy(() =>
+  import("@/components/json-code-editor").then((mod) => ({
+    default: mod.JsonCodeEditor,
+  })),
+);
 
 export type AgentSettingsDialogProps = {
   open: boolean;
@@ -1084,22 +1087,23 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                     )}
                   </div>
                   <div className="min-h-0 flex-1 overflow-auto p-3">
-                    <div className="overflow-hidden rounded-md border border-border">
-                      <CodeMirror
-                        value={draftText}
-                        height="360px"
-                        theme={editorTheme}
-                        extensions={JSON_EDITOR_EXTENSIONS}
-                        basicSetup={{
-                          lineNumbers: true,
-                          foldGutter: true,
-                          highlightActiveLine: true,
-                          highlightActiveLineGutter: true,
-                        }}
-                        className="text-[13px] [&_.cm-scroller]:overflow-auto"
-                        onChange={setDraftText}
-                      />
-                    </div>
+                    {open ? (
+                      <Suspense
+                        fallback={
+                          <div
+                            className="overflow-hidden rounded-md border border-border"
+                            style={{ height: 360 }}
+                          />
+                        }
+                      >
+                        <JsonCodeEditor
+                          value={draftText}
+                          height="360px"
+                          theme={editorTheme}
+                          onChange={setDraftText}
+                        />
+                      </Suspense>
+                    ) : null}
                   </div>
                   {!validation.ok ? (
                     <p className="border-t border-border px-4 py-2 text-xs text-destructive">

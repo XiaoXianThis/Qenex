@@ -23,6 +23,17 @@ export type ListFilesResult = {
   path: string;
 };
 
+const SKIP_ENTRY_NAMES = new Set([
+  ".DS_Store",
+  "node_modules",
+  ".git",
+  "dist",
+  ".next",
+  ".turbo",
+]);
+
+const DIR_LIST_LIMIT = 200;
+
 function isWithin(root: string, path: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -94,7 +105,7 @@ export function listWorkspaceFiles(opts: {
   const items: WorkspaceFileItem[] = [];
 
   for (const entry of entries) {
-    if (entry.name === ".DS_Store") continue;
+    if (SKIP_ENTRY_NAMES.has(entry.name)) continue;
     const absolute = join(full, entry.name);
     let isDirectory = entry.isDirectory();
     let size: number | undefined;
@@ -118,6 +129,8 @@ export function listWorkspaceFiles(opts: {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
+
+  if (items.length > DIR_LIST_LIMIT) items.length = DIR_LIST_LIMIT;
 
   return { items, path: relPath };
 }

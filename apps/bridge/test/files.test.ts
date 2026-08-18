@@ -41,4 +41,31 @@ describe("M3 · workspace files", () => {
       listWorkspaceFiles({ base: join(workspace, "nope-missing"), path: "." }),
     ).toThrow(BridgeError);
   });
+
+  test("skips node_modules, .git, dist, .next, .turbo, and .DS_Store", () => {
+    const root = mkdtempSync(join(tmpdir(), "qenex-files-skip-"));
+    mkdirSync(join(root, "node_modules"));
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "dist"));
+    mkdirSync(join(root, ".next"));
+    mkdirSync(join(root, ".turbo"));
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, ".DS_Store"), "");
+    writeFileSync(join(root, "README.md"), "hi\n");
+    const names = listWorkspaceFiles({ base: root, path: "." }).items.map(
+      (i) => i.name,
+    );
+    expect(names).toEqual(["src", "README.md"]);
+  });
+
+  test("caps a single directory at 200 entries", () => {
+    const root = mkdtempSync(join(tmpdir(), "qenex-files-cap-"));
+    mkdirSync(join(root, "dir"));
+    for (let i = 0; i < 210; i++) {
+      writeFileSync(join(root, `f${String(i).padStart(3, "0")}.txt`), "x");
+    }
+    const result = listWorkspaceFiles({ base: root, path: "." });
+    expect(result.items).toHaveLength(200);
+    expect(result.items[0]?.isDirectory).toBe(true);
+  });
 });

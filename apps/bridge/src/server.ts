@@ -109,11 +109,48 @@ export function createBridgeHandler(store: SessionStore) {
       );
       if (messagesMatch && req.method === "GET") {
         const sessionId = decodeURIComponent(messagesMatch[1]!);
-        const messages = store.getMessages(sessionId);
+        const limitRaw = url.searchParams.get("limit");
+        const beforeRaw = url.searchParams.get("before");
+        let options: { limit?: number; before?: string } | undefined;
+        if (limitRaw != null && limitRaw !== "") {
+          const limit = Number(limitRaw);
+          if (!Number.isInteger(limit) || limit < 1) {
+            throw new BridgeError(
+              "invalid_limit",
+              "limit must be a positive integer",
+              400,
+            );
+          }
+          options = { limit };
+          const before = beforeRaw?.trim();
+          if (before) options.before = before;
+        }
+        const messages = store.getMessages(sessionId, options);
         return withCors(
           req,
           Response.json({ sessionId, messages }),
         );
+      }
+
+      const hibernateMatch = pathname.match(
+        /^\/api\/sessions\/([^/]+)\/hibernate$/,
+      );
+      if (hibernateMatch && req.method === "POST") {
+        const sessionId = decodeURIComponent(hibernateMatch[1]!);
+        const raw = await req.text();
+        if (raw.trim()) {
+          try {
+            JSON.parse(raw);
+          } catch {
+            throw new BridgeError(
+              "invalid_json",
+              "Request body must be JSON",
+              400,
+            );
+          }
+        }
+        const info = store.hibernate(sessionId);
+        return withCors(req, Response.json(info));
       }
 
       const configMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/config$/);

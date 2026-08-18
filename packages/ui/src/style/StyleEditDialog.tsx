@@ -1,9 +1,5 @@
 "use client";
 
-import { css } from "@codemirror/lang-css";
-import type { Extension } from "@codemirror/state";
-import { color } from "@uiw/codemirror-extensions-color";
-import CodeMirror from "@uiw/react-codemirror";
 import {
   selectActiveCustomCss,
   selectActiveThemeCss,
@@ -20,35 +16,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { FC } from "react";
+import { lazy, Suspense, type FC } from "react";
 
-/** 模块级稳定引用，避免编辑器因 extensions 重建而闪烁 */
-const STYLE_EDITOR_EXTENSIONS: Extension[] = [css(), color];
+const CssEditor = lazy(() =>
+  import("@/style/css-code-editor").then((mod) => ({ default: mod.CssEditor })),
+);
 
-type CssEditorProps = {
-  value: string;
-  theme: "light" | "dark";
-  height: string;
-  onChange: (value: string) => void;
-};
-
-const CssEditor: FC<CssEditorProps> = ({ value, theme, height, onChange }) => (
-  <div className="overflow-hidden rounded-md border border-border">
-    <CodeMirror
-      value={value}
-      height={height}
-      theme={theme}
-      extensions={STYLE_EDITOR_EXTENSIONS}
-      basicSetup={{
-        lineNumbers: true,
-        foldGutter: false,
-        highlightActiveLine: true,
-        highlightActiveLineGutter: true,
-      }}
-      className="text-[13px] [&_.cm-scroller]:overflow-auto"
-      onChange={onChange}
-    />
-  </div>
+const CssEditorFallback: FC<{ height: string }> = ({ height }) => (
+  <div
+    className="overflow-hidden rounded-md border border-border"
+    style={{ height }}
+  />
 );
 
 export const StyleEditDialog: FC = () => {
@@ -82,12 +60,18 @@ export const StyleEditDialog: FC = () => {
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
           <section className="flex flex-col gap-2">
             <div className="text-xs font-medium text-foreground">主题 CSS</div>
-            <CssEditor
-              value={themeCss}
-              theme={editorTheme}
-              height="220px"
-              onChange={(value) => styleActions.updateDraftThemeCss(value)}
-            />
+            {open ? (
+              <Suspense fallback={<CssEditorFallback height="220px" />}>
+                <CssEditor
+                  value={themeCss}
+                  theme={editorTheme}
+                  height="220px"
+                  onChange={(value) => styleActions.updateDraftThemeCss(value)}
+                />
+              </Suspense>
+            ) : (
+              <CssEditorFallback height="220px" />
+            )}
           </section>
 
           <section className="flex flex-col gap-2">
@@ -95,12 +79,18 @@ export const StyleEditDialog: FC = () => {
             <p className="text-[11px] leading-snug text-muted-foreground">
               切换亮/暗主题不会覆盖此处内容；声明会覆盖主题 CSS。
             </p>
-            <CssEditor
-              value={customCss}
-              theme={editorTheme}
-              height="220px"
-              onChange={(value) => styleActions.updateDraftCustomCss(value)}
-            />
+            {open ? (
+              <Suspense fallback={<CssEditorFallback height="220px" />}>
+                <CssEditor
+                  value={customCss}
+                  theme={editorTheme}
+                  height="220px"
+                  onChange={(value) => styleActions.updateDraftCustomCss(value)}
+                />
+              </Suspense>
+            ) : (
+              <CssEditorFallback height="220px" />
+            )}
           </section>
         </div>
 

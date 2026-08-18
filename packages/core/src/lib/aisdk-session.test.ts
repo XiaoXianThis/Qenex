@@ -349,6 +349,80 @@ describe("listAisdkSessionMessages", () => {
   });
 });
 
+describe("warmupAisdkSession", () => {
+  test("GETs /api/sessions/:id/config without mutating", async () => {
+    const { warmupAisdkSession } = await import("./aisdk-session.ts");
+    const calls: Array<{ url: string; method: string }> = [];
+    const host = mockHost(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET" });
+      expect(url).toContain("/api/sessions/ses_warm/config");
+      return new Response(
+        JSON.stringify({
+          sessionId: "ses_warm",
+          modes: [{ id: "build", name: "Build" }],
+          currentModeId: "build",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    await warmupAisdkSession("ses_warm", host);
+    expect(calls).toEqual([
+      { url: "http://bridge.test/api/sessions/ses_warm/config", method: "GET" },
+    ]);
+  });
+});
+
+describe("hibernateAisdkSession", () => {
+  test("POSTs /api/sessions/:id/hibernate", async () => {
+    const { hibernateAisdkSession } = await import("./aisdk-session.ts");
+    const calls: Array<{ url: string; method: string; body: string }> = [];
+    const host = mockHost(async (input, init) => {
+      const url = String(input);
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        body: String(init?.body ?? ""),
+      });
+      return new Response(JSON.stringify({ ok: true, sessionId: "ses_h" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await hibernateAisdkSession("ses_h", host);
+    expect(calls).toEqual([
+      {
+        url: "http://bridge.test/api/sessions/ses_h/hibernate",
+        method: "POST",
+        body: "{}",
+      },
+    ]);
+  });
+
+  test("404 is ignored", async () => {
+    const { hibernateAisdkSession } = await import("./aisdk-session.ts");
+    const host = mockHost(async () => new Response("gone", { status: 404 }));
+    await hibernateAisdkSession("ses_missing", host);
+  });
+
+  test("other errors throw", async () => {
+    const { hibernateAisdkSession, BridgeClientError } = await import(
+      "./aisdk-session.ts"
+    );
+    const host = mockHost(async () =>
+      new Response(
+        JSON.stringify({
+          error: { code: "internal_error", message: "boom" },
+        }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await expect(hibernateAisdkSession("ses_bad", host)).rejects.toBeInstanceOf(
+      BridgeClientError,
+    );
+  });
+});
+
 describe("session config REST helpers", () => {
   test("get / set mode / set model", async () => {
     const {
