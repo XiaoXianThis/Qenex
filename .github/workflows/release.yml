@@ -9,7 +9,7 @@ on:
       version:
         description: "Semver without v prefix (workflow_dispatch only; tags use tag name)"
         required: false
-        default: "0.3.0"
+        default: "0.3.4"
       publish:
         description: "Create/update GitHub Release (even without tag)"
         type: boolean
@@ -53,7 +53,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${{ inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version || '0.3.4' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build shared artifacts
@@ -124,7 +124,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${{ inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version || '0.3.4' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Desktop artifacts

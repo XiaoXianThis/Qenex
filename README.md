@@ -84,16 +84,16 @@ Agent 运行时适配见 [`docs/agent-compat.md`](./docs/agent-compat.md)。v0.3
 打 `v*` tag 触发 GitHub Actions，构建并上传到 **GitHub Release**（server / VS Code / JetBrains / Desktop）。完整说明见 [`RELEASE.md`](./RELEASE.md)。
 
 ```bash
-git tag v0.3.1
-git push origin v0.3.1
+git tag v0.3.4
+git push origin v0.3.4
 ```
 
 本地：
 
 ```bash
-bun run ci:release -- --platform darwin-arm64 --version 0.3.1
+bun run ci:release -- --platform darwin-arm64 --version 0.3.4
 # 或仅共享产物：
-bun run ci:release -- --platform linux-x64 --version 0.3.1 --products server,vscode,jetbrains
+bun run ci:release -- --platform linux-x64 --version 0.3.4 --products server,vscode,jetbrains
 ```
 
 ## 常用命令

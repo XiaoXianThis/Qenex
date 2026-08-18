@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-08-18 - v0.3.4 Session config axes, hibernation, set_mode fallback
+
+### Added
+
+- SessionConfigBar 按模型展示 thought / fast / context / thinking 轴；Cursor 笛卡尔变体在 Compat 里归一化后由 Bridge 持久化
+- 空闲会话休眠（hibernate）、历史分页与增量落库
+- Registry SWR 缓存；Agent spawn 环境变量白名单
+
+### Changed
+
+- 无 `set_config_option` 的 ACP Agent（如 pi-acp）把 thought/mode 配置改走 `set_mode`，不再因 JSON-RPC `-32601` 失败
+- 工具调用渲染：Shiki 代码块、布局/样式编辑器打磨；keepalive 预热
+
+### Fixed
+
+- `Method not found` 的 config_option 调用映射到 `set_mode`，避免会话卡在不支持的 RPC
+
+---
+
 ## 2026-08-14 - v0.3.3 Agent compat, session hardening, approval settings
 
 ### Added

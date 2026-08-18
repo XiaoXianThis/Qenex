@@ -1,6 +1,6 @@
 [package]
 name = "qenex-desktop"
-version = "0.3.3"
+version = "0.3.4"
 description = "Qenex Desktop"
 authors = ["Qenex"]
 edition = "2021"
