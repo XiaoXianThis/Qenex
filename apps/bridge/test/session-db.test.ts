@@ -219,6 +219,42 @@ describe("SessionDb", () => {
     db = new SessionDb(path);
   });
 
+  test("persists config_axes_json through reopen", () => {
+    const axes = {
+      contextOptions: {
+        configId: "context",
+        currentId: "272k",
+        available: [{ id: "272k", name: "272k" }],
+      },
+      modelConfigById: {
+        "gpt-5.5": {
+          thoughtLevels: {
+            configId: "reasoning",
+            currentId: "ultra",
+            available: [{ id: "ultra", name: "Ultra" }],
+          },
+        },
+      },
+    };
+    db.upsertSession({
+      sessionId: "ses_axes",
+      agent: "cursor-agent",
+      cwd: "/tmp/x",
+      createdAt: "2026-08-18T00:00:00.000Z",
+      configAxesJson: JSON.stringify(axes),
+    });
+    expect(JSON.parse(db.getSession("ses_axes")?.configAxesJson ?? "null")).toEqual(
+      axes,
+    );
+    db.close();
+    const again = new SessionDb(path);
+    expect(
+      JSON.parse(again.getSession("ses_axes")?.configAxesJson ?? "null"),
+    ).toEqual(axes);
+    again.close();
+    db = new SessionDb(path);
+  });
+
   test("migrates legacy sessions without thought columns", () => {
     const legacyPath = join(
       mkdtempSync(join(tmpdir(), "qenex-session-thought-")),

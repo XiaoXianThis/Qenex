@@ -3,7 +3,8 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 
 const PROGRAMMATIC_SCROLL_DURATION_MS = 180;
 const WEBKIT_WHEEL_STEP = 120;
-const MOUSE_WHEEL_DISTANCE_PX = 56;
+const MOUSE_WHEEL_DISTANCE_PX = 48;
+const TRACKPAD_DELTA_SCALE = 0.88;
 
 const canScrollInDirection = (
   element: HTMLElement,
@@ -84,7 +85,10 @@ class PreserveNestedScrollPlugin extends ScrollbarPlugin {
       }
     }
 
-    return delta;
+    return {
+      x: delta.x * TRACKPAD_DELTA_SCALE,
+      y: delta.y * TRACKPAD_DELTA_SCALE,
+    };
   }
 }
 
@@ -266,7 +270,7 @@ export const useSmoothScrollbar = (
     const scrollbar = SmoothScrollbar.init(viewport, {
       alwaysShowTracks: true,
       continuousScrolling: true,
-      damping: 0.12,
+      damping: 0.14,
       renderByPixels: false,
     });
     const syncViewportSize = () => {

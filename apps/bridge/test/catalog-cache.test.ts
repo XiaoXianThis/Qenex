@@ -3,6 +3,7 @@ import {
   AgentCatalogCache,
   catalogCacheKey,
   restoreProbedModel,
+  shouldSelfProbeCurrentModel,
   shouldSkipModelConfigProbe,
 } from "../src/session-store.ts";
 
@@ -107,7 +108,7 @@ describe("shouldSkipModelConfigProbe", () => {
     ).toBe(false);
   });
 
-  test("Codex-style advertised session thought does not switch models", () => {
+  test("Codex-style session-level thought skips probe without a per-model map", () => {
     expect(
       shouldSkipModelConfigProbe({
         configDiscovery: "advertised",
@@ -115,6 +116,32 @@ describe("shouldSkipModelConfigProbe", () => {
         requestedModelId: "gpt-5.6-terra",
         hasCachedSnapshot: false,
         liveHasThoughtOrFast: true,
+        hasPerModelAdvertisedMap: false,
+      }),
+    ).toBe(true);
+  });
+
+  test("per-model advertised map does not copy live thought to other models", () => {
+    expect(
+      shouldSkipModelConfigProbe({
+        configDiscovery: "advertised",
+        currentModelId: "gpt-5.6-sol",
+        requestedModelId: "gpt-5.6-terra",
+        hasCachedSnapshot: false,
+        liveHasThoughtOrFast: true,
+        hasPerModelAdvertisedMap: true,
+        hasAdvertisedModelSnapshot: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipModelConfigProbe({
+        configDiscovery: "advertised",
+        currentModelId: "gpt-5.6-sol",
+        requestedModelId: "gpt-5.6-terra",
+        hasCachedSnapshot: false,
+        liveHasThoughtOrFast: true,
+        hasPerModelAdvertisedMap: true,
+        hasAdvertisedModelSnapshot: true,
       }),
     ).toBe(true);
   });
@@ -150,5 +177,57 @@ describe("shouldSkipModelConfigProbe", () => {
         liveHasThoughtOrFast: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldSelfProbeCurrentModel", () => {
+  test("per-model-probe-fallback with empty thought probes the current model", () => {
+    expect(
+      shouldSelfProbeCurrentModel({
+        configDiscovery: "per-model-probe-fallback",
+        currentModelId: "opencode/laguna",
+        liveHasThoughtOrFast: false,
+      }),
+    ).toBe(true);
+  });
+
+  test("advertised with thought does not self-probe", () => {
+    expect(
+      shouldSelfProbeCurrentModel({
+        configDiscovery: "advertised",
+        currentModelId: "gpt-5.6-sol",
+        liveHasThoughtOrFast: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("advertised empty thought still does not self-probe", () => {
+    expect(
+      shouldSelfProbeCurrentModel({
+        configDiscovery: "advertised",
+        currentModelId: "m1",
+        liveHasThoughtOrFast: false,
+      }),
+    ).toBe(false);
+  });
+
+  test("skips when thought or fast already live", () => {
+    expect(
+      shouldSelfProbeCurrentModel({
+        configDiscovery: "per-model-probe-fallback",
+        currentModelId: "opencode/laguna",
+        liveHasThoughtOrFast: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("skips when there is no current model", () => {
+    expect(
+      shouldSelfProbeCurrentModel({
+        configDiscovery: "per-model-probe-fallback",
+        currentModelId: null,
+        liveHasThoughtOrFast: false,
+      }),
+    ).toBe(false);
   });
 });

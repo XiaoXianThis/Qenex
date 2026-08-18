@@ -3,7 +3,7 @@
  * AI SDK defaults onError to "An error occurred." — we override that for local Bridge.
  */
 import { resolveAgentCompat } from "./agent/compat/registry.ts";
-import { errorText } from "./agent/compat/types.ts";
+import { errorText, isGeminiConsumerOauthBlocked } from "./agent/compat/types.ts";
 
 const AGENT_LABELS: Record<string, string> = {
   opencode: "OpenCode",
@@ -50,6 +50,9 @@ export function formatChatStreamError(
     ? messageForClassifiedCode(classified.code, label)
     : null;
   if (fromCompat) return fromCompat;
+  if (isGeminiConsumerOauthBlocked(error)) {
+    return "Gemini CLI 的个人 Google 登录已停用。请改用 GEMINI_API_KEY，或迁移到 Antigravity CLI（https://antigravity.google）。";
+  }
 
   if (
     /insufficient\s*balance|余额不足|quota\s*exceeded|rate\s*limit|billing|payment.?required|credit/i.test(

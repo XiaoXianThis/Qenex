@@ -246,6 +246,29 @@ function SessionBootstrap({
 
     void (async () => {
       try {
+        // #region agent log
+        fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "ef4db2",
+          },
+          body: JSON.stringify({
+            sessionId: "ef4db2",
+            runId: "pre-fix",
+            hypothesisId: "B",
+            location: "AgentRuntimeProvider.tsx:boot",
+            message: "session-boot-start",
+            data: {
+              tabId: session.tabId,
+              agentId: session.agentId,
+              retryNonce,
+              threadId: session.threadId,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         // Soft reload: reuse Bridge session still in SQLite / memory.
         if (retryNonce === 0 && isAisdkSessionId(session.threadId)) {
           const existing = await getAisdkSession(session.threadId, host);
@@ -312,12 +335,58 @@ function SessionBootstrap({
         tabsActions.setAgentLoading(session.tabId, false);
         if (isAuthRequiredError(err)) {
           const agent = getAgentPreset(session.agentId);
+          // #region agent log
+          fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "ef4db2",
+            },
+            body: JSON.stringify({
+              sessionId: "ef4db2",
+              runId: "pre-fix",
+              hypothesisId: "A",
+              location: "AgentRuntimeProvider.tsx:boot",
+              message: "session-boot-auth-required",
+              data: {
+                tabId: session.tabId,
+                agentId: session.agentId,
+                retryNonce,
+                cancelled,
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
           setAuthChallenge(authChallengeFromError(err, agent.name));
           setAuthOpen(true);
           setError(null);
           settleRetry(new Error("仍需登录：请在浏览器完成授权后再试"));
           return;
         }
+        // #region agent log
+        fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "ef4db2",
+          },
+          body: JSON.stringify({
+            sessionId: "ef4db2",
+            runId: "pre-fix",
+            hypothesisId: "C",
+            location: "AgentRuntimeProvider.tsx:boot",
+            message: "session-boot-other-error",
+            data: {
+              tabId: session.tabId,
+              agentId: session.agentId,
+              retryNonce,
+              error: formatBridgeError(err).slice(0, 400),
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         setAuthChallenge(null);
         setError(formatBridgeError(err));
         settleRetry(

@@ -4,6 +4,7 @@
 import { createACPProvider } from "@mcpc-tech/acp-ai-provider";
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 import { BridgeError } from "../errors.ts";
+import { acpInitializeFromCompat } from "./compat/types.ts";
 import { resolveAgentCompat } from "./compat/registry.ts";
 import { resolveLaunchCommand } from "./detect.ts";
 
@@ -80,6 +81,7 @@ export function spawnAgentProvider(input: SpawnAgentInput): SpawnedAgent {
   });
   if (patch?.env) Object.assign(envExtra, patch.env);
 
+  const initialize = acpInitializeFromCompat(compat);
   const provider = createACPProvider({
     command,
     args: patch?.args ?? args,
@@ -88,6 +90,7 @@ export function spawnAgentProvider(input: SpawnAgentInput): SpawnedAgent {
       compat.resume === "native-load" ? input.existingSessionId : undefined,
     persistSession: input.persistSession ?? true,
     env: cleanEnv(envExtra),
+    ...(initialize ? { initialize } : {}),
   });
 
   return {

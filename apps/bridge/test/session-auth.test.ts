@@ -98,32 +98,29 @@ describe("initProviderSessionWithInteractiveAuth", () => {
     expect(result.provider).toBe(second);
   });
 
-  test("Gemini without loginArgv uses ACP authenticate", async () => {
+  test("Gemini without loginArgv does not call authenticate a second time", async () => {
     const authed: string[] = [];
     let inits = 0;
-    const result = await initProviderSessionWithInteractiveAuth({
-      provider: fakeProvider({
-        inits: [
-          async () => {
-            inits += 1;
-            throw new Error("authentication required");
+    await expect(
+      initProviderSessionWithInteractiveAuth({
+        provider: fakeProvider({
+          inits: [
+            async () => {
+              inits += 1;
+              throw new Error("authentication required");
+            },
+          ],
+          auth: async (methodId) => {
+            authed.push(methodId ?? "");
           },
-          async () => {
-            inits += 1;
-            return { sessionId: "ses_ok" };
-          },
-        ],
-        auth: async (methodId) => {
-          authed.push(methodId ?? "");
-        },
-        authMethods: ["oauth-personal"],
+          authMethods: ["oauth-personal"],
+        }),
+        agentId: "gemini",
+        launchCommand: ["gemini", "--experimental-acp"],
       }),
-      agentId: "gemini",
-      launchCommand: ["gemini", "--experimental-acp"],
-    });
-    expect(authed).toEqual(["oauth-personal"]);
-    expect(inits).toBe(2);
-    expect(result.session.sessionId).toBe("ses_ok");
+    ).rejects.toMatchObject({ code: "auth_required" });
+    expect(authed).toEqual([]);
+    expect(inits).toBe(1);
   });
 
   test("does not authenticate on session_init_timeout even with auth methods", async () => {

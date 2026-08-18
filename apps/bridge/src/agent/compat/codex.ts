@@ -1,39 +1,17 @@
 import type { NormalizedAcpSessionConfig } from "../../acp-session-config.ts";
 import {
-  effortDisplayName,
+  restrictThoughtState,
+  splitThinkingToggleFromThought,
   splitCartesianModelId,
   stripEffortFromModelName,
 } from "../../acp-session-config.ts";
 import { classifyGenericAgentError } from "./generic-acp.ts";
 import type { AgentCompat } from "./types.ts";
 
-const EFFORT_ORDER = [
-  "off",
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "extra-high",
-  "extra_high",
-  "max",
-];
-
-function sortEfforts(ids: string[]): string[] {
-  return [...ids].sort((a, b) => {
-    const ia = EFFORT_ORDER.indexOf(a.toLowerCase());
-    const ib = EFFORT_ORDER.indexOf(b.toLowerCase());
-    if (ia === -1 && ib === -1) return a.localeCompare(b);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
-}
-
 /**
  * Codex advertises model×effort cartesian ids (`gpt-5.6-sol[high]`) plus
- * `reasoning_effort`. Collapse to canonical models; keep thought/fast pickers.
+ * `reasoning_effort`. Collapse to canonical models; keep thought/fast pickers
+ * per canonical model (never a global union of ultra + xhigh).
  */
 export function normalizeCodexCatalog(
   cfg: NormalizedAcpSessionConfig,
@@ -46,7 +24,7 @@ export function normalizeCodexCatalog(
     string,
     { name: string; description?: string; efforts: string[] }
   >();
-  const seenEffort = new Set<string>();
+  let sawVariant = false;
 
   for (const model of available) {
     const split = splitCartesianModelId(model.modelId);
@@ -61,8 +39,8 @@ export function normalizeCodexCatalog(
       }
       continue;
     }
+    sawVariant = true;
     const { canonicalId, effort } = split;
-    seenEffort.add(effort);
     let entry = byCanonical.get(canonicalId);
     if (!entry) {
       canonicalOrder.push(canonicalId);
@@ -79,7 +57,7 @@ export function normalizeCodexCatalog(
     if (!entry.efforts.includes(effort)) entry.efforts.push(effort);
   }
 
-  if (seenEffort.size === 0) return cfg;
+  if (!sawVariant) return cfg;
 
   const currentSplit = cfg.models?.currentModelId
     ? splitCartesianModelId(cfg.models.currentModelId)
@@ -89,24 +67,45 @@ export function normalizeCodexCatalog(
     (cfg.models?.currentModelId && byCanonical.has(cfg.models.currentModelId)
       ? cfg.models.currentModelId
       : canonicalOrder[0]);
+  const currentEntry = currentModelId
+    ? byCanonical.get(currentModelId)
+    : undefined;
 
-  let thoughtLevels = cfg.thoughtLevels;
-  if (!thoughtLevels && seenEffort.size > 0) {
-    const efforts = sortEfforts([...seenEffort]);
-    thoughtLevels = {
-      configId: "reasoning_effort",
-      currentId: currentSplit?.effort ?? efforts[0],
-      available: efforts.map((id) => ({
-        id,
-        name: effortDisplayName(id),
-      })),
-    };
-  } else if (thoughtLevels && !thoughtLevels.currentId && currentSplit?.effort) {
-    thoughtLevels = {
-      ...thoughtLevels,
-      currentId: currentSplit.effort,
-    };
+  const thoughtLevels = restrictThoughtState(
+    cfg.thoughtLevels,
+    currentEntry?.efforts ?? [],
+    currentSplit?.effort ?? cfg.thoughtLevels?.currentId,
+    cfg.thoughtLevels?.configId ?? "reasoning_effort",
+  );
+
+  const modelConfigById: NonNullable<
+    NormalizedAcpSessionConfig["modelConfigById"]
+  > = { ...cfg.modelConfigById };
+  for (const [modelId, entry] of byCanonical) {
+    const thought = restrictThoughtState(
+      cfg.thoughtLevels,
+      entry.efforts,
+      modelId === currentModelId ? currentSplit?.effort : undefined,
+      cfg.thoughtLevels?.configId ?? "reasoning_effort",
+    );
+    if (thought || cfg.fastOptions || cfg.thinkingOptions || cfg.contextOptions) {
+      const split = splitThinkingToggleFromThought({
+        thoughtLevels: thought,
+        thinkingOptions: cfg.thinkingOptions,
+      });
+      modelConfigById[modelId] = {
+        thoughtLevels: split.thoughtLevels,
+        fastOptions: cfg.fastOptions,
+        thinkingOptions: split.thinkingOptions,
+        contextOptions: cfg.contextOptions,
+      };
+    }
   }
+
+  const splitCurrent = splitThinkingToggleFromThought({
+    thoughtLevels: thoughtLevels ?? cfg.thoughtLevels,
+    thinkingOptions: cfg.thinkingOptions,
+  });
 
   return {
     ...cfg,
@@ -121,7 +120,10 @@ export function normalizeCodexCatalog(
         };
       }),
     },
-    thoughtLevels,
+    thoughtLevels: splitCurrent.thoughtLevels,
+    thinkingOptions: splitCurrent.thinkingOptions,
+    modelConfigById:
+      Object.keys(modelConfigById).length > 0 ? modelConfigById : undefined,
   };
 }
 

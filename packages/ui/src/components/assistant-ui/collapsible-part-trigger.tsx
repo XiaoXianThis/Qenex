@@ -48,7 +48,7 @@ export function CollapsiblePartTrigger({
         {active ? (
           <span
             aria-hidden
-            className="shimmer text-foreground pointer-events-none absolute inset-0 inline-flex min-w-0 items-baseline gap-1.5 motion-reduce:animate-none"
+            className="shimmer aui-shimmer pointer-events-none absolute inset-0 inline-flex min-w-0 items-baseline gap-1.5 motion-reduce:animate-none"
           >
             <span className="truncate">{label}</span>
             {meta ? (

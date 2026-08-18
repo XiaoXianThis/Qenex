@@ -11,6 +11,7 @@ import {
   isAisdkSessionId,
   SESSION_CREATE_TIMEOUT_MS,
   sessionBootKey,
+  toAisdkSessionConfig,
 } from "./aisdk-session.ts";
 import { isAuthRequiredError } from "./bridge-client.ts";
 
@@ -473,5 +474,67 @@ describe("session config REST helpers", () => {
     const other = await getAisdkSessionModelConfig("ses_c", "m1", host);
     expect(other.modelId).toBe("m1");
     expect(other.thoughtLevels.map((item) => item.id)).toEqual(["low"]);
+  });
+});
+
+describe("toAisdkSessionConfig axes", () => {
+  test("parses context, thinking, and advertised modelConfigs", () => {
+    const config = toAisdkSessionConfig({
+      sessionId: "ses_x",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      currentModelId: "gpt-5.5",
+      thoughtLevels: [{ id: "ultra", name: "Ultra" }],
+      currentThoughtLevelId: "ultra",
+      contextOptions: [{ id: "272k", name: "272k" }],
+      currentContextId: "272k",
+      thinkingOptions: [
+        { id: "off", name: "Off" },
+        { id: "on", name: "On" },
+      ],
+      currentThinkingId: "on",
+      modelConfigs: {
+        "gpt-5.5": {
+          thoughtLevels: [{ id: "ultra", name: "Ultra" }],
+          contextOptions: [{ id: "272k", name: "272k" }],
+        },
+        other: {
+          thoughtLevels: [{ id: "xhigh", name: "Extra high" }],
+        },
+      },
+    });
+    expect(config.contextOptions.map((item) => item.id)).toEqual(["272k"]);
+    expect(config.thinkingOptions.map((item) => item.id)).toEqual(["off", "on"]);
+    expect(config.modelConfigs?.other?.thoughtLevels.map((item) => item.id)).toEqual([
+      "xhigh",
+    ]);
+    expect(config.modelConfigs?.["gpt-5.5"]?.thoughtLevels[0]?.id).toBe("ultra");
+  });
+
+  test("splits none out of live thought into a thinking toggle", () => {
+    const config = toAisdkSessionConfig({
+      sessionId: "ses_x",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      currentModelId: "gpt-5.5",
+      thoughtLevelConfigId: "reasoning",
+      thoughtLevels: [
+        { id: "none", name: "None" },
+        { id: "low", name: "Low" },
+        { id: "medium", name: "Medium" },
+        { id: "high", name: "High" },
+      ],
+      currentThoughtLevelId: "medium",
+      fastOptions: [
+        { id: "false", name: "Off" },
+        { id: "true", name: "On" },
+      ],
+    });
+    expect(config.thoughtLevels.map((item) => item.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(config.thinkingOptions.map((item) => item.id)).toEqual(["none", "medium"]);
+    expect(config.currentThinkingId).toBe("medium");
+    expect(config.thinkingConfigId).toBe("reasoning");
   });
 });

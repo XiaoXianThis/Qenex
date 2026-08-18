@@ -12,6 +12,20 @@ describe("classifySessionInitError", () => {
     expect(err.status).toBe(401);
   });
 
+  test("does not treat Gemini Code Assist individual deprecation as login", () => {
+    const err = classifySessionInitError(
+      {
+        code: -32000,
+        message:
+          "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google\nError authenticating: When using Gemini API, you must specify the GEMINI_API_KEY",
+      },
+      "gemini",
+    );
+    expect(err.code).toBe("session_init_failed");
+    expect(err.message).toContain("Antigravity");
+    expect(err.code).not.toBe("auth_required");
+  });
+
   test("maps spawn-like failures", () => {
     const err = classifySessionInitError(
       new Error("spawn ENOENT: failed to start process"),

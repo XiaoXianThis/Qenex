@@ -810,6 +810,20 @@ export function isFastOptionEnabled(id: string | null | undefined): boolean {
   );
 }
 
+/** Thinking toggle: `none`/`off`/`false` are off; any other id is on. */
+export function isToggleOptionEnabled(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const lower = id.trim().toLowerCase();
+  return (
+    lower !== "false" &&
+    lower !== "0" &&
+    lower !== "off" &&
+    lower !== "no" &&
+    lower !== "none" &&
+    lower !== "disabled"
+  );
+}
+
 export function oppositeFastOptionId(
   options: SessionOption[],
   currentId: string | null,
@@ -819,6 +833,20 @@ export function oppositeFastOptionId(
 
   const enabled = isFastOptionEnabled(currentId);
   const target = options.find((option) => isFastOptionEnabled(option.id) !== enabled);
+  return target?.id ?? options.find((option) => option.id !== currentId)?.id ?? null;
+}
+
+export function oppositeToggleOptionId(
+  options: SessionOption[],
+  currentId: string | null,
+): string | null {
+  if (options.length === 0) return null;
+  if (options.length === 1) return options[0]?.id ?? null;
+
+  const enabled = isToggleOptionEnabled(currentId);
+  const target = options.find(
+    (option) => isToggleOptionEnabled(option.id) !== enabled,
+  );
   return target?.id ?? options.find((option) => option.id !== currentId)?.id ?? null;
 }
 

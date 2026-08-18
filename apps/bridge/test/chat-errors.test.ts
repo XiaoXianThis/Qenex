@@ -45,6 +45,19 @@ describe("formatChatStreamError", () => {
     expect(msg).toContain("登录");
   });
 
+  test("Gemini Code Assist individual deprecation is not a login prompt", () => {
+    const msg = formatChatStreamError(
+      {
+        code: -32000,
+        message:
+          "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google",
+      },
+      "gemini",
+    );
+    expect(msg).toContain("Antigravity");
+    expect(msg).not.toContain("需要登录");
+  });
+
   test("replaces opaque AI SDK default", () => {
     expect(formatChatStreamError(new Error("An error occurred."))).toContain(
       "对话失败",

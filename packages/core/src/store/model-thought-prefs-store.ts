@@ -12,6 +12,10 @@ export type ModelThoughtPrefsState = {
   byAgent: Record<string, Record<string, string>>;
   /** agentId → modelId → fast option id */
   fastByAgent: Record<string, Record<string, string>>;
+  /** agentId → modelId → context option id */
+  contextByAgent: Record<string, Record<string, string>>;
+  /** agentId → modelId → thinking toggle id */
+  thinkingByAgent: Record<string, Record<string, string>>;
   /** agentId → last selected modelId */
   preferredModelByAgent: Record<string, string>;
   /** agentId → last selected modeId */
@@ -21,6 +25,8 @@ export type ModelThoughtPrefsState = {
 export const modelThoughtPrefsStore = proxy<ModelThoughtPrefsState>({
   byAgent: {},
   fastByAgent: {},
+  contextByAgent: {},
+  thinkingByAgent: {},
   preferredModelByAgent: {},
   preferredModeByAgent: {},
 });
@@ -52,6 +58,36 @@ export const modelThoughtPrefsActions = {
       [agentId]: {
         ...current,
         [modelId]: fastId,
+      },
+    };
+  },
+
+  getContext(agentId: string, modelId: string): string | null {
+    return modelThoughtPrefsStore.contextByAgent[agentId]?.[modelId] ?? null;
+  },
+
+  setContext(agentId: string, modelId: string, contextId: string) {
+    const current = modelThoughtPrefsStore.contextByAgent[agentId] ?? {};
+    modelThoughtPrefsStore.contextByAgent = {
+      ...modelThoughtPrefsStore.contextByAgent,
+      [agentId]: {
+        ...current,
+        [modelId]: contextId,
+      },
+    };
+  },
+
+  getThinking(agentId: string, modelId: string): string | null {
+    return modelThoughtPrefsStore.thinkingByAgent[agentId]?.[modelId] ?? null;
+  },
+
+  setThinking(agentId: string, modelId: string, thinkingId: string) {
+    const current = modelThoughtPrefsStore.thinkingByAgent[agentId] ?? {};
+    modelThoughtPrefsStore.thinkingByAgent = {
+      ...modelThoughtPrefsStore.thinkingByAgent,
+      [agentId]: {
+        ...current,
+        [modelId]: thinkingId,
       },
     };
   },
@@ -100,6 +136,12 @@ export async function hydrateModelThoughtPrefsStore(): Promise<void> {
       if (record.fastByAgent && typeof record.fastByAgent === "object") {
         patch.fastByAgent = record.fastByAgent;
       }
+      if (record.contextByAgent && typeof record.contextByAgent === "object") {
+        patch.contextByAgent = record.contextByAgent;
+      }
+      if (record.thinkingByAgent && typeof record.thinkingByAgent === "object") {
+        patch.thinkingByAgent = record.thinkingByAgent;
+      }
       if (
         record.preferredModelByAgent &&
         typeof record.preferredModelByAgent === "object"
@@ -128,6 +170,8 @@ export function startModelThoughtPrefsPersist(): () => void {
       partialize: (state) => ({
         byAgent: state.byAgent,
         fastByAgent: state.fastByAgent,
+        contextByAgent: state.contextByAgent,
+        thinkingByAgent: state.thinkingByAgent,
         preferredModelByAgent: state.preferredModelByAgent,
         preferredModeByAgent: state.preferredModeByAgent,
       }),

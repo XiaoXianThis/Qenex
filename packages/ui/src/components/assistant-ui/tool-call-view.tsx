@@ -270,8 +270,10 @@ export function ToolCallCardHeaderTrigger({
         </span>
         <span
           className={cn(
-            "text-foreground/90 min-w-0 flex-1 truncate font-mono text-xs",
-            active && "shimmer text-foreground",
+            "min-w-0 flex-1 truncate font-mono text-xs",
+            active
+              ? "shimmer aui-shimmer motion-reduce:animate-none"
+              : "text-foreground/90",
           )}
         >
           {title}
@@ -300,8 +302,10 @@ export function ToolCallCardHeaderTrigger({
       <ExtBadge path={filePath} />
       <span
         className={cn(
-          "text-foreground/90 min-w-0 truncate text-xs",
-          active && "shimmer text-foreground",
+          "min-w-0 truncate text-xs",
+          active
+            ? "shimmer aui-shimmer motion-reduce:animate-none"
+            : "text-foreground/90",
         )}
       >
         {fileBasename(filePath)}

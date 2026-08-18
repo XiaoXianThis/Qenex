@@ -8,6 +8,7 @@ import {
   errorText,
   extractAuthMethods,
   inspectAgentError,
+  isGeminiConsumerOauthBlocked,
   mergeAuthMethods,
 } from "./types.ts";
 
@@ -48,6 +49,19 @@ export function classifyGenericAgentError(
   agentId: string,
   methods?: unknown,
 ): NormalizedAgentError | null {
+  if (isGeminiConsumerOauthBlocked(error)) {
+    return {
+      code: "session_init_failed",
+      message:
+        "Gemini CLI 的个人 Google 登录已停用。请改用 GEMINI_API_KEY，或迁移到 Antigravity CLI（https://antigravity.google）。",
+      status: 409,
+      details: {
+        cause: errorText(error),
+        agentId,
+        agentName: agentId,
+      },
+    };
+  }
   const kind = inspectAgentError(error);
   const details = agentErrorDetails(error, agentId, methods);
   if (kind === "auth") {

@@ -3,7 +3,10 @@ import {
   hydrateValtioStore,
   subscribeValtioPersist,
 } from "../lib/valtio-persist.ts";
-import type { SessionOption } from "../lib/session-config.ts";
+import {
+  splitThinkingToggleFromCachedOptions,
+  type SessionOption,
+} from "../lib/session-config.ts";
 
 export const MODEL_CONFIG_CACHE_KEY = "agent-center-model-config-cache";
 
@@ -13,6 +16,8 @@ export const MODEL_CONFIG_STALE_MS = 12 * 60 * 60 * 1000;
 export type ModelConfigCacheEntry = {
   thoughtLevels: SessionOption[];
   fastOptions: SessionOption[];
+  contextOptions: SessionOption[];
+  thinkingOptions: SessionOption[];
   updatedAt: number;
 };
 
@@ -24,6 +29,20 @@ export type ModelConfigCacheState = {
 export const modelConfigCacheStore = proxy<ModelConfigCacheState>({
   byAgent: {},
 });
+
+function migrateCachedAxes(entry: {
+  thoughtLevels: SessionOption[];
+  thinkingOptions: SessionOption[];
+}): {
+  thoughtLevels: SessionOption[];
+  thinkingOptions: SessionOption[];
+} {
+  const split = splitThinkingToggleFromCachedOptions(entry);
+  return {
+    thoughtLevels: split.thoughtLevels,
+    thinkingOptions: split.thinkingOptions,
+  };
+}
 
 function parseOptions(value: unknown): SessionOption[] {
   if (!Array.isArray(value)) return [];
@@ -44,11 +63,20 @@ export const modelConfigCacheActions = {
     agentId: string,
     modelId: string,
   ): ModelConfigCacheEntry | null {
-    return modelConfigCacheStore.byAgent[agentId]?.[modelId] ?? null;
+    const entry = modelConfigCacheStore.byAgent[agentId]?.[modelId];
+    if (!entry) return null;
+    const axes = migrateCachedAxes(entry);
+    return { ...entry, ...axes };
   },
 
   getAgent(agentId: string): Record<string, ModelConfigCacheEntry> {
-    return modelConfigCacheStore.byAgent[agentId] ?? {};
+    const models = modelConfigCacheStore.byAgent[agentId] ?? {};
+    return Object.fromEntries(
+      Object.entries(models).map(([modelId, entry]) => [
+        modelId,
+        { ...entry, ...migrateCachedAxes(entry) },
+      ]),
+    );
   },
 
   set(
@@ -56,15 +84,20 @@ export const modelConfigCacheActions = {
     modelId: string,
     thoughtLevels: SessionOption[],
     fastOptions: SessionOption[],
+    contextOptions: SessionOption[] = [],
+    thinkingOptions: SessionOption[] = [],
   ) {
     const current = modelConfigCacheStore.byAgent[agentId] ?? {};
+    const axes = migrateCachedAxes({ thoughtLevels, thinkingOptions });
     modelConfigCacheStore.byAgent = {
       ...modelConfigCacheStore.byAgent,
       [agentId]: {
         ...current,
         [modelId]: {
-          thoughtLevels,
+          thoughtLevels: axes.thoughtLevels,
           fastOptions,
+          contextOptions,
+          thinkingOptions: axes.thinkingOptions,
           updatedAt: Date.now(),
         },
       },
@@ -94,9 +127,15 @@ export async function hydrateModelConfigCacheStore(): Promise<void> {
         for (const [modelId, entry] of Object.entries(models)) {
           if (!entry || typeof entry !== "object") continue;
           const raw = entry as Record<string, unknown>;
-          parsedModels[modelId] = {
+          const axes = migrateCachedAxes({
             thoughtLevels: parseOptions(raw.thoughtLevels),
+            thinkingOptions: parseOptions(raw.thinkingOptions),
+          });
+          parsedModels[modelId] = {
+            thoughtLevels: axes.thoughtLevels,
             fastOptions: parseOptions(raw.fastOptions),
+            contextOptions: parseOptions(raw.contextOptions),
+            thinkingOptions: axes.thinkingOptions,
             updatedAt:
               typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
           };

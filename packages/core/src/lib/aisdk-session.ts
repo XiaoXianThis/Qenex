@@ -17,6 +17,7 @@ import {
 import {
   EMPTY_SESSION_CONFIG,
   parseSessionOptions,
+  splitThinkingToggleFromCachedOptions,
   type AuthChallenge,
   type SessionConfig,
 } from "./session-config.ts";
@@ -55,10 +56,30 @@ export type AisdkSessionConfigResponse = {
   currentModelId?: string | null;
   thoughtLevels?: unknown;
   fastOptions?: unknown;
+  contextOptions?: unknown;
+  thinkingOptions?: unknown;
   thoughtLevelConfigId?: string | null;
   currentThoughtLevelId?: string | null;
   fastConfigId?: string | null;
   currentFastId?: string | null;
+  contextConfigId?: string | null;
+  currentContextId?: string | null;
+  thinkingConfigId?: string | null;
+  currentThinkingId?: string | null;
+  modelConfigs?: Record<string, {
+    thoughtLevels?: unknown;
+    fastOptions?: unknown;
+    contextOptions?: unknown;
+    thinkingOptions?: unknown;
+    thoughtLevelConfigId?: string | null;
+    currentThoughtLevelId?: string | null;
+    fastConfigId?: string | null;
+    currentFastId?: string | null;
+    contextConfigId?: string | null;
+    currentContextId?: string | null;
+    thinkingConfigId?: string | null;
+    currentThinkingId?: string | null;
+  }>;
   nativeResume?: boolean;
 };
 
@@ -237,6 +258,9 @@ export function formatBridgeError(
         return "启动 OpenCode ACP 进程失败。请确认 `opencode --version` 可运行，检查权限后重试。";
       case "session_init_failed": {
         const detail = stringifyErrorMessage(message);
+        if (/个人 Google 登录已停用|Antigravity/i.test(detail)) {
+          return detail;
+        }
         return detail
           ? `创建会话失败：${detail}。可检查 Agent 是否已安装并已登录，然后重试。`
           : "创建会话失败。可检查 Agent 是否已安装并已登录，然后重试。";
@@ -430,19 +454,73 @@ export function toAisdkSessionConfig(
   const models = parseSessionOptions(payload.models);
   const thoughtLevels = parseSessionOptions(payload.thoughtLevels);
   const fastOptions = parseSessionOptions(payload.fastOptions);
+  const contextOptions = parseSessionOptions(payload.contextOptions);
+  const thinkingOptions = parseSessionOptions(payload.thinkingOptions);
+  const liveSplit = splitThinkingToggleFromCachedOptions({
+    thoughtLevels,
+    thinkingOptions,
+    currentThoughtLevelId: payload.currentThoughtLevelId ?? null,
+    currentThinkingId: payload.currentThinkingId ?? null,
+  });
+  const modelConfigs = payload.modelConfigs
+    ? Object.fromEntries(
+        Object.entries(payload.modelConfigs).map(([modelId, axes]) => {
+          const rawThinking = parseSessionOptions(axes?.thinkingOptions);
+          const split = splitThinkingToggleFromCachedOptions({
+            thoughtLevels: parseSessionOptions(axes?.thoughtLevels),
+            thinkingOptions: rawThinking,
+            currentThoughtLevelId: axes?.currentThoughtLevelId ?? null,
+            currentThinkingId: axes?.currentThinkingId ?? null,
+          });
+          return [
+            modelId,
+            {
+              thoughtLevels: split.thoughtLevels,
+              fastOptions: parseSessionOptions(axes?.fastOptions),
+              contextOptions: parseSessionOptions(axes?.contextOptions),
+              thinkingOptions: split.thinkingOptions,
+              thoughtLevelConfigId: axes?.thoughtLevelConfigId ?? null,
+              currentThoughtLevelId: split.currentThoughtLevelId,
+              fastConfigId: axes?.fastConfigId ?? null,
+              currentFastId: axes?.currentFastId ?? null,
+              contextConfigId: axes?.contextConfigId ?? null,
+              currentContextId: axes?.currentContextId ?? null,
+              thinkingConfigId:
+                axes?.thinkingConfigId ??
+                (rawThinking.length === 0 && split.thinkingOptions.length > 0
+                  ? (axes?.thoughtLevelConfigId ?? null)
+                  : null),
+              currentThinkingId: split.currentThinkingId,
+            },
+          ];
+        }),
+      )
+    : undefined;
   return {
     ...EMPTY_SESSION_CONFIG,
     modes,
     models,
-    thoughtLevels,
+    thoughtLevels: liveSplit.thoughtLevels,
     fastOptions,
+    contextOptions,
+    thinkingOptions: liveSplit.thinkingOptions,
     currentModeId: payload.currentModeId ?? modes[0]?.id ?? null,
     currentModelId: payload.currentModelId ?? models[0]?.id ?? null,
     currentThoughtLevelId:
-      payload.currentThoughtLevelId ?? thoughtLevels[0]?.id ?? null,
+      liveSplit.currentThoughtLevelId ?? liveSplit.thoughtLevels[0]?.id ?? null,
     thoughtLevelConfigId: payload.thoughtLevelConfigId ?? null,
     currentFastId: payload.currentFastId ?? fastOptions[0]?.id ?? null,
     fastConfigId: payload.fastConfigId ?? null,
+    currentContextId: payload.currentContextId ?? contextOptions[0]?.id ?? null,
+    contextConfigId: payload.contextConfigId ?? null,
+    currentThinkingId:
+      liveSplit.currentThinkingId ?? liveSplit.thinkingOptions[0]?.id ?? null,
+    thinkingConfigId:
+      payload.thinkingConfigId ??
+      (thinkingOptions.length === 0 && liveSplit.thinkingOptions.length > 0
+        ? (payload.thoughtLevelConfigId ?? null)
+        : null),
+    ...(modelConfigs ? { modelConfigs } : {}),
     ready: true,
     loading: false,
     error: null,

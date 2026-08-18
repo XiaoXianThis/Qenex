@@ -24,6 +24,7 @@ export type PersistedSessionRow = {
   modelsJson: string | null;
   thoughtLevelsJson: string | null;
   fastOptionsJson: string | null;
+  configAxesJson: string | null;
 };
 
 type SessionQueryRow = {
@@ -37,6 +38,7 @@ type SessionQueryRow = {
   models_json: string | null;
   thought_levels_json: string | null;
   fast_options_json: string | null;
+  config_axes_json: string | null;
   remote_session_id: string | null;
   resume_behavior: string | null;
 };
@@ -62,6 +64,7 @@ function mapSessionRow(row: SessionQueryRow): PersistedSessionRow {
     modelsJson: row.models_json ?? null,
     thoughtLevelsJson: row.thought_levels_json ?? null,
     fastOptionsJson: row.fast_options_json ?? null,
+    configAxesJson: row.config_axes_json ?? null,
   };
 }
 
@@ -144,6 +147,9 @@ export class SessionDb {
     if (!columns.has("fast_options_json")) {
       this.#db.exec(`ALTER TABLE sessions ADD COLUMN fast_options_json TEXT`);
     }
+    if (!columns.has("config_axes_json")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN config_axes_json TEXT`);
+    }
     this.#db.exec(`
       UPDATE sessions
       SET remote_session_id = session_id
@@ -169,6 +175,7 @@ export class SessionDb {
     modelsJson?: string | null;
     thoughtLevelsJson?: string | null;
     fastOptionsJson?: string | null;
+    configAxesJson?: string | null;
     remoteSessionId?: string | null;
     resumeBehavior?: ResumeBehavior | null;
   }): void {
@@ -180,9 +187,9 @@ export class SessionDb {
       .query(
         `INSERT INTO sessions (
           session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
-          thought_levels_json, fast_options_json,
+          thought_levels_json, fast_options_json, config_axes_json,
           remote_session_id, resume_behavior
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), COALESCE(?, 'native-load'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), COALESCE(?, 'native-load'))
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           cwd = excluded.cwd,
@@ -192,6 +199,7 @@ export class SessionDb {
           models_json = COALESCE(excluded.models_json, sessions.models_json),
           thought_levels_json = COALESCE(excluded.thought_levels_json, sessions.thought_levels_json),
           fast_options_json = COALESCE(excluded.fast_options_json, sessions.fast_options_json),
+          config_axes_json = COALESCE(excluded.config_axes_json, sessions.config_axes_json),
           remote_session_id = COALESCE(?, sessions.remote_session_id),
           resume_behavior = COALESCE(?, sessions.resume_behavior)`,
       )
@@ -206,6 +214,7 @@ export class SessionDb {
         row.modelsJson ?? null,
         row.thoughtLevelsJson ?? null,
         row.fastOptionsJson ?? null,
+        row.configAxesJson ?? null,
         remoteSessionId,
         row.sessionId,
         resumeBehavior,
@@ -243,7 +252,7 @@ export class SessionDb {
     const row = this.#db
       .query(
         `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
-                thought_levels_json, fast_options_json,
+                thought_levels_json, fast_options_json, config_axes_json,
                 remote_session_id, resume_behavior
          FROM sessions WHERE session_id = ?`,
       )
@@ -256,7 +265,7 @@ export class SessionDb {
     const rows = this.#db
       .query(
         `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
-                thought_levels_json, fast_options_json,
+                thought_levels_json, fast_options_json, config_axes_json,
                 remote_session_id, resume_behavior
          FROM sessions
          ORDER BY updated_at DESC`,

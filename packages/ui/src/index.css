@@ -2,6 +2,13 @@
 @import "tw-shimmer";
 @source "./**/*.{ts,tsx}";
 
+/* 聊天进行中：muted 底 + foreground 峰，收窄扫描带，对比高于 tw-shimmer 默认 */
+@utility aui-shimmer {
+  color: color-mix(in oklab, var(--muted-foreground) 62%, var(--background));
+  --shimmer-color: var(--foreground);
+  --shimmer-spread: 3.2ch;
+}
+
 /* 跟随应用主题（document-theme 在 html 上切换 .dark），而非仅系统 prefers-color-scheme */
 @custom-variant dark (&:where(.dark, .dark *));
 

@@ -280,4 +280,168 @@ describe("acp-session-config", () => {
     expect(normalized.thoughtLevels?.configId).toBe("think");
     expect(normalized.thoughtLevels?.currentId).toBe("medium");
   });
+
+  test("maps ACP v2 configId thought/fast options", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          configId: "reasoning",
+          name: "Thinking",
+          category: "thought_level",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+          ],
+        },
+        {
+          configId: "fast",
+          name: "Fast",
+          category: "model_config",
+          currentValue: false,
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thoughtLevels?.configId).toBe("reasoning");
+    expect(normalized.thoughtLevels?.currentId).toBe("high");
+    expect(normalized.fastOptions?.configId).toBe("fast");
+    expect(normalized.fastOptions?.currentId).toBe("false");
+  });
+
+  test("keeps thinking toggle, intensity, and context as separate axes", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "thinking",
+          name: "Thinking",
+          category: "thinking",
+          currentValue: "on",
+          options: [
+            { value: "off", name: "Off" },
+            { value: "on", name: "On" },
+          ],
+        },
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "high", name: "High" },
+            { value: "xhigh", name: "Extra high" },
+          ],
+        },
+        {
+          id: "context_window",
+          name: "Context",
+          currentValue: "272k",
+          options: [
+            { value: "200k", name: "200k" },
+            { value: "272k", name: "272k" },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thinkingOptions?.configId).toBe("thinking");
+    expect(normalized.thinkingOptions?.available.map((t) => t.id)).toEqual([
+      "off",
+      "on",
+    ]);
+    expect(normalized.thoughtLevels?.configId).toBe("effort");
+    expect(normalized.thoughtLevels?.available.map((t) => t.id)).toEqual([
+      "low",
+      "high",
+      "xhigh",
+    ]);
+    expect(normalized.contextOptions?.configId).toBe("context_window");
+    expect(normalized.fastOptions?.configId).toBe("fast");
+  });
+
+  test("splits none out of effort into a thinking toggle", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "reasoning",
+          currentValue: "none",
+          options: [
+            { value: "none", name: "None" },
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "extra-high", name: "Extra High" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thinkingOptions?.configId).toBe("reasoning");
+    expect(normalized.thinkingOptions?.currentId).toBe("none");
+    expect(normalized.thinkingOptions?.available.map((t) => t.id)).toEqual([
+      "none",
+      "low",
+    ]);
+    expect(normalized.thoughtLevels?.available.map((t) => t.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "extra-high",
+    ]);
+  });
+
+  test("maps camelCase contextLength and thinkingEnabled", () => {
+    const normalized = normalizeAcpSessionConfig({
+      configOptions: [
+        {
+          id: "thinkingEnabled",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+        {
+          id: "reasoningEffort",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "high", name: "High" },
+          ],
+        },
+        {
+          id: "contextLength",
+          currentValue: "272k",
+          options: [
+            { value: "200k", name: "200k" },
+            { value: "272k", name: "272k" },
+          ],
+        },
+        {
+          id: "fastMode",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+      ],
+    });
+    expect(normalized.thinkingOptions?.configId).toBe("thinkingEnabled");
+    expect(normalized.thoughtLevels?.configId).toBe("reasoningEffort");
+    expect(normalized.contextOptions?.configId).toBe("contextLength");
+    expect(normalized.fastOptions?.configId).toBe("fastMode");
+  });
 });

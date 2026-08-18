@@ -74,6 +74,7 @@ Qenex 用一套 ACP → AI SDK UIMessage 管线驱动本机 Agent。Compat 只�
 | 字段 | 取值 | 含义 |
 |------|------|------|
 | `augmentLaunch?` | `LaunchPatch`（`env` / `args`） | 注入环境或改 argv。**不**解析启动命令 |
+| `initializeMeta?` | `{ parameterizedModelPicker: true }` 等 | ACP `initialize` 的 `clientCapabilities._meta`。Provider 会整段替换 capabilities，spawn 必须叠在默认 fs/terminal 上。**不要**暴露给 UI |
 | `configDiscovery` | `advertised` \| `per-model-probe-fallback` | 配置来自 session 广告，或当前 session 内串行切模型探测 |
 | `resume` | `native-load` \| `reconnect-fresh` \| `none` | 见下。没有 `new-and-replay` |
 | `classifyError?` | `NormalizedAgentError \| null` | 按 phase（`launch` / `session-init` / `session-load` / `chat` / `config`）归类 |
@@ -103,7 +104,7 @@ Resume：
 
 catalog 缓存 key 固定为 **`agentId::cwd`**（不要加 agentVersion）。同一 Agent 在不同工作目录下的目录必须隔离。
 
-前端要某模型的 thought/fast：走 `GET /api/sessions/:id/models/:modelId/config`。Bridge 内部决定用广告、session 缓存，还是同 session 串行 probe。切模型时**优先** `session/set_config_option`（ACP 要求返回完整 `configOptions`，OpenCode 的 `effort` / `thought_level` 只出现在这里）；失败再回退 legacy `session/set_model`（该 RPC 不带回配置快照）。旧 `POST …/probe-model-config` 仍存在，但是 `getModelConfig` 的包装。
+前端要某模型的 thought / fast / context / thinking：走 `GET /api/sessions/:id/models/:modelId/config`。Bridge 内部决定用广告、`modelConfigs` 按 canonical 模型收的档位、session 缓存，还是同 session 串行 probe。**禁止**把当前模型的 live thought 抄到其它 `modelId`。切模型时**优先** `session/set_config_option`（ACP 要求返回完整 `configOptions`，OpenCode 的 `effort` / `thought_level` 只出现在这里）；失败再回退 legacy `session/set_model`（该 RPC 不带回配置快照）。旧 `POST …/probe-model-config` 仍存在，但是 `getModelConfig` 的包装。`create` 对 `per-model-probe-fallback` 会 self-probe **当前**模型（最多 +1 RPC，不进 getConfig 热路径）；有 advertised `modelConfigs` 时 bootstrap 一次 seed，不必再 probe Codex/Cursor 全表。UI 展开模型列表只预取可见未缓存行。笛卡尔积（Cursor `reasoning=` / `context=`、Codex `model[effort]`）按 canonical 模型各自收档位，会话级 thought 只反映**当前**模型子集，不是全局并集。
 
 ---
 
@@ -140,12 +141,12 @@ URL、路由参数、SQLite PK 用 **local** `session_id`。ACP RPC、fs handler
 | Compat id | 模块 | 要点 |
 |-----------|------|------|
 | `opencode` | `compat/opencode.ts` | `augmentLaunch` 注入 `OPENCODE_CONFIG_CONTENT`（权限）；`per-model-probe-fallback` + `native-load`。思考是按模型的 `configOptions.id=effort`（category `thought_level`），点齿轮会 `set_config_option(model)` 探测再 restore。`normalizeCatalog` 去掉 `structure/` 等分组前缀。load 缺 mode/model 目录由 session-store 缓存/probe 补，**不**用 cwd 缓存回填 thought（避免串模型） |
-| `cursor-agent` | `compat/cursor.ts` | `per-model-probe-fallback` + `reconnect-fresh`；aliases `cursor` 在 detect 层。`session/new` 对未登录常返回不透明 `Internal error`，compat 归为 `auth_required`。公共层随后 spawn `<bin> login`（`loginArgv: ["login"]`）打开 Cursor 账号浏览器，再 respawn ACP；ACP `authenticate("cursor_login")` **不会**开浏览器。超时**不**走这条路径 |
+| `cursor-agent` | `compat/cursor.ts` | `per-model-probe-fallback` + `reconnect-fresh`；aliases `cursor` 在 detect 层。`initializeMeta.parameterizedModelPicker` 让 Cursor 广告独立 thought/fast/context/thinking，而不是每个模型一个默认变体。`normalizeCatalog` 把 `id[reasoning=,thinking=,fast=,context=]` 收成 canonical 模型 + 四轴 picker；`none`/`off` 从强度里拆成思考开关。configOption 别名认 camelCase（`contextLength` / `thinkingEnabled`）。`session/new` 对未登录常返回不透明 `Internal error`，compat 归为 `auth_required`。公共层随后 spawn `<bin> login`（`loginArgv: ["login"]`）打开 Cursor 账号浏览器，再 respawn ACP；ACP `authenticate("cursor_login")` **不会**开浏览器。超时**不**走这条路径 |
 | `codex-acp` | `compat/codex.ts` | `advertised` + `native-load`。`normalizeCatalog` 把 `id[effort]` 笛卡尔积拆成 canonical 模型 + `reasoning_effort` thought picker；Fast 仅在 Agent 广告了 `fast-mode` 时保留 |
 | `pi-acp` | `compat/pi.ts` | `advertised` + `native-load`。把 `Thinking: off/…` 从 modes 提升为 thoughtLevels（无独立 config option 时 `configId=mode`，session-store 回落到 `setMode`） |
 | `claude-acp` | `compat/claude.ts` | `advertised` + `native-load`。模型显示名在 name 撞车时改用 description 或 id（Opus/Sonnet/Haiku/Default）。公共层切模型已优先 `set_config_option=model` |
 | `qoder` | `compat/qoder.ts` | `advertised` + `reconnect-fresh`（`session/load` 对空项目报 Internal error）。auth methods 含 `qodercli-login` |
-| 其余 | `generic-acp.ts` | 标准广告 + native-load；错误归到 auth / spawn / balance / model。Gemini 走 Generic，auth methods 带 `gemini` 登录提示 |
+| 其余 | `generic-acp.ts` | 标准广告 + native-load；错误归到 auth / spawn / balance / model。Gemini 走 Generic；`initSession` 已含 provider lazy-auth，公共层不再二次 `authenticate`。个人 Google / Code Assist 停用文案不当成「需要登录」 |
 
 `provider-compat.ts` 与 Agent 无关：permission callback、workspace 内 fs、以及 pin 住的 provider 0.3.4 缺陷（`setSessionConfigOption` 只在 `connection` 上、失败 tool 的 `rawOutput` 必须可迭代）。升级 provider 并证实公开 API 可用后，再删对应 workaround。
 
@@ -162,7 +163,7 @@ URL、路由参数、SQLite PK 用 **local** `session_id`。ACP RPC、fs handler
 | **experimental** | 能起进程，config / resume / 错误可能残缺；不要在 UI 假装完整 |
 | **unsupported** | 明确不跟；不要为它加空 Compat 或 UI 特判 |
 
-当前：**OpenCode = verified**（含 per-model 思考探测）；**Cursor = verified**（probe fallback + reconnect-fresh）；**Codex / pi ACP / Claude / Qoder = experimental**（已有 Compat：目录拆分 / thinking-as-mode / 显示名 / reconnect-fresh，主路径尚未按 verified 标准打穿）；Gemini 仍为 **standard-acp**（Generic + 登录 methods）。未单开模块的 Registry 项默认为 **standard-acp**，直到有人用 Generic 打过主路径。升级或降级写在本文件本节，不要写进 UI。
+当前：**OpenCode = verified**（含 per-model 思考探测）；**Cursor = verified**（probe fallback + reconnect-fresh）；**Codex / pi ACP / Claude / Qoder = experimental**（已有 Compat：目录拆分 / thinking-as-mode / 显示名 / reconnect-fresh，主路径尚未按 verified 标准打穿）；Gemini 仍为 **standard-acp**（Generic；个人 Google 登录已停用，需 API Key 或 Antigravity）。未单开模块的 Registry 项默认为 **standard-acp**，直到有人用 Generic 打过主路径。升级或降级写在本文件本节，不要写进 UI。
 
 ---
 
@@ -212,7 +213,7 @@ URL、路由参数、SQLite PK 用 **local** `session_id`。ACP RPC、fs handler
 - [`apps/bridge/src/agent/runtime/session-operation-queue.ts`](../apps/bridge/src/agent/runtime/session-operation-queue.ts)
 - [`apps/bridge/src/agent/spawn.ts`](../apps/bridge/src/agent/spawn.ts)
 - [`apps/bridge/src/agent/detect.ts`](../apps/bridge/src/agent/detect.ts)
-- [`apps/bridge/src/session-store.ts`](../apps/bridge/src/session-store.ts) — 含公共层 `initProviderSessionWithInteractiveAuth`：`auth_required` 时优先 spawn compat `loginArgv`（打开浏览器），否则 ACP `authenticate`
+- [`apps/bridge/src/session-store.ts`](../apps/bridge/src/session-store.ts) — 含公共层 `initProviderSessionWithInteractiveAuth`：`auth_required` 时仅 spawn compat `loginArgv`（Cursor 开浏览器）。不要再调 ACP `authenticate`：`initSession` 里的 provider lazy-auth 已经开过一次
 - [`apps/bridge/src/session-db.ts`](../apps/bridge/src/session-db.ts)
 - [`apps/bridge/src/session-config-dto.ts`](../apps/bridge/src/session-config-dto.ts)
 - [`apps/bridge/src/chat.ts`](../apps/bridge/src/chat.ts)

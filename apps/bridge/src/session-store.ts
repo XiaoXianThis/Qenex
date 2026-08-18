@@ -1,7 +1,8 @@
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 import type { UIMessage } from "ai";
-import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   applyCompatCatalog,
   resolveAgentCompat,
@@ -33,13 +34,72 @@ import {
   MODE_THOUGHT_CONFIG_ID,
   normalizeAcpSessionConfig,
 } from "./acp-session-config.ts";
-import type { NormalizedAcpSessionConfig } from "./acp-session-config.ts";
+import type {
+  AcpModelAxes,
+  AcpThoughtState,
+  NormalizedAcpSessionConfig,
+} from "./acp-session-config.ts";
 import {
+  overlayDtoWithModelAxes,
   sessionInfoToConfigDto,
   type SessionConfigDto,
 } from "./session-config-dto.ts";
 import { classifySessionInitError } from "./session-errors.ts";
 import { SessionDb, resolveSessionsDbPath } from "./session-db.ts";
+
+// #region agent log
+let debugAuthSeq = 0;
+function debugGeminiAuthSnapshot(): Record<string, unknown> {
+  try {
+    const settingsPath = join(homedir(), ".gemini/settings.json");
+    const accountsPath = join(homedir(), ".gemini/google_accounts.json");
+    const settings = existsSync(settingsPath)
+      ? (JSON.parse(readFileSync(settingsPath, "utf8")) as {
+          security?: { auth?: { selectedType?: string } };
+        })
+      : null;
+    const accounts = existsSync(accountsPath)
+      ? (JSON.parse(readFileSync(accountsPath, "utf8")) as {
+          active?: unknown;
+          old?: unknown[];
+        })
+      : null;
+    return {
+      selectedType: settings?.security?.auth?.selectedType ?? null,
+      activeAccountSet: accounts?.active != null,
+      oldAccountCount: Array.isArray(accounts?.old) ? accounts.old.length : 0,
+      oauthCredsExist:
+        existsSync(join(homedir(), ".gemini/oauth_creds.json")) ||
+        existsSync(join(homedir(), ".gemini/credentials.json")),
+    };
+  } catch {
+    return { snapshotError: true };
+  }
+}
+function debugLog(
+  location: string,
+  message: string,
+  data: Record<string, unknown>,
+  hypothesisId: string,
+): void {
+  fetch("http://127.0.0.1:7380/ingest/eaf2ca3c-b64a-49b6-8d20-2c6e31fef2cc", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "ef4db2",
+    },
+    body: JSON.stringify({
+      sessionId: "ef4db2",
+      runId: "pre-fix",
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
 
 export type SessionInfo = {
   sessionId: string;
@@ -65,17 +125,13 @@ export type SessionInfo = {
     }>;
   };
   /** From ACP configOptions category=thought_level when advertised. */
-  thoughtLevels?: {
-    configId: string;
-    currentId?: string;
-    available: Array<{ id: string; name: string; description?: string }>;
-  };
+  thoughtLevels?: AcpThoughtState;
   /** Optional Fast/speed config advertised through ACP configOptions. */
-  fastOptions?: {
-    configId: string;
-    currentId?: string;
-    available: Array<{ id: string; name: string; description?: string }>;
-  };
+  fastOptions?: AcpThoughtState;
+  contextOptions?: AcpThoughtState;
+  thinkingOptions?: AcpThoughtState;
+  /** Per-canonical-model axes from cartesian ads; not a probe result. */
+  modelConfigById?: Record<string, AcpModelAxes>;
 };
 
 export type SessionEntry = {
@@ -113,7 +169,10 @@ export class AgentCatalogCache {
       !hasModes &&
       !hasModels &&
       !normalized.thoughtLevels &&
-      !normalized.fastOptions
+      !normalized.fastOptions &&
+      !normalized.contextOptions &&
+      !normalized.thinkingOptions &&
+      !normalized.modelConfigById
     ) {
       return;
     }
@@ -124,6 +183,11 @@ export class AgentCatalogCache {
       models: hasModels ? normalized.models : prev.models,
       thoughtLevels: normalized.thoughtLevels ?? prev.thoughtLevels,
       fastOptions: normalized.fastOptions ?? prev.fastOptions,
+      contextOptions: normalized.contextOptions ?? prev.contextOptions,
+      thinkingOptions: normalized.thinkingOptions ?? prev.thinkingOptions,
+      modelConfigById: normalized.modelConfigById
+        ? { ...prev.modelConfigById, ...normalized.modelConfigById }
+        : prev.modelConfigById,
     });
   }
 
@@ -285,7 +349,9 @@ function rethrowAuthFailure(
  * Try session/new first. On `auth_required`:
  * 1. If the Agent has `loginArgv`, spawn `<bin> login` (Cursor opens the
  *    account browser). Respawn ACP afterwards so the new process sees credentials.
- * 2. Otherwise call ACP `authenticate` (Gemini-style in-process OAuth).
+ * 2. Otherwise do not call ACP `authenticate` again — `initSession` already ran
+ *    provider lazy-auth (Gemini opens Google there). A second authenticate
+ *    pops another login page after the first already succeeded.
  * Timeouts stay timeouts — do not open a login page for a slow but logged-in Agent.
  */
 export async function initProviderSessionWithInteractiveAuth(
@@ -296,11 +362,58 @@ export async function initProviderSessionWithInteractiveAuth(
 }> {
   let provider = input.provider;
   const { agentId, signal } = input;
+  const seq = ++debugAuthSeq;
+  // #region agent log
+  debugLog(
+    "session-store.ts:initProviderSessionWithInteractiveAuth",
+    "interactive-auth-start",
+    {
+      seq,
+      agentId,
+      launchCommand: input.launchCommand,
+      signalAborted: Boolean(signal?.aborted),
+      gemini: debugGeminiAuthSnapshot(),
+    },
+    "B",
+  );
+  // #endregion
   try {
-    return { session: await initProviderSession(provider, signal), provider };
+    const session = await initProviderSession(provider, signal);
+    // #region agent log
+    debugLog(
+      "session-store.ts:initProviderSessionWithInteractiveAuth",
+      "first-init-ok",
+      {
+        seq,
+        agentId,
+        sessionId: session.sessionId,
+        gemini: debugGeminiAuthSnapshot(),
+      },
+      "A",
+    );
+    // #endregion
+    return { session, provider };
   } catch (firstErr) {
     const authMethods = readProviderAuthMethods(provider);
     const classified = classifySessionInitError(firstErr, agentId, { authMethods });
+    // #region agent log
+    debugLog(
+      "session-store.ts:initProviderSessionWithInteractiveAuth",
+      "first-init-failed",
+      {
+        seq,
+        agentId,
+        classifiedCode: classified.code,
+        classifiedMessage: classified.message,
+        firstErr: errorText(firstErr).slice(0, 400),
+        authMethods,
+        isAuthRequired: isAuthRequiredErrorCode(classified.code),
+        signalAborted: Boolean(signal?.aborted),
+        gemini: debugGeminiAuthSnapshot(),
+      },
+      "A",
+    );
+    // #endregion
     if (!isAuthRequiredErrorCode(classified.code)) {
       throw classified;
     }
@@ -311,30 +424,59 @@ export async function initProviderSessionWithInteractiveAuth(
     const methodId = pickInteractiveAuthMethodId(
       authMethodsFromClassified(classified) ?? authMethods,
     );
-    if (!loginCmd && !methodId) {
+    if (!loginCmd) {
+      // #region agent log
+      debugLog(
+        "session-store.ts:initProviderSessionWithInteractiveAuth",
+        "skip-second-authenticate",
+        {
+          seq,
+          agentId,
+          methodId,
+          reason: "initSession already ran provider lazy-auth",
+          gemini: debugGeminiAuthSnapshot(),
+        },
+        "A",
+      );
+      // #endregion
       throw classified;
     }
     try {
-      if (loginCmd) {
-        if (input.runLogin) await input.runLogin(loginCmd);
-        else await runCliBrowserLogin(loginCmd, signal);
-        if (input.respawn) {
-          provider = input.respawn();
-        }
-      } else if (methodId) {
-        await raceWithSignal(
-          provider.authenticate(methodId),
-          signal,
-          SESSION_AUTH_TIMEOUT_MS,
-          new BridgeError(
-            "session_auth_timeout",
-            `Agent login did not complete within ${SESSION_AUTH_TIMEOUT_MS}ms`,
-            504,
-          ),
-        );
+      if (input.runLogin) await input.runLogin(loginCmd);
+      else await runCliBrowserLogin(loginCmd, signal);
+      if (input.respawn) {
+        provider = input.respawn();
       }
-      return { session: await initProviderSession(provider, signal), provider };
+      const retrySession = await initProviderSession(provider, signal);
+      // #region agent log
+      debugLog(
+        "session-store.ts:initProviderSessionWithInteractiveAuth",
+        "retry-init-ok",
+        {
+          seq,
+          agentId,
+          sessionId: retrySession.sessionId,
+          gemini: debugGeminiAuthSnapshot(),
+        },
+        "D",
+      );
+      // #endregion
+      return { session: retrySession, provider };
     } catch (authErr) {
+      // #region agent log
+      debugLog(
+        "session-store.ts:initProviderSessionWithInteractiveAuth",
+        "auth-or-retry-failed",
+        {
+          seq,
+          agentId,
+          err: errorText(authErr).slice(0, 400),
+          code: authErr instanceof BridgeError ? authErr.code : null,
+          gemini: debugGeminiAuthSnapshot(),
+        },
+        "D",
+      );
+      // #endregion
       return rethrowAuthFailure(
         classified,
         authErr,
@@ -374,12 +516,35 @@ export function shouldSkipModelConfigProbe(input: {
   requestedModelId: string;
   hasCachedSnapshot: boolean;
   liveHasThoughtOrFast: boolean;
+  hasAdvertisedModelSnapshot?: boolean;
+  hasPerModelAdvertisedMap?: boolean;
 }): boolean {
   if (input.currentModelId === input.requestedModelId) return true;
   if (input.hasCachedSnapshot) return true;
+  if (input.hasAdvertisedModelSnapshot) return true;
+  // Session-level advertised thought (no cartesian per-model map): same
+  // options apply to every model; do not switch. Per-model maps must not
+  // copy the live union onto another model.
   return (
-    input.configDiscovery === "advertised" && input.liveHasThoughtOrFast
+    input.configDiscovery === "advertised" &&
+    input.liveHasThoughtOrFast &&
+    !input.hasPerModelAdvertisedMap
   );
+}
+
+/**
+ * Create-time: one set_config_option(current model) so GET /config already
+ * has thought/fast. Advertised agents must not take this path. Do not put
+ * this on the getConfig hot path (it shares the session op queue with chat).
+ */
+export function shouldSelfProbeCurrentModel(input: {
+  configDiscovery: ConfigDiscovery;
+  currentModelId: string | null;
+  liveHasThoughtOrFast: boolean;
+}): boolean {
+  if (input.configDiscovery !== "per-model-probe-fallback") return false;
+  if (!input.currentModelId) return false;
+  return !input.liveHasThoughtOrFast;
 }
 
 export async function restoreProbedModel(input: {
@@ -429,7 +594,13 @@ function infoFromRow(row: {
   modelsJson: string | null;
   thoughtLevelsJson: string | null;
   fastOptionsJson: string | null;
+  configAxesJson?: string | null;
 }): SessionInfo {
+  const axes = parseJsonField<{
+    contextOptions?: SessionInfo["contextOptions"];
+    thinkingOptions?: SessionInfo["thinkingOptions"];
+    modelConfigById?: SessionInfo["modelConfigById"];
+  }>(row.configAxesJson);
   return applyInfoCatalog({
     sessionId: row.sessionId,
     agent: (row.agent as SessionInfo["agent"]) || "opencode",
@@ -441,6 +612,9 @@ function infoFromRow(row: {
     models: parseJsonField(row.modelsJson),
     thoughtLevels: parseJsonField(row.thoughtLevelsJson),
     fastOptions: parseJsonField(row.fastOptionsJson),
+    contextOptions: axes?.contextOptions,
+    thinkingOptions: axes?.thinkingOptions,
+    modelConfigById: axes?.modelConfigById,
   });
 }
 
@@ -451,6 +625,9 @@ function applyInfoCatalog(info: SessionInfo): SessionInfo {
     models: info.models,
     thoughtLevels: info.thoughtLevels,
     fastOptions: info.fastOptions,
+    contextOptions: info.contextOptions,
+    thinkingOptions: info.thinkingOptions,
+    modelConfigById: info.modelConfigById,
   });
   return {
     ...info,
@@ -458,6 +635,9 @@ function applyInfoCatalog(info: SessionInfo): SessionInfo {
     models: normalized.models,
     thoughtLevels: normalized.thoughtLevels,
     fastOptions: normalized.fastOptions,
+    contextOptions: normalized.contextOptions ?? info.contextOptions,
+    thinkingOptions: normalized.thinkingOptions ?? info.thinkingOptions,
+    modelConfigById: normalized.modelConfigById ?? info.modelConfigById,
   };
 }
 
@@ -466,12 +646,24 @@ function catalogPersistFields(info: {
   models?: SessionInfo["models"];
   thoughtLevels?: SessionInfo["thoughtLevels"];
   fastOptions?: SessionInfo["fastOptions"];
+  contextOptions?: SessionInfo["contextOptions"];
+  thinkingOptions?: SessionInfo["thinkingOptions"];
+  modelConfigById?: SessionInfo["modelConfigById"];
 }): {
   modesJson: string | null;
   modelsJson: string | null;
   thoughtLevelsJson: string | null;
   fastOptionsJson: string | null;
+  configAxesJson: string | null;
 } {
+  const axes =
+    info.contextOptions || info.thinkingOptions || info.modelConfigById
+      ? {
+          contextOptions: info.contextOptions,
+          thinkingOptions: info.thinkingOptions,
+          modelConfigById: info.modelConfigById,
+        }
+      : null;
   return {
     modesJson: info.modes ? JSON.stringify(info.modes) : null,
     modelsJson: info.models ? JSON.stringify(info.models) : null,
@@ -479,6 +671,7 @@ function catalogPersistFields(info: {
       ? JSON.stringify(info.thoughtLevels)
       : null,
     fastOptionsJson: info.fastOptions ? JSON.stringify(info.fastOptions) : null,
+    configAxesJson: axes ? JSON.stringify(axes) : null,
   };
 }
 
@@ -676,6 +869,9 @@ export class SessionStore {
       const models = normalized.models;
       const thoughtLevels = normalized.thoughtLevels;
       const fastOptions = normalized.fastOptions;
+      const contextOptions = normalized.contextOptions;
+      const thinkingOptions = normalized.thinkingOptions;
+      const modelConfigById = normalized.modelConfigById;
       this.#rememberCatalog(agentId, cwd, normalized);
 
       const info: SessionInfo = {
@@ -689,6 +885,9 @@ export class SessionStore {
         models,
         thoughtLevels,
         fastOptions,
+        contextOptions,
+        thinkingOptions,
+        modelConfigById,
       };
 
       this.#db.upsertSession({
@@ -705,6 +904,9 @@ export class SessionStore {
           models,
           thoughtLevels,
           fastOptions,
+          contextOptions,
+          thinkingOptions,
+          modelConfigById,
         }),
       });
 
@@ -719,8 +921,33 @@ export class SessionStore {
       if (pendingConfigOptions) {
         this.#applyConfigOptions(entry, pendingConfigOptions);
       }
-      this.#rememberModelConfig(sessionId, sessionInfoToConfigDto(info));
-      return info;
+      const liveHasThoughtOrFast =
+        (entry.info.thoughtLevels?.available?.length ?? 0) > 0 ||
+        (entry.info.fastOptions?.available?.length ?? 0) > 0;
+      const currentModelId = entry.info.models?.currentModelId ?? null;
+      if (
+        shouldSelfProbeCurrentModel({
+          configDiscovery: compat.configDiscovery,
+          currentModelId,
+          liveHasThoughtOrFast,
+        }) &&
+        currentModelId
+      ) {
+        try {
+          await this.#setModelUnlocked(
+            entry,
+            currentModelId,
+            input.signal ?? new AbortController().signal,
+          );
+        } catch {
+          /* Session is still usable; UI can GET …/models/:id/config later. */
+        }
+      }
+      this.#rememberModelConfig(
+        sessionId,
+        sessionInfoToConfigDto(entry.info),
+      );
+      return entry.info;
     } catch (err) {
       const authMethods = readProviderAuthMethods(provider);
       try {
@@ -854,12 +1081,23 @@ export class SessionStore {
       if (normalized.models) info.models = normalized.models;
       if (normalized.thoughtLevels) info.thoughtLevels = normalized.thoughtLevels;
       if (normalized.fastOptions) info.fastOptions = normalized.fastOptions;
+      if (normalized.contextOptions) info.contextOptions = normalized.contextOptions;
+      if (normalized.thinkingOptions) info.thinkingOptions = normalized.thinkingOptions;
+      if (normalized.modelConfigById) {
+        info.modelConfigById = {
+          ...info.modelConfigById,
+          ...normalized.modelConfigById,
+        };
+      }
       info = applyInfoCatalog(info);
       this.#rememberCatalog(agentId, cwd, {
         modes: info.modes,
         models: info.models,
         thoughtLevels: info.thoughtLevels,
         fastOptions: info.fastOptions,
+        contextOptions: info.contextOptions,
+        thinkingOptions: info.thinkingOptions,
+        modelConfigById: info.modelConfigById,
       });
       this.#persistInfo(info);
       this.#db.updateRemoteSession(sessionId, remoteSessionId, compat.resume);
@@ -1021,6 +1259,10 @@ export class SessionStore {
         entry.info.thoughtLevels.currentId = trimmedValue;
       } else if (entry.info.fastOptions?.configId === trimmedConfigId) {
         entry.info.fastOptions.currentId = trimmedValue;
+      } else if (entry.info.contextOptions?.configId === trimmedConfigId) {
+        entry.info.contextOptions.currentId = trimmedValue;
+      } else if (entry.info.thinkingOptions?.configId === trimmedConfigId) {
+        entry.info.thinkingOptions.currentId = trimmedValue;
       }
       entry.info.updatedAt = new Date().toISOString();
       this.#persistInfo(entry.info);
@@ -1099,12 +1341,22 @@ export class SessionStore {
     const currentModelId = entry.info.models?.currentModelId ?? null;
     const live = sessionInfoToConfigDto(entry.info);
     const liveHasThoughtOrFast =
-      live.thoughtLevels.length > 0 || live.fastOptions.length > 0;
+      live.thoughtLevels.length > 0 ||
+      live.fastOptions.length > 0 ||
+      live.contextOptions.length > 0 ||
+      live.thinkingOptions.length > 0;
     const discovery = resolveAgentCompat(entry.info.agent).configDiscovery;
+    const advertisedAxes = entry.info.modelConfigById?.[modelId];
+    const hasPerModelAdvertisedMap =
+      !!entry.info.modelConfigById &&
+      Object.keys(entry.info.modelConfigById).length > 0;
     const cached = this.#cachedModelConfig(sessionId, modelId);
     const cachedUsable =
       !!cached &&
-      (cached.thoughtLevels.length > 0 || cached.fastOptions.length > 0);
+      (cached.thoughtLevels.length > 0 ||
+        cached.fastOptions.length > 0 ||
+        cached.contextOptions.length > 0 ||
+        cached.thinkingOptions.length > 0);
 
     if (currentModelId === modelId) {
       if (liveHasThoughtOrFast || discovery === "advertised") {
@@ -1127,18 +1379,31 @@ export class SessionStore {
         requestedModelId: modelId,
         hasCachedSnapshot: cachedUsable,
         liveHasThoughtOrFast,
+        hasAdvertisedModelSnapshot: !!advertisedAxes,
+        hasPerModelAdvertisedMap,
       })
     ) {
+      if (advertisedAxes) {
+        const overlay = overlayDtoWithModelAxes(live, advertisedAxes, modelId);
+        this.#rememberModelConfig(sessionId, overlay);
+        return overlay;
+      }
       if (cachedUsable && cached) {
         return {
           ...live,
           currentModelId: modelId,
           thoughtLevels: cached.thoughtLevels,
           fastOptions: cached.fastOptions,
+          contextOptions: cached.contextOptions,
+          thinkingOptions: cached.thinkingOptions,
           thoughtLevelConfigId: cached.thoughtLevelConfigId,
           currentThoughtLevelId: cached.currentThoughtLevelId,
           fastConfigId: cached.fastConfigId,
           currentFastId: cached.currentFastId,
+          contextConfigId: cached.contextConfigId,
+          currentContextId: cached.currentContextId,
+          thinkingConfigId: cached.thinkingConfigId,
+          currentThinkingId: cached.currentThinkingId,
           modelId,
         };
       }
@@ -1229,15 +1494,47 @@ export class SessionStore {
     if (normalized.modes) entry.info.modes = normalized.modes;
     if (normalized.models) entry.info.models = normalized.models;
     const catalogRefresh = Boolean(normalized.models || normalized.modes);
+    const discovery = resolveAgentCompat(entry.info.agent).configDiscovery;
+    // Per-model thought must not linger across a catalog refresh that omitted
+    // it. Advertised session-level thought must be kept — wiping it would
+    // force a later probe that advertised agents should never need.
     if (normalized.thoughtLevels) {
       entry.info.thoughtLevels = normalized.thoughtLevels;
-    } else if (catalogRefresh) {
+    } else if (
+      catalogRefresh &&
+      discovery === "per-model-probe-fallback"
+    ) {
       entry.info.thoughtLevels = undefined;
     }
     if (normalized.fastOptions) {
       entry.info.fastOptions = normalized.fastOptions;
-    } else if (catalogRefresh) {
+    } else if (
+      catalogRefresh &&
+      discovery === "per-model-probe-fallback"
+    ) {
       entry.info.fastOptions = undefined;
+    }
+    if (normalized.contextOptions) {
+      entry.info.contextOptions = normalized.contextOptions;
+    } else if (
+      catalogRefresh &&
+      discovery === "per-model-probe-fallback"
+    ) {
+      entry.info.contextOptions = undefined;
+    }
+    if (normalized.thinkingOptions) {
+      entry.info.thinkingOptions = normalized.thinkingOptions;
+    } else if (
+      catalogRefresh &&
+      discovery === "per-model-probe-fallback"
+    ) {
+      entry.info.thinkingOptions = undefined;
+    }
+    if (normalized.modelConfigById) {
+      entry.info.modelConfigById = {
+        ...entry.info.modelConfigById,
+        ...normalized.modelConfigById,
+      };
     }
     entry.info.updatedAt = new Date().toISOString();
     this.#rememberCatalog(entry.info.agent, entry.info.cwd, normalized);
@@ -1360,12 +1657,39 @@ export class SessionStore {
           };
           changed = true;
         }
+        if (!entry.info.contextOptions && cached?.contextOptions) {
+          entry.info = {
+            ...entry.info,
+            contextOptions: cached.contextOptions,
+            updatedAt: new Date().toISOString(),
+          };
+          changed = true;
+        }
+        if (!entry.info.thinkingOptions && cached?.thinkingOptions) {
+          entry.info = {
+            ...entry.info,
+            thinkingOptions: cached.thinkingOptions,
+            updatedAt: new Date().toISOString(),
+          };
+          changed = true;
+        }
+        if (!entry.info.modelConfigById && cached?.modelConfigById) {
+          entry.info = {
+            ...entry.info,
+            modelConfigById: cached.modelConfigById,
+            updatedAt: new Date().toISOString(),
+          };
+          changed = true;
+        }
       }
       this.#rememberCatalog(entry.info.agent, entry.info.cwd, {
         modes: entry.info.modes,
         models: entry.info.models,
         thoughtLevels: entry.info.thoughtLevels,
         fastOptions: entry.info.fastOptions,
+        contextOptions: entry.info.contextOptions,
+        thinkingOptions: entry.info.thinkingOptions,
+        modelConfigById: entry.info.modelConfigById,
       });
       if (changed) this.#persistInfo(entry.info);
       return;
@@ -1411,6 +1735,26 @@ export class SessionStore {
       catalog.fastOptions
     ) {
       entry.info.fastOptions = catalog.fastOptions;
+      changed = true;
+    }
+    if (
+      discovery === "advertised" &&
+      !entry.info.contextOptions &&
+      catalog.contextOptions
+    ) {
+      entry.info.contextOptions = catalog.contextOptions;
+      changed = true;
+    }
+    if (
+      discovery === "advertised" &&
+      !entry.info.thinkingOptions &&
+      catalog.thinkingOptions
+    ) {
+      entry.info.thinkingOptions = catalog.thinkingOptions;
+      changed = true;
+    }
+    if (!entry.info.modelConfigById && catalog.modelConfigById) {
+      entry.info.modelConfigById = catalog.modelConfigById;
       changed = true;
     }
     if (changed) {
@@ -1523,6 +1867,9 @@ export class SessionStore {
         ...next,
         thoughtLevels: next.thoughtLevels ?? live.info.thoughtLevels,
         fastOptions: next.fastOptions ?? live.info.fastOptions,
+        contextOptions: next.contextOptions ?? live.info.contextOptions,
+        thinkingOptions: next.thinkingOptions ?? live.info.thinkingOptions,
+        modelConfigById: next.modelConfigById ?? live.info.modelConfigById,
       };
       return live.info;
     }

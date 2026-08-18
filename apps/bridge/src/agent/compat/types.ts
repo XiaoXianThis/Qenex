@@ -57,6 +57,12 @@ export interface AgentCompat {
   loginArgv?: string[];
   configDiscovery: ConfigDiscovery;
   resume: ResumeBehavior;
+  /**
+   * Extra `_meta` on ACP initialize `clientCapabilities`. Provider replaces
+   * the whole capabilities object (`??`), so spawn merges this onto the
+   * default fs/terminal flags. Cursor: `{ parameterizedModelPicker: true }`.
+   */
+  initializeMeta?: Record<string, unknown>;
   classifyError?(error: unknown, phase: AgentPhase): NormalizedAgentError | null;
   /**
    * Optional rewrite of advertised/probed catalog before session-store writes
@@ -64,6 +70,38 @@ export interface AgentCompat {
    * session-store only calls this when present.
    */
   normalizeCatalog?(cfg: NormalizedAcpSessionConfig): NormalizedAcpSessionConfig;
+}
+
+/** Provider default when `initialize.clientCapabilities` is omitted. */
+export const DEFAULT_ACP_CLIENT_CAPABILITIES = {
+  fs: { readTextFile: false, writeTextFile: false },
+  terminal: false,
+} as const;
+
+/**
+ * ACP initialize payload for `createACPProvider`. `protocolVersion` is left
+ * unset so the provider fills its SDK constant.
+ */
+export function acpInitializeFromCompat(
+  compat: Pick<AgentCompat, "initializeMeta">,
+):
+  | {
+      clientCapabilities: {
+        fs: { readTextFile: boolean; writeTextFile: boolean };
+        terminal: boolean;
+        _meta: Record<string, unknown>;
+      };
+    }
+  | undefined {
+  const meta = compat.initializeMeta;
+  if (!meta || Object.keys(meta).length === 0) return undefined;
+  return {
+    clientCapabilities: {
+      fs: { ...DEFAULT_ACP_CLIENT_CAPABILITIES.fs },
+      terminal: DEFAULT_ACP_CLIENT_CAPABILITIES.terminal,
+      _meta: meta,
+    },
+  };
 }
 
 /**
@@ -297,6 +335,13 @@ export function extractAuthMethods(error: unknown): AgentAuthMethod[] {
   return normalizeAuthMethods(found);
 }
 
+/** Personal Google / Code Assist-for-individuals OAuth is retired (June 2026). */
+export function isGeminiConsumerOauthBlocked(error: unknown): boolean {
+  return /no longer supported for Gemini Code Assist for individuals|migrate to the Antigravity|antigravity\.google/i.test(
+    errorText(error),
+  );
+}
+
 export function inspectAgentError(
   error: unknown,
 ): "auth" | "spawn" | "balance" | "model" | null {
@@ -308,6 +353,10 @@ export function inspectAgentError(
     )
   ) {
     return "balance";
+  }
+  // Must run before the -32000 / "authenticating" auth match.
+  if (isGeminiConsumerOauthBlocked(error)) {
+    return null;
   }
   if (jsonRpcCode(error) === ACP_AUTH_REQUIRED_ERROR_CODE) {
     return "auth";
