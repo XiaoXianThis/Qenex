@@ -24,6 +24,7 @@ import {
   acpInitializeFromCompat,
   errorText,
   inspectAgentError,
+  isAcpMethodNotFound,
 } from "../src/agent/compat/types.ts";
 
 describe("errorText / inspectAgentError", () => {
@@ -63,6 +64,24 @@ describe("errorText / inspectAgentError", () => {
     expect(
       inspectAgentError({ code: -32000, message: "Internal error" }),
     ).toBe("auth");
+  });
+
+  test("detects JSON-RPC method not found", () => {
+    expect(
+      isAcpMethodNotFound({
+        code: -32601,
+        message: '"Method not found": session/set_config_option',
+        data: { method: "session/set_config_option" },
+      }),
+    ).toBe(true);
+    expect(
+      isAcpMethodNotFound(
+        new Error('"Method not found": session/set_config_option'),
+      ),
+    ).toBe(true);
+    expect(
+      isAcpMethodNotFound({ code: -32602, message: "Invalid params" }),
+    ).toBe(false);
   });
 });
 

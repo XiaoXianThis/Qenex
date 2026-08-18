@@ -227,6 +227,8 @@ export function errorText(error: unknown): string {
   return parts.join(" ").trim();
 }
 
+const JSON_RPC_METHOD_NOT_FOUND = -32601;
+
 function jsonRpcCode(error: unknown): number | null {
   const seen = new Set<unknown>();
   const visit = (value: unknown, depth: number): number | null => {
@@ -239,6 +241,12 @@ function jsonRpcCode(error: unknown): number | null {
     return visit(extra.data, depth + 1) ?? visit(extra.cause, depth + 1);
   };
   return visit(error, 0);
+}
+
+/** JSON-RPC -32601, or a wrapped "Method not found" from the ACP child. */
+export function isAcpMethodNotFound(error: unknown): boolean {
+  if (jsonRpcCode(error) === JSON_RPC_METHOD_NOT_FOUND) return true;
+  return /method not found/i.test(errorText(error));
 }
 
 function isMethodish(value: unknown): boolean {

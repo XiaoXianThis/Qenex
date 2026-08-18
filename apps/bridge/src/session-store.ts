@@ -9,6 +9,7 @@ import {
 import {
   errorText,
   cliLoginCommand,
+  isAcpMethodNotFound,
   isAuthRequiredErrorCode,
   normalizeAuthMethods,
   type ConfigDiscovery,
@@ -1121,59 +1122,70 @@ export class SessionStore {
     }
     return this.#withSessionOp(sessionId, "set-config-option", async (signal) => {
       const entry = await this.ensureOpen(sessionId);
-      const response = await rejectWhenAborted(
-        signal,
-        setSessionConfigOption(entry.provider, {
-          sessionId: entry.remoteSessionId,
-          configId: trimmedConfigId,
-          value: trimmedValue,
-        }),
-      );
-      if (response === undefined) {
-        if (trimmedConfigId === MODE_THOUGHT_CONFIG_ID) {
-          try {
-            await rejectWhenAborted(
-              signal,
-              entry.provider.setMode(trimmedValue),
-            );
-          } catch (err) {
-            if (err instanceof BridgeError) throw err;
+      // pi-acp (and similar) lift Thinking modes into thoughtLevels with
+      // synthetic configId "mode". Those agents implement session/set_mode,
+      // not session/set_config_option — calling the latter logs JSON-RPC
+      // -32601 and never reached the setMode fallback.
+      if (trimmedConfigId === MODE_THOUGHT_CONFIG_ID) {
+        await this.#setModeFromConfigOption(entry, trimmedValue, signal);
+      } else {
+        let response: { configOptions?: unknown } | undefined;
+        try {
+          response = await rejectWhenAborted(
+            signal,
+            setSessionConfigOption(entry.provider, {
+              sessionId: entry.remoteSessionId,
+              configId: trimmedConfigId,
+              value: trimmedValue,
+            }),
+          );
+        } catch (err) {
+          if (err instanceof BridgeError && err.code === "request_aborted") {
+            throw err;
+          }
+          if (isAcpMethodNotFound(err)) {
             throw new BridgeError(
-              "set_mode_failed",
-              errorText(err) || "Failed to set mode",
-              502,
+              "config_option_unsupported",
+              `${entry.info.agent} does not support session configuration options`,
+              409,
             );
           }
-          if (entry.info.thoughtLevels?.configId === MODE_THOUGHT_CONFIG_ID) {
-            entry.info.thoughtLevels.currentId = trimmedValue;
+          const classified = resolveAgentCompat(entry.info.agent).classifyError?.(
+            err,
+            "config",
+          );
+          if (classified) {
+            throw new BridgeError(
+              classified.code,
+              classified.message,
+              classified.status,
+              classified.details,
+            );
           }
-          if (
-            entry.info.modes?.availableModes?.some(
-              (mode) => mode.id === trimmedValue,
-            )
-          ) {
-            entry.info.modes = {
-              ...entry.info.modes,
-              currentModeId: trimmedValue,
-            };
-          }
-        } else {
+          throw new BridgeError(
+            "set_config_option_failed",
+            errorText(err) || "Failed to set config option",
+            502,
+          );
+        }
+        if (response === undefined) {
           throw new BridgeError(
             "config_option_unsupported",
             `${entry.info.agent} does not support session configuration options`,
             409,
           );
         }
-      } else if (Array.isArray(response.configOptions)) {
-        this.#applyConfigOptions(entry, response.configOptions);
-      } else if (entry.info.thoughtLevels?.configId === trimmedConfigId) {
-        entry.info.thoughtLevels.currentId = trimmedValue;
-      } else if (entry.info.fastOptions?.configId === trimmedConfigId) {
-        entry.info.fastOptions.currentId = trimmedValue;
-      } else if (entry.info.contextOptions?.configId === trimmedConfigId) {
-        entry.info.contextOptions.currentId = trimmedValue;
-      } else if (entry.info.thinkingOptions?.configId === trimmedConfigId) {
-        entry.info.thinkingOptions.currentId = trimmedValue;
+        if (Array.isArray(response.configOptions)) {
+          this.#applyConfigOptions(entry, response.configOptions);
+        } else if (entry.info.thoughtLevels?.configId === trimmedConfigId) {
+          entry.info.thoughtLevels.currentId = trimmedValue;
+        } else if (entry.info.fastOptions?.configId === trimmedConfigId) {
+          entry.info.fastOptions.currentId = trimmedValue;
+        } else if (entry.info.contextOptions?.configId === trimmedConfigId) {
+          entry.info.contextOptions.currentId = trimmedValue;
+        } else if (entry.info.thinkingOptions?.configId === trimmedConfigId) {
+          entry.info.thinkingOptions.currentId = trimmedValue;
+        }
       }
       entry.info.updatedAt = new Date().toISOString();
       this.#persistInfo(entry.info);
@@ -1181,6 +1193,35 @@ export class SessionStore {
       this.#rememberModelConfig(sessionId, dto);
       return dto;
     });
+  }
+
+  async #setModeFromConfigOption(
+    entry: SessionEntry,
+    modeId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await rejectWhenAborted(signal, this.#ensureSessionCatalog(entry));
+    try {
+      await rejectWhenAborted(signal, entry.provider.setMode(modeId));
+    } catch (err) {
+      if (err instanceof BridgeError) throw err;
+      throw new BridgeError(
+        "set_mode_failed",
+        errorText(err) || "Failed to set mode",
+        502,
+      );
+    }
+    if (entry.info.thoughtLevels?.configId === MODE_THOUGHT_CONFIG_ID) {
+      entry.info.thoughtLevels.currentId = modeId;
+    }
+    if (
+      entry.info.modes?.availableModes?.some((mode) => mode.id === modeId)
+    ) {
+      entry.info.modes = {
+        ...entry.info.modes,
+        currentModeId: modeId,
+      };
+    }
   }
 
   /**
