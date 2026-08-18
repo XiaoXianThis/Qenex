@@ -35,17 +35,7 @@ export type EnsureSessionResult = {
 export type EnsureSessionResponse = {
   taskId: string;
   agentSessionId: string;
-  modes?: unknown;
-  models?: unknown;
-  currentModeId?: string;
-  thoughtLevels?: unknown;
-  thoughtLevelConfigId?: string;
-  currentThoughtLevelId?: string;
-  fastOptions?: unknown;
-  fastConfigId?: string;
-  currentFastId?: string;
-  currentModelId?: string;
-};
+} & SessionConfigResponse;
 
 export type SessionConfigResponse = {
   modes?: unknown;
@@ -58,6 +48,12 @@ export type SessionConfigResponse = {
   fastConfigId?: string;
   currentFastId?: string;
   currentModelId?: string;
+  contextOptions?: unknown;
+  thinkingOptions?: unknown;
+  contextConfigId?: string;
+  currentContextId?: string;
+  thinkingConfigId?: string;
+  currentThinkingId?: string;
 };
 
 export type TaskSummary = {
@@ -93,12 +89,17 @@ function toSessionConfig(
   const models = parseSessionOptions(payload.models);
   const thoughtLevels = parseSessionOptions(payload.thoughtLevels);
   const fastOptions = parseSessionOptions(payload.fastOptions);
+  const contextOptions = parseSessionOptions(payload.contextOptions);
+  const thinkingOptions = parseSessionOptions(payload.thinkingOptions);
 
   return {
+    ...EMPTY_SESSION_CONFIG,
     modes,
     models,
     thoughtLevels,
     fastOptions,
+    contextOptions,
+    thinkingOptions,
     currentModeId:
       payload.currentModeId ??
       modes[0]?.id ??
@@ -117,6 +118,16 @@ function toSessionConfig(
       fastOptions[0]?.id ??
       null,
     fastConfigId: payload.fastConfigId ?? null,
+    currentContextId:
+      payload.currentContextId ??
+      contextOptions[0]?.id ??
+      null,
+    contextConfigId: payload.contextConfigId ?? null,
+    currentThinkingId:
+      payload.currentThinkingId ??
+      thinkingOptions[0]?.id ??
+      null,
+    thinkingConfigId: payload.thinkingConfigId ?? null,
     ready,
     loading: false,
     error: null,
