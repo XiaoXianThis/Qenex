@@ -38,15 +38,18 @@
   --page-padding: 1.25rem;
   --scrollbar-size: 6px;
   --thread-max-width: 800px;
+  /* Inner inset of message text/bubbles inside the shared column. */
+  --thread-inline-pad: 1rem;
   --composer-radius: 1rem;
   --composer-padding: 8px;
+  --composer-edge: 0.75rem;
   --composer-bg: rgb(255 255 255 / 0.3);
   --composer-shadow: none;
-  --background: #f5f5f5;
+  --background: #ffffff;
   --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
+  --card: #f5f5f5;
   --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
+  --popover: #f5f5f5;
   --popover-foreground: oklch(0.141 0.005 285.823);
   --primary: oklch(0.21 0.006 285.885);
   --primary-foreground: oklch(0.985 0 0);
@@ -106,9 +109,9 @@
   .page-padding-b {
     padding-bottom: var(--page-padding);
   }
-  /** 输入框面板：贴消息区上沿，左右下留白（与 --composer-padding 无关） */
+  /** 输入框相对窗口：左右与底部同一留白。消息栏与输入框共用此外边距以居中对齐。 */
   [data-layout-panel="composer"] {
-    padding: 0 0.75rem 0.75rem;
+    padding: 0;
   }
   /** 纵向滚动条始终显示（即使内容不足一屏）；配合 .page-padding-x-scroll */
   .overflow-y-scroll-stable {
@@ -296,15 +299,46 @@
   animation: thread-welcome-dot-blink 1s step-end infinite;
 }
 
-/* Turn-level waiting caret (same blink as welcome; not bound to a text part). */
+/* assistant-ui markdown ● wraps the last line and jumps bubble height. */
+.aui-md[data-status="running"] > :last-child::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Reserved one-line slot: fade the dot, never unmount / never change height. */
 .aui-turn-caret {
-  display: inline-block;
-  margin-left: 0.25rem;
-  margin-right: 0.25rem;
+  display: block;
+  height: 1.25em;
+  line-height: 1.25em;
+  pointer-events: none;
   font-family:
     ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
     "Segoe UI Symbol", "Noto Color Emoji";
-  animation: thread-welcome-dot-blink 1s step-end infinite;
+}
+
+.aui-turn-caret-fade {
+  display: inline-block;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.aui-turn-caret[data-visible] .aui-turn-caret-fade {
+  opacity: 1;
+}
+
+@keyframes aui-turn-caret-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.12;
+  }
+}
+
+.aui-turn-caret-dot {
+  display: inline-block;
+  animation: aui-turn-caret-pulse 1.2s ease-in-out infinite;
 }
 
 /* 组件列表：可滚动但隐藏滚动条 */

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isToolCallShimmerActive } from "./tool-call-status.ts";
+import {
+  isToolCallShimmerActive,
+  isTrailingToolGroup,
+  toolGroupShouldAutoOpen,
+} from "./tool-call-status.ts";
 
 describe("isToolCallShimmerActive", () => {
   test("running with no result shimmers while the turn is in flight", () => {
@@ -64,6 +68,66 @@ describe("isToolCallShimmerActive", () => {
       isToolCallShimmerActive(
         { status: { type: "running" }, isError: true },
         true,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("toolGroupShouldAutoOpen", () => {
+  test("stays open between sequential tools while the turn is busy", () => {
+    expect(
+      toolGroupShouldAutoOpen({
+        anyToolActive: false,
+        chatBusy: true,
+        trailing: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("collapses after the model moves on to text", () => {
+    expect(
+      toolGroupShouldAutoOpen({
+        anyToolActive: false,
+        chatBusy: true,
+        trailing: false,
+      }),
+    ).toBe(false);
+  });
+
+  test("collapses when the turn is idle", () => {
+    expect(
+      toolGroupShouldAutoOpen({
+        anyToolActive: false,
+        chatBusy: false,
+        trailing: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isTrailingToolGroup", () => {
+  test("treats empty trailing text as still trailing", () => {
+    expect(
+      isTrailingToolGroup(
+        [
+          { type: "tool-call" },
+          { type: "tool-call" },
+          { type: "text", text: "" },
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  test("a following text part ends the group", () => {
+    expect(
+      isTrailingToolGroup(
+        [
+          { type: "tool-call" },
+          { type: "tool-call" },
+          { type: "text", text: "done" },
+        ],
+        1,
       ),
     ).toBe(false);
   });

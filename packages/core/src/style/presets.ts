@@ -14,14 +14,14 @@ export type StyleThemePreset = {
 /** 暗色主题（与现有亮色 token 结构对齐） */
 export const DARK_THEME: ThemeTokens = {
   colors: {
-    background: "oklch(0.141 0.005 285.823)",
+    background: "#201f1f",
     foreground: "oklch(0.985 0 0)",
     primary: "oklch(0.92 0.004 286.32)",
     primaryForeground: "oklch(0.21 0.006 285.885)",
-    muted: "oklch(0.274 0.006 286.033)",
+    muted: "oklch(0.38 0.006 286.033)",
     mutedForeground: "oklch(0.705 0.015 286.067)",
     border: "oklch(1 0 0 / 10%)",
-    card: "oklch(0.21 0.006 285.885)",
+    card: "oklch(0.34 0.006 286.033)",
     destructive: "oklch(0.704 0.191 22.216)",
   },
   radii: {

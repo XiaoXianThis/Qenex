@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Mirrors useAutoCollapsibleOpen resolution (uncontrolled):
- * userOpen ?? autoOpen ?? defaultOpen
+ * userOpen ?? (autoOpen || defaultOpen)
+ * `autoOpen` is a live follow flag; `false` must not swallow defaultOpen.
  */
 function resolveOpen(
   userOpen: boolean | null,
   autoOpen: boolean,
   defaultOpen = false,
 ): boolean {
-  return userOpen ?? autoOpen ?? defaultOpen;
+  return userOpen ?? (autoOpen || defaultOpen);
 }
 
 function isPreview(
@@ -105,5 +109,16 @@ describe("auto collapsible open semantics", () => {
     expect(resolveOpen(null, streaming)).toBe(true);
     streaming = false;
     expect(resolveOpen(null, streaming)).toBe(false);
+  });
+
+  test("multi-tool groups expand while in flight then collapse", () => {
+    expect(resolveOpen(null, true, false)).toBe(true);
+    expect(resolveOpen(null, false, false)).toBe(false);
+
+    const root = dirname(fileURLToPath(import.meta.url));
+    const thread = readFileSync(join(root, "thread.tsx"), "utf8");
+    const group = readFileSync(join(root, "tool-group.tsx"), "utf8");
+    expect(thread).toContain("<ToolGroupRoot autoOpen={autoOpen}>");
+    expect(group).toContain("defaultOpen = false");
   });
 });

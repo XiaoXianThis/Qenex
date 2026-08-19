@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, memo, useContext, useState } from "react";
+import { WrenchIcon } from "lucide-react";
 import {
   useToolCallElapsed,
   type ToolApprovalOption,
@@ -83,7 +84,7 @@ function ToolFallbackRoot({
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "aui-tool-fallback-root group/tool-fallback-root mb-1 w-full",
+        "aui-tool-fallback-root group/tool-fallback-root w-full",
         className,
       )}
       style={
@@ -184,6 +185,7 @@ function ToolFallbackTrigger({
         isCancelled && "line-through opacity-70",
         className,
       )}
+      icon={WrenchIcon}
       label={label}
       meta={!active ? <ToolFallbackDuration /> : undefined}
       active={active}
@@ -226,7 +228,7 @@ function ToolFallbackContent({
           "group-data-[state=open]/collapsible-content:animate-in group-data-[state=open]/collapsible-content:fade-in-0 group-data-[state=open]/collapsible-content:slide-in-from-top-1",
           "group-data-[state=closed]/collapsible-content:animate-out group-data-[state=closed]/collapsible-content:fade-out-0 group-data-[state=closed]/collapsible-content:slide-out-to-top-1",
           "group-data-[state=closed]/collapsible-content:duration-(--animation-duration) group-data-[state=open]/collapsible-content:duration-(--animation-duration)",
-          compact ? "" : "flex flex-col gap-2 ps-0.5 pt-1 pb-2",
+          compact ? "" : "flex flex-col gap-2 py-1",
           isPreview && cn(PREVIEW_MAX_H, "overflow-hidden"),
         )}
       >

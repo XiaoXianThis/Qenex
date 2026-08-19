@@ -36,11 +36,12 @@ function followLatestOrLock(lockScroll: () => void) {
 type UseAutoCollapsibleOpenOptions = {
   /**
    * 自动展开条件（streaming / tool running / 审批中）。
-   * 为 true 时自动展开；变 false 且用户未手动干预时自动收起。
+   * 为 true 时自动展开；变 false 且用户未手动干预时回到 defaultOpen。
    */
   autoOpen: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Uncontrolled initial / fallback open when autoOpen is false. */
   defaultOpen?: boolean;
   animationDurationMs?: number;
   /**
@@ -70,7 +71,7 @@ export function useAutoCollapsibleOpen({
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled
     ? controlledOpen
-    : (userOpen ?? autoOpen ?? initialOpenRef.current);
+    : (userOpen ?? (autoOpen || initialOpenRef.current));
   const isAutoMode = !isControlled && userOpen === null;
   const isPreview = autoOpen === true && isOpen && isAutoMode;
 

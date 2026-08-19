@@ -64,6 +64,61 @@ const CHAT_IDLE_TIMEOUT_MS = positiveTimeout(
   90_000,
 );
 
+export const CHAT_SSE_KEEPALIVE_MS = positiveTimeout(
+  process.env.QENEX_CHAT_SSE_KEEPALIVE_MS,
+  15_000,
+);
+
+type UiStreamChunkLike = {
+  type?: string;
+  id?: unknown;
+  toolCallId?: unknown;
+};
+
+export function isUiToolOpenChunk(type: string | undefined): boolean {
+  return (
+    type === "tool-input-start" ||
+    type === "tool-input-available" ||
+    type === "tool-call"
+  );
+}
+
+export function isUiToolCloseChunk(type: string | undefined): boolean {
+  return (
+    type === "tool-output-available" ||
+    type === "tool-output-error" ||
+    type === "tool-output-denied" ||
+    type === "tool-result"
+  );
+}
+
+export function uiChunkToolId(chunk: UiStreamChunkLike): string | undefined {
+  if (typeof chunk.toolCallId === "string" && chunk.toolCallId) {
+    return chunk.toolCallId;
+  }
+  if (typeof chunk.id === "string" && chunk.id) return chunk.id;
+  return undefined;
+}
+
+/** Track in-flight tool calls so idle timeout can pause during long tools / Ask. */
+export function trackOpenTools(
+  open: Set<string>,
+  chunk: UiStreamChunkLike,
+): Set<string> {
+  const type = chunk.type;
+  const id = uiChunkToolId(chunk);
+  if (isUiToolOpenChunk(type)) {
+    open.add(id ?? `__open:${type}:${open.size}`);
+  } else if (isUiToolCloseChunk(type)) {
+    if (id) open.delete(id);
+    else if (open.size === 1) {
+      const only = open.values().next().value;
+      if (only !== undefined) open.delete(only);
+    }
+  }
+  return open;
+}
+
 export function withChatIdleTimeout<T>(
   source: ReadableStream<T>,
   timeoutMs: number,
@@ -72,6 +127,7 @@ export function withChatIdleTimeout<T>(
 ): ReadableStream<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
+  const openTools = new Set<string>();
   const clear = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
@@ -103,7 +159,12 @@ export function withChatIdleTimeout<T>(
       },
       transform(chunk, controller) {
         if (settled) return;
-        arm(controller);
+        if (chunk && typeof chunk === "object" && "type" in chunk) {
+          trackOpenTools(openTools, chunk as UiStreamChunkLike);
+        }
+        // Long tools / approval waits emit no UI deltas; do not kill the SSE.
+        if (openTools.size > 0) clear();
+        else arm(controller);
         controller.enqueue(chunk);
       },
       flush() {
@@ -111,6 +172,71 @@ export function withChatIdleTimeout<T>(
       },
     }),
   );
+}
+
+/**
+ * Comment-frame keepalive so Bun / proxies do not close a silent SSE
+ * (tool execution can go minutes without UIMessage chunks).
+ */
+export function withSseKeepalive(
+  response: Response,
+  intervalMs = CHAT_SSE_KEEPALIVE_MS,
+): Response {
+  const body = response.body;
+  if (!body) return response;
+
+  const encoder = new TextEncoder();
+  let closed = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const keepalive = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`: keepalive ${Date.now()}\n\n`));
+        } catch {
+          closed = true;
+          clearInterval(keepalive);
+        }
+      }, intervalMs);
+      reader = body.getReader();
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader!.read();
+            if (done) break;
+            if (!closed && value) controller.enqueue(value);
+          }
+          if (!closed) {
+            closed = true;
+            controller.close();
+          }
+        } catch (error) {
+          if (!closed) {
+            closed = true;
+            controller.error(error);
+          }
+        } finally {
+          clearInterval(keepalive);
+        }
+      })();
+    },
+    cancel(reason) {
+      closed = true;
+      return reader?.cancel(reason) ?? body.cancel(reason);
+    },
+  });
+
+  const headers = new Headers(response.headers);
+  if (!headers.has("cache-control")) {
+    headers.set("cache-control", "no-cache, no-transform");
+  }
+  headers.set("connection", "keep-alive");
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export async function handleChat(
@@ -214,14 +340,16 @@ export async function handleChat(
       releaseLease,
     );
 
-    return createUIMessageStreamResponse({
-      stream: releaseWhenStreamSettles(stream, releaseLease) as typeof stream &
-        Parameters<typeof createUIMessageStreamResponse>[0]["stream"],
-      headers: {
-        "x-qenex-session-id": sessionId,
-        "x-qenex-agent": entry.info.agent,
-      },
-    });
+    return withSseKeepalive(
+      createUIMessageStreamResponse({
+        stream: releaseWhenStreamSettles(stream, releaseLease) as typeof stream &
+          Parameters<typeof createUIMessageStreamResponse>[0]["stream"],
+        headers: {
+          "x-qenex-session-id": sessionId,
+          "x-qenex-agent": entry.info.agent,
+        },
+      }),
+    );
   } catch (err) {
     releaseLease();
     throw err;

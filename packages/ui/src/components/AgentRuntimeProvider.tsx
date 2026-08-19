@@ -34,6 +34,10 @@ import { ChatHelpersProvider } from "@/components/ChatHelpersContext";
 import { ApprovalPollBridge } from "@/components/ApprovalPollBridge";
 import { AgentAuthDialog } from "@/components/AgentAuthDialog";
 import { ErrorOverlay } from "@/components/ErrorOverlay";
+import {
+  persistedMessageIsRicher,
+  shouldReconcileChatFinish,
+} from "@/components/chat-stream-reconcile";
 import { KeyRound, Loader2 } from "lucide-react";
 
 type AgentRuntimeProviderProps = {
@@ -65,23 +69,6 @@ function resolveChatUrl(base: string, input: string | URL | Request): string {
   if (input.startsWith("http://") || input.startsWith("https://")) return input;
   const path = input.startsWith("/") ? input : `/${input}`;
   return normalizedBase ? `${normalizedBase}${path}` : path;
-}
-
-function messageTextLength(message: UIMessage | undefined): number {
-  if (!message) return 0;
-  return (message.parts ?? []).reduce(
-    (length, part) =>
-      part.type === "text" && typeof part.text === "string"
-        ? length + part.text.length
-        : length,
-    0,
-  );
-}
-
-/** Only refetch persisted history when the finished stream looks empty/broken. */
-function shouldReconcileCompletedStream(message: UIMessage): boolean {
-  if (message.role !== "assistant") return true;
-  return messageTextLength(message) === 0;
 }
 
 function AisdkRuntimeInner({
@@ -130,8 +117,11 @@ function AisdkRuntimeInner({
     // Limit React/AUI mirror updates while retaining every append-only delta.
     throttle: 32,
     onFinish: ({ message, isAbort, isDisconnect, isError }) => {
-      if (isAbort || isDisconnect || isError) return;
-      if (!shouldReconcileCompletedStream(message)) return;
+      if (
+        !shouldReconcileChatFinish({ isAbort, isDisconnect, isError, message })
+      ) {
+        return;
+      }
       const finishedMessageId = message.id;
       void listAisdkSessionMessages(sessionId, host)
         .then((persisted) => {
@@ -141,10 +131,7 @@ function AisdkRuntimeInner({
             const currentLast = current.at(-1);
             if (currentLast?.id !== finishedMessageId) return current;
             const canonicalLast = canonical.at(-1);
-            if (
-              canonicalLast?.role !== "assistant" ||
-              messageTextLength(canonicalLast) < messageTextLength(currentLast)
-            ) {
+            if (!persistedMessageIsRicher(canonicalLast, currentLast)) {
               return current;
             }
             return canonical;

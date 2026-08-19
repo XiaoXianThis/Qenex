@@ -44,14 +44,14 @@ export const COMPOSER_SHADOW_PRESETS: Record<ComposerShadowPresetId, string> = {
 
 export const DEFAULT_THEME: ThemeTokens = {
   colors: {
-    background: "#f5f5f5",
+    background: "#ffffff",
     foreground: "oklch(0.141 0.005 285.823)",
     primary: "oklch(0.21 0.006 285.885)",
     primaryForeground: "oklch(0.985 0 0)",
     muted: "oklch(0.967 0.001 286.375)",
     mutedForeground: "oklch(0.552 0.016 285.938)",
     border: "oklch(0.92 0.004 286.32)",
-    card: "oklch(1 0 0)",
+    card: "#f5f5f5",
     destructive: "oklch(0.577 0.245 27.325)",
   },
   radii: {

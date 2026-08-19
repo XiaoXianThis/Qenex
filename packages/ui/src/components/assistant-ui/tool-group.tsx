@@ -6,6 +6,7 @@ import {
   type PropsWithChildren,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { WrenchIcon } from "lucide-react";
 import { CollapsiblePartTrigger } from "@/components/assistant-ui/collapsible-part-trigger";
 import { useAutoCollapsibleOpen } from "@/components/assistant-ui/use-auto-collapsible-open";
 import {
@@ -16,7 +17,7 @@ import { cn } from "@qenex/core";
 
 const ANIMATION_DURATION = 200;
 
-const toolGroupVariants = cva("aui-tool-group-root group/tool-group mb-1 w-full", {
+const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border py-2",
@@ -36,7 +37,7 @@ export type ToolGroupRootProps = Omit<
     onOpenChange?: (open: boolean) => void;
     defaultOpen?: boolean;
   /**
-   * 组内 tool 仍在跑时仅用于 Trigger shimmer；默认不自动展开（贴 Cursor）。
+   * 组内仍有未完成调用时自动展开；全部完成后收起（用户手动 toggle 后不再跟随）。
    */
   autoOpen?: boolean;
 };
@@ -103,6 +104,7 @@ function ToolGroupTrigger({
     <CollapsiblePartTrigger
       data-slot="tool-group-trigger"
       className={cn("aui-tool-group-trigger", className)}
+      icon={WrenchIcon}
       label={label}
       active={active}
       {...props}

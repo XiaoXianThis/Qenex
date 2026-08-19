@@ -14,7 +14,11 @@ import {
   ReasoningText,
   ReasoningTrigger,
 } from "@/components/assistant-ui/reasoning";
-import { isToolCallShimmerActive } from "@/components/assistant-ui/tool-call-status";
+import {
+  isToolCallShimmerActive,
+  isTrailingToolGroup,
+  toolGroupShouldAutoOpen,
+} from "@/components/assistant-ui/tool-call-status";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import {
   ToolGroupContent,
@@ -42,7 +46,6 @@ import { MessageArtifacts } from "@/components/assistant-ui/message-artifacts";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
-  AuiIf,
   BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
@@ -60,19 +63,20 @@ import type { UIMessage } from "ai";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CopyIcon,
-  DownloadIcon,
   MoreHorizontalIcon,
   PencilIcon,
-  RefreshCwIcon,
   RotateCcwIcon,
   SquareIcon,
   KeyRound,
 } from "lucide-react";
+import {
+  assistantMessageCaretVisible,
+  isDuplicateLiveAssistant,
+} from "@/components/assistant-ui/thread-caret";
 import { threadMessagesFingerprint } from "@/components/assistant-ui/thread-fingerprint";
+import { TurnStreamingCaret } from "@/components/assistant-ui/turn-streaming-caret";
 import {
   createContext,
   useContext,
@@ -158,12 +162,22 @@ const ToolSequenceGroup: FC<
     }),
   );
 
+  const lastGroupIndex = group.indices.at(-1) ?? -1;
+  const trailing = useAuiState((s) =>
+    isTrailingToolGroup(s.message.parts, lastGroupIndex),
+  );
+  const autoOpen = toolGroupShouldAutoOpen({
+    anyToolActive: active,
+    chatBusy,
+    trailing,
+  });
+
   if (toolCount < 2) {
     return <div data-slot="aui_chain-of-thought">{children}</div>;
   }
 
   return (
-    <ToolGroupRoot>
+    <ToolGroupRoot autoOpen={autoOpen}>
       <ToolGroupTrigger count={toolCount} active={active} />
       <ToolGroupContent>{children}</ToolGroupContent>
     </ToolGroupRoot>
@@ -245,6 +259,15 @@ export const ThreadMessages: FC = () => {
           if (message.role === "user") {
             return <LiveUserMessage key={message.id} message={message} />;
           }
+          if (
+            isDuplicateLiveAssistant({
+              messageId: message.id,
+              messages: chat.messages,
+              threadIds,
+            })
+          ) {
+            return null;
+          }
           return <LiveAssistantFallback key={message.id} message={message} />;
         })}
         {optimisticWait ? (
@@ -301,7 +324,7 @@ const LiveUserMessage: FC<{ message: UIMessage }> = ({ message }) => {
       data-slot="aui_user-message-root"
       data-role="user"
       data-testid="live-user-message"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-4 duration-150 [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-(--thread-inline-pad) duration-150 [&:where(>*)]:col-start-2"
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-card text-card-foreground rounded-xl px-4 py-2 wrap-break-word whitespace-pre-wrap">
@@ -312,31 +335,19 @@ const LiveUserMessage: FC<{ message: UIMessage }> = ({ message }) => {
   );
 };
 
-/** Match AssistantMessage footer reserve so Live → MessageByIndex doesn't jump height. */
-const LIVE_ACTION_BAR_HEIGHT = "-mb-7.5 min-h-7.5 pt-1.5";
-
 const OPTIMISTIC_ASSISTANT_MESSAGE: UIMessage = {
   id: "optimistic-wait",
   role: "assistant",
   parts: [],
 };
 
-/** Whole-turn waiting caret — not bound to the current text part. */
-const TurnStreamingCaret: FC = () => (
-  <span
-    data-slot="aui_turn-streaming-caret"
-    className="aui-turn-caret"
-    aria-label="Assistant is working"
-  >
-    {"●"}
-  </span>
-);
-
 /** Assistant stub from useChat while ThreadPrimitive catches up / mid-stream. */
 const LiveAssistantFallback: FC<{ message: UIMessage }> = ({ message }) => {
+  const chat = useChatHelpers();
+  const caretVisible =
+    chat?.status === "submitted" || chat?.status === "streaming";
   const text = textFromUiMessage(message);
   const reasoning = reasoningFromUiMessage(message);
-  const indicator = <TurnStreamingCaret />;
 
   return (
     <div
@@ -347,7 +358,7 @@ const LiveAssistantFallback: FC<{ message: UIMessage }> = ({ message }) => {
     >
       <div
         data-slot="aui_assistant-message-content"
-        className="text-foreground px-4 leading-relaxed wrap-break-word"
+        className="text-foreground px-(--thread-inline-pad) leading-relaxed wrap-break-word"
       >
         {reasoning ? (
           <div className="text-muted-foreground mb-2 whitespace-pre-wrap text-xs">
@@ -356,14 +367,9 @@ const LiveAssistantFallback: FC<{ message: UIMessage }> = ({ message }) => {
         ) : null}
         {text ? (
           <div className="whitespace-pre-wrap">{text}</div>
-        ) : (
-          indicator
-        )}
+        ) : null}
+        <TurnStreamingCaret visible={Boolean(caretVisible)} />
       </div>
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", LIVE_ACTION_BAR_HEIGHT)}
-      />
     </div>
   );
 };
@@ -379,7 +385,7 @@ export const AisdkThreadMessages: FC = () => {
   return (
     <div
       data-slot="aui_message-group"
-      className="mb-14 flex flex-col gap-y-6 px-4 text-sm"
+      className="mb-14 flex flex-col gap-y-6 px-(--thread-inline-pad) text-sm"
     >
       {chat.messages.map((message) => {
         const texts = message.parts
@@ -659,7 +665,7 @@ export const ThreadWelcome: FC = () => {
 
 export const ThreadSuggestions: FC = () => {
   return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
+    <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-(--thread-inline-pad)">
       <ThreadPrimitive.Suggestions>
         {() => <ThreadSuggestionItem />}
       </ThreadPrimitive.Suggestions>
@@ -902,18 +908,21 @@ const AssistantMessage: FC = () => {
     ToolFallback: ToolFallbackComponent = ToolFallback,
     ReasoningGroup,
   } = useContext(ThreadComponentsContext);
+  const chat = useChatHelpers();
   const isLastMessage = useAuiState(
     (s) => s.thread.messages.at(-1)?.id === s.message.id,
   );
   const containsImage = useAuiState((s) =>
     messageContainsImage(s.message.parts),
   );
-
-  // reserves space for action bar and compensates with `-mb` for consistent msg spacing
-  // keeps hovered action bar from shifting layout (autohide doesn't support absolute positioning well)
-  // for pt-[n] use -mb-[n + 6] & min-h-[n + 6] to preserve compensation
-  const ACTION_BAR_PT = "pt-1.5";
-  const ACTION_BAR_HEIGHT = `-mb-7.5 min-h-7.5 ${ACTION_BAR_PT}`;
+  const threadRunning = useAuiState((s) => s.thread.isRunning);
+  const chatBusy =
+    chat?.status === "submitted" || chat?.status === "streaming";
+  const caretVisible = assistantMessageCaretVisible({
+    isLastThreadMessage: isLastMessage,
+    busy: Boolean(chatBusy || threadRunning),
+    lastChatRole: chat?.messages.at(-1)?.role,
+  });
 
   return (
     <MessagePrimitive.Root
@@ -926,123 +935,69 @@ const AssistantMessage: FC = () => {
         // Keep the #4104 optimization for text-only messages. Image messages
         // need eager layout so their real height is known before scrolling in.
         className={cn(
-          "text-foreground px-4 leading-relaxed wrap-break-word",
+          "text-foreground px-(--thread-inline-pad) leading-relaxed wrap-break-word",
           !containsImage &&
             !isLastMessage &&
             "[contain-intrinsic-size:auto_24px] [content-visibility:auto]",
         )}
       >
-        <MessagePrimitive.GroupedParts
-          groupBy={groupPartByType({
-            reasoning: ["group-chainOfThought", "group-reasoning"],
-            "tool-call": ["group-chainOfThought"],
-            "standalone-tool-call": [],
-          })}
+        <div
+          data-slot="aui_assistant-message-parts"
+          className="flex flex-col gap-y-2"
         >
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-chainOfThought":
-                return (
-                  <ToolSequenceGroup group={part}>{children}</ToolSequenceGroup>
-                );
-              case "group-reasoning": {
-                if (ReasoningGroup) {
+          <MessagePrimitive.GroupedParts
+            indicator="never"
+            groupBy={groupPartByType({
+              reasoning: ["group-chainOfThought", "group-reasoning"],
+              "tool-call": ["group-chainOfThought"],
+              "standalone-tool-call": [],
+            })}
+          >
+            {({ part, children }) => {
+              switch (part.type) {
+                case "group-chainOfThought":
                   return (
-                    <ReasoningGroup group={part}>{children}</ReasoningGroup>
+                    <ToolSequenceGroup group={part}>
+                      {children}
+                    </ToolSequenceGroup>
+                  );
+                case "group-reasoning": {
+                  if (ReasoningGroup) {
+                    return (
+                      <ReasoningGroup group={part}>{children}</ReasoningGroup>
+                    );
+                  }
+                  return (
+                    <ThreadReasoningGroup group={part}>
+                      {children}
+                    </ThreadReasoningGroup>
                   );
                 }
-                return (
-                  <ThreadReasoningGroup group={part}>
-                    {children}
-                  </ThreadReasoningGroup>
-                );
+                case "text":
+                  return <MarkdownText />;
+                case "image":
+                  return <ChatMessageImage />;
+                case "reasoning":
+                  return <Reasoning {...part} />;
+                case "tool-call":
+                  return part.toolUI ?? <ToolFallbackComponent {...part} />;
+                case "data":
+                  return part.dataRendererUI;
+                case "indicator":
+                  // Reserved caret is always mounted below; AUI's indicator part
+                  // would mount/unmount and jump height.
+                  return null;
+                default:
+                  return null;
               }
-              case "text":
-                return <MarkdownText />;
-              case "image":
-                return <ChatMessageImage />;
-              case "reasoning":
-                return <Reasoning {...part} />;
-              case "tool-call":
-                return part.toolUI ?? <ToolFallbackComponent {...part} />;
-              case "data":
-                return part.dataRendererUI;
-              case "indicator":
-                return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
-                  </span>
-                );
-              default:
-                return null;
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
+            }}
+          </MessagePrimitive.GroupedParts>
+        </div>
+        <TurnStreamingCaret visible={caretVisible} />
         <AssistantMessageArtifacts />
         <MessageError />
       </div>
-
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
-      >
-        <BranchPicker />
-        <AssistantActionBar />
-      </div>
     </MessagePrimitive.Root>
-  );
-};
-
-const AssistantActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in col-start-3 row-start-2 -ms-1 flex gap-1 duration-200"
-    >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Refresh">
-          <RefreshCwIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Reload>
-      <ActionBarMorePrimitive.Root>
-        <ActionBarMorePrimitive.Trigger asChild>
-          <TooltipIconButton
-            tooltip="More"
-            className="data-[state=open]:bg-accent"
-          >
-            <MoreHorizontalIcon />
-          </TooltipIconButton>
-        </ActionBarMorePrimitive.Trigger>
-        <ActionBarMorePrimitive.Content
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          className="aui-action-bar-more-content bg-popover/95 text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5 shadow-lg backdrop-blur-sm"
-        >
-          <ActionBarPrimitive.ExportMarkdown asChild>
-            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none">
-              <DownloadIcon className="size-4" />
-              Export as Markdown
-            </ActionBarMorePrimitive.Item>
-          </ActionBarPrimitive.ExportMarkdown>
-        </ActionBarMorePrimitive.Content>
-      </ActionBarMorePrimitive.Root>
-    </ActionBarPrimitive.Root>
   );
 };
 
@@ -1055,7 +1010,7 @@ const UserMessage: FC = () => {
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
       className={cn(
-        "fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-4 duration-150 [&:where(>*)]:col-start-2",
+        "fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(88px,1fr)_auto] content-start gap-y-2 px-(--thread-inline-pad) duration-150 [&:where(>*)]:col-start-2",
         !containsImage &&
           "[contain-intrinsic-size:auto_60px] [content-visibility:auto]",
       )}
@@ -1120,7 +1075,7 @@ const EditComposer: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-4"
+      className="flex flex-col px-(--thread-inline-pad)"
     >
       <ComposerPrimitive.Root className="aui-edit-composer-root border-border/60 dark:border-muted-foreground/15 ms-auto flex w-full max-w-[85%] flex-col rounded-(--composer-radius) border bg-(--composer-bg)">
         <ComposerAttachments />

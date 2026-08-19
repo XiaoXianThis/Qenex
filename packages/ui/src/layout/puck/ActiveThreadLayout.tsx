@@ -234,7 +234,7 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
           data-layout-panel="messages"
           data-slot="aui_thread-messages"
           className={cn(
-            "relative page-padding-x-scroll page-padding-t flex min-h-full flex-col",
+            "relative px-(--composer-edge) page-padding-t flex min-h-full flex-col",
             layoutEditing &&
               "min-h-8 overflow-hidden border-[1px] border-dashed border-primary/40",
           )}
@@ -279,10 +279,11 @@ export const ActiveThreadLayout: FC<ActiveThreadLayoutProps> = ({
             layoutEditing
               ? "relative z-30 shrink-0 overflow-hidden bg-background pointer-events-auto"
               : composerOverlay
-                ? "absolute inset-x-0 bottom-0 z-20"
+                ? "absolute inset-x-0 bottom-0 z-20 px-(--composer-edge) pb-(--composer-edge)"
                 : cn(
-                    "relative shrink-0 overflow-hidden bg-background rounded-t-(--composer-radius)",
+                    "relative shrink-0 overflow-hidden bg-background rounded-t-(--composer-radius) px-(--composer-edge)",
                     !flushBottomComposer && "page-padding-b",
+                    flushBottomComposer && "pb-(--composer-edge)",
                   ),
           )}
         >

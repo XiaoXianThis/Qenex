@@ -24,3 +24,32 @@ export function isToolCallShimmerActive(
   if (type === "requires-action") return true;
   return type === "running" && chatBusy;
 }
+
+/** True when nothing after this tool run has started (text / next group). */
+export function isTrailingToolGroup(
+  parts: readonly { type: string; text?: string }[],
+  lastGroupIndex: number,
+): boolean {
+  for (let i = lastGroupIndex + 1; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part) continue;
+    if (part.type === "indicator") continue;
+    if (part.type === "text" && !part.text?.trim()) continue;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Keep a multi-tool group open across the gap between sequential calls.
+ * Collapse only when the turn is idle, or the model has moved on (text /
+ * another part after this group).
+ */
+export function toolGroupShouldAutoOpen(opts: {
+  anyToolActive: boolean;
+  chatBusy: boolean;
+  trailing: boolean;
+}): boolean {
+  if (opts.anyToolActive) return true;
+  return opts.chatBusy && opts.trailing;
+}

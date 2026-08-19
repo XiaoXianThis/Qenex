@@ -127,7 +127,7 @@ export const LayoutPageRoot: PuckComponent<LayoutPageProps> = (props) => {
   const stableTop = (
     <div
       className={cn(
-        "relative shrink-0 overflow-hidden",
+        "relative shrink-0 overflow-hidden bg-background",
         isEditing
           ? "pointer-events-auto"
           : !flushTopTabBar && "pt-2 page-padding-x",

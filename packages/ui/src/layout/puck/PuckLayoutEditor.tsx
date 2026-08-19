@@ -18,6 +18,8 @@ import {
   getComponentTypeInZone,
   layoutZoneFromDestination,
   parentIdForDepth,
+  selectActiveThemeCss,
+  useStyleStore,
   wouldExceedMaxDepth,
   type LayoutPresetId,
 } from "@qenex/core";
@@ -30,6 +32,7 @@ import {
 import "@puckeditor/core/no-external.css";
 import {
   useEffect,
+  useLayoutEffect,
   type FC,
   type RefObject,
 } from "react";
@@ -77,7 +80,9 @@ function paintIframeDocumentTheme(doc: Document) {
 
 /** iframe srcDoc 默认白底；样式镜像完成前先涂上宿主主题色，避免进编辑闪白 */
 function PuckIframeThemeBridge() {
-  useEffect(() => {
+  const themeCss = useStyleStore(selectActiveThemeCss);
+
+  useLayoutEffect(() => {
     let cancelled = false;
     let iframe: HTMLIFrameElement | null = null;
 
@@ -96,7 +101,10 @@ function PuckIframeThemeBridge() {
     const stopPoll = window.setTimeout(() => window.clearInterval(poll), 2500);
 
     const attach = () => {
-      iframe = document.querySelector("iframe#preview-frame");
+      const next = document.querySelector("iframe#preview-frame");
+      if (next === iframe) return;
+      iframe?.removeEventListener("load", onLoad);
+      iframe = next;
       iframe?.addEventListener("load", onLoad);
     };
     attach();
@@ -114,7 +122,7 @@ function PuckIframeThemeBridge() {
       window.clearTimeout(stopAttach);
       iframe?.removeEventListener("load", onLoad);
     };
-  }, []);
+  }, [themeCss]);
 
   return null;
 }

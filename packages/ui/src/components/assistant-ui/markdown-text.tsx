@@ -81,7 +81,8 @@ MermaidDiagram.displayName = "MermaidDiagram";
 const MarkdownTextImpl = () => {
   // useSmooth can stall mid-reveal after the chat stream ends (text part left as
   // state:"streaming" while useChat.status is already ready). Only animate while
-  // the turn is actually in flight so data-status / ● clear when ready.
+  // the turn is actually in flight. The CSS ● (dot.css) wraps the last line and
+  // jumps height — keep data-status complete; turn caret lives in thread.tsx.
   const partRunning = useAuiState((s) => s.part.status?.type === "running");
   const chat = useChatHelpers();
   const chatBusy =
@@ -98,11 +99,9 @@ const MarkdownTextImpl = () => {
           SyntaxHighlighter: MermaidDiagram,
         },
       }}
-      // Force CSS cursor off when the turn is idle — part.status can lag behind
-      // useChat.status after the stream closes (data-status stuck on "running").
       containerProps={
         {
-          "data-status": smooth ? "running" : "complete",
+          "data-status": "complete",
         } as HTMLAttributes<HTMLElement>
       }
       smooth={smooth}

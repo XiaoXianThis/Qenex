@@ -8,6 +8,7 @@ import {
   useRef,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { BrainCircuitIcon } from "lucide-react";
 import {
   useAuiState,
   type ReasoningMessagePartComponent,
@@ -26,7 +27,7 @@ const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 
-const reasoningVariants = cva("aui-reasoning-root mb-1 w-full", {
+const reasoningVariants = cva("aui-reasoning-root w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border px-3 py-2",
@@ -157,6 +158,7 @@ function ReasoningTrigger({
     <CollapsiblePartTrigger
       data-slot="reasoning-trigger"
       className={cn("aui-reasoning-trigger", className)}
+      icon={BrainCircuitIcon}
       label={label}
       meta={meta}
       active={active}
@@ -170,8 +172,6 @@ function ReasoningContent({
   children,
   ...props
 }: React.ComponentProps<typeof CollapsibleContent>) {
-  const isPreview = useContext(ReasoningPreviewContext);
-
   return (
     <CollapsibleContent
       data-slot="reasoning-content"
@@ -188,9 +188,7 @@ function ReasoningContent({
       )}
       {...props}
     >
-      <ReasoningFade side="top" />
       {children}
-      {isPreview ? <ReasoningFade /> : null}
     </CollapsibleContent>
   );
 }
@@ -223,7 +221,7 @@ function ReasoningText({
       ref={scrollRef}
       data-slot="reasoning-text"
       className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-0.5 pt-1 pb-2 leading-relaxed text-pretty",
+        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto py-1 leading-relaxed text-pretty",
         "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:animate-none",
         "group-data-[state=open]/collapsible-content:animate-in",
@@ -238,7 +236,10 @@ function ReasoningText({
       )}
       {...props}
     >
-      <div ref={contentRef} className="aui-reasoning-text-content space-y-4">
+      <div
+        ref={contentRef}
+        className="aui-reasoning-text-content space-y-4 font-normal [&_.aui-md-h1]:font-normal [&_.aui-md-h2]:font-normal [&_.aui-md-h3]:font-normal [&_.aui-md-h4]:font-normal [&_.aui-md-h5]:font-normal [&_.aui-md-h6]:font-normal [&_.aui-md-strong]:font-normal [&_b]:font-normal [&_strong]:font-normal"
+      >
         {children}
       </div>
     </div>
