@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   agentVersionDir,
   ensureQenexDirs,
+  resolveBunExecutable,
 } from "./paths.ts";
 import {
   getInstalled,
@@ -81,7 +82,7 @@ export async function installAgentWithProgress(
     const args = plan.package.args ?? [];
     env = { ...(plan.package.env ?? {}) };
     stage(emit, "download", `Installing npm package ${pkg}…`);
-    const bun = Bun.which("bun") ?? "bun";
+    const bun = resolveBunExecutable();
     // Fresh package.json + bun add
     const pkgJson = join(installPath, "package.json");
     if (!existsSync(pkgJson)) {

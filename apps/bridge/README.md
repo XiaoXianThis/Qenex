@@ -22,7 +22,20 @@ bun run dev:bridge
 
 默认：`http://127.0.0.1:8000`（仅本机）。环境变量：`QENEX_BRIDGE_PORT` / `QENEX_BRIDGE_HOST` / `QENEX_OPENCODE_BIN` / `QENEX_SESSIONS_DB` / `QENEX_CORS_ORIGINS`（Desktop / IDE 跨域）/ `QENEX_SESSION_INIT_TIMEOUT_MS`（Agent 初始化超时，默认 90000ms）/ `QENEX_CHAT_IDLE_TIMEOUT_MS`（流式输出空闲超时，默认 90000ms）。
 
-Desktop sidecar 与打包约定见归档 [`M7.md`](../../docs/archive/bridge-milestones/M7.md)。
+- 托管 Bun：[`docs/runtime-bun.md`](../../docs/runtime-bun.md)
+
+## 测试
+
+```bash
+# 封闭（CI）：不需要本机 OpenCode
+bun run test:bridge
+
+# 真机 OpenCode 验收
+bun run test:bridge:live
+
+# Agent 主路径矩阵（需本机已登录的 Agent）
+QENEX_LIVE_AGENTS=opencode,claude-acp bun run test:bridge:live-matrix
+```
 
 ## API
 

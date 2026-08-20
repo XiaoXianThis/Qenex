@@ -57,7 +57,9 @@ bun run verify:all
 
 打开 **Agent 设置**：从 [ACP Agent Registry](https://agentclientprotocol.com/rfds/acp-agent-registry) 发现/安装；未就绪走 ensure-ready。`auth_required` 时弹出 **AgentAuthDialog**（复制命令 → 登录 → 重试）。
 
-托管安装目录：`~/.qenex/{runtime,agents,installed.json,registry-cache.json}`（重置 App 时保留 `runtime/`）。
+托管安装目录：`~/.qenex/{runtime,agents,installed.json,registry-cache.json}`（重置 App 时保留 `runtime/`）。Desktop / IDE 首次启动会把钉死版本的 Bun 装进 `~/.qenex/runtime/bun`（规格见 [`docs/runtime-bun.md`](docs/runtime-bun.md)）。
+
+CI 默认跑封闭 `bun run test:bridge`（不依赖本机 OpenCode）。真机 Agent 矩阵：`QENEX_LIVE_AGENTS=… bun run test:bridge:live-matrix`。
 
 ## 架构
 
@@ -84,16 +86,16 @@ Agent 运行时适配见 [`docs/agent-compat.md`](./docs/agent-compat.md)。v0.3
 打 `v*` tag 触发 GitHub Actions，构建并上传到 **GitHub Release**（server / VS Code / JetBrains / Desktop）。完整说明见 [`RELEASE.md`](./RELEASE.md)。
 
 ```bash
-git tag v0.3.4
-git push origin v0.3.4
+git tag v0.3.5
+git push origin v0.3.5
 ```
 
 本地：
 
 ```bash
-bun run ci:release -- --platform darwin-arm64 --version 0.3.4
+bun run ci:release -- --platform darwin-arm64 --version 0.3.5
 # 或仅共享产物：
-bun run ci:release -- --platform linux-x64 --version 0.3.4 --products server,vscode,jetbrains
+bun run ci:release -- --platform linux-x64 --version 0.3.5 --products server,vscode,jetbrains
 ```
 
 ## 常用命令

@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.util.SystemInfo
 import java.net.ServerSocket
 import java.net.URI
@@ -48,7 +49,7 @@ class BridgeProcessManager {
             port?.let { return "http://127.0.0.1:$it" }
             val existing = startFuture
             if (existing != null) {
-                return existing.get(60, TimeUnit.SECONDS)
+                return existing.get(180, TimeUnit.SECONDS)
             }
 
             val future = CompletableFuture<String>()
@@ -79,7 +80,7 @@ class BridgeProcessManager {
     private fun doStart(pageOrigin: String?): String {
         val freePort = findFreePort()
         val pathEnv = augmentedPath()
-        val bun = findBun(pathEnv)
+        val bun = ensureBunWithProgress(pathEnv)
         val entry = resolveBridgeEntry()
         val bridgeCwd = if (entry.fileName.toString() == "index.js") {
             entry.parent
@@ -151,7 +152,40 @@ class BridgeProcessManager {
         }
     }
 
-    private fun findBun(pathEnv: String): String {
+    private fun findBun(pathEnv: String): String = ensureBun(pathEnv)
+
+    private fun ensureBunWithProgress(pathEnv: String): String {
+        val run = {
+            ProgressManager.getInstance().runProcessWithProgressSynchronously<String, Exception>(
+                {
+                    ProgressManager.getInstance().progressIndicator?.text = "正在安装 Bun"
+                    ensureBun(pathEnv)
+                },
+                "Qenex",
+                false,
+                null,
+            )
+        }
+        val app = ApplicationManager.getApplication()
+        if (app == null || app.isDispatchThread) return run()
+        var result: String? = null
+        var error: Exception? = null
+        app.invokeAndWait {
+            try {
+                result = run()
+            } catch (e: Exception) {
+                error = e
+            }
+        }
+        error?.let { throw it }
+        return result ?: ensureBun(pathEnv)
+    }
+
+    /**
+     * Resolve order: QENEX_BUN_BIN → ~/.qenex/runtime/bun → download pin → PATH / ~/.bun
+     * Download: https://github.com/oven-sh/bun/releases/download/bun-v{version}/bun-{os}-{arch}.zip
+     */
+    private fun ensureBun(pathEnv: String): String {
         val override = System.getenv("QENEX_BUN_BIN")?.trim().orEmpty()
         if (override.isNotEmpty()) {
             val p = Path.of(override)
@@ -161,22 +195,157 @@ class BridgeProcessManager {
             throw IllegalStateException("QENEX_BUN_BIN not found: $override")
         }
 
-        whichInPath("bun", pathEnv)?.let { return it }
+        val pin = bunPin()
+        val target = managedBunBin()
+        val versionFile = managedBunRoot().resolve(".version")
+        if (Files.isRegularFile(target)) {
+            val installed = runCatching { Files.readString(versionFile).trim() }.getOrDefault("")
+            if (installed.isEmpty() || installed == pin) {
+                return target.toAbsolutePath().toString()
+            }
+        }
+
+        return try {
+            installManagedBun(pin, target, versionFile)
+        } catch (error: Exception) {
+            fallbackBun(pathEnv)?.also {
+                log.warn("Managed Bun download failed (${error.message}); using $it")
+            } ?: throw IllegalStateException(bunMissingError(pin, target) + " (${error.message})")
+        }
+    }
+
+    private fun bunPin(): String {
+        val env = System.getenv("QENEX_BUN_VERSION")?.trim().orEmpty()
+        if (env.isNotEmpty()) return env
+        return BUN_PIN
+    }
+
+    private fun bunExecutableName(): String = if (SystemInfo.isWindows) "bun.exe" else "bun"
+
+    private fun managedBunRoot(): Path {
+        val home = System.getProperty("user.home")
+        return Path.of(home, ".qenex", "runtime", "bun")
+    }
+
+    private fun managedBunBin(): Path = managedBunRoot().resolve("bin").resolve(bunExecutableName())
+
+    private fun bunAssetName(): String {
+        val os = when {
+            SystemInfo.isMac -> "darwin"
+            SystemInfo.isWindows -> "windows"
+            else -> "linux"
+        }
+        val arch = when {
+            System.getProperty("os.arch").contains("aarch64") ||
+                System.getProperty("os.arch").contains("arm64") -> "aarch64"
+            else -> "x64"
+        }
+        return when ("$os-$arch") {
+            "darwin-aarch64" -> "bun-darwin-aarch64"
+            "darwin-x64" -> "bun-darwin-x64"
+            "linux-aarch64" -> "bun-linux-aarch64"
+            "linux-x64" -> "bun-linux-x64"
+            "windows-x64" -> "bun-windows-x64"
+            else -> throw IllegalStateException(
+                "No official Bun zip for $os/$arch. Set QENEX_BUN_BIN to a bun executable.",
+            )
+        }
+    }
+
+    private fun bunDownloadUrl(version: String): String {
+        val asset = bunAssetName()
+        return "https://github.com/oven-sh/bun/releases/download/bun-v$version/$asset.zip"
+    }
+
+    private fun bunMissingError(version: String, target: Path): String {
+        return "Bun $version is not installed at $target. " +
+            "Qenex tried to download the official zip and failed. " +
+            "Install Bun, or set QENEX_BUN_BIN to a bun executable."
+    }
+
+    private fun fallbackBun(pathEnv: String): String? {
+        whichInPath(bunExecutableName(), pathEnv)?.let { return it }
         if (SystemInfo.isWindows) {
             whichInPath("bun.exe", pathEnv)?.let { return it }
         }
-
         val home = System.getProperty("user.home")
         if (!home.isNullOrBlank()) {
-            val candidate = Path.of(home, ".bun", "bin", if (SystemInfo.isWindows) "bun.exe" else "bun")
+            val candidate = Path.of(home, ".bun", "bin", bunExecutableName())
             if (Files.isRegularFile(candidate)) {
                 return candidate.toAbsolutePath().toString()
             }
         }
+        return null
+    }
 
-        throw IllegalStateException(
-            "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.",
+    private fun installManagedBun(pin: String, target: Path, versionFile: Path): String {
+        val url = bunDownloadUrl(pin)
+        log.info("Downloading Bun $pin from $url")
+        val staging = Files.createTempDirectory("qenex-bun-")
+        try {
+            val zipPath = staging.resolve("bun.zip")
+            downloadFile(url, zipPath)
+            val extractDir = staging.resolve("extract")
+            Files.createDirectories(extractDir)
+            unzip(zipPath, extractDir)
+            val extracted = findExtractedBun(extractDir)
+                ?: throw IllegalStateException("zip from $url did not contain a bun binary")
+            Files.createDirectories(target.parent)
+            Files.copy(extracted, target, StandardCopyOption.REPLACE_EXISTING)
+            if (!SystemInfo.isWindows) {
+                target.toFile().setExecutable(true, false)
+            }
+            Files.createDirectories(versionFile.parent)
+            Files.writeString(versionFile, "$pin\n")
+            log.info("Installed Bun $pin to $target")
+            return target.toAbsolutePath().toString()
+        } finally {
+            runCatching {
+                Files.walk(staging).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    private fun downloadFile(url: String, dest: Path) {
+        val client = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(java.time.Duration.ofSeconds(30))
+            .build()
+        val response = client.send(
+            HttpRequest.newBuilder(URI.create(url)).GET().build(),
+            HttpResponse.BodyHandlers.ofFile(dest),
         )
+        if (response.statusCode() !in 200..299) {
+            throw IllegalStateException("download $url failed: HTTP ${response.statusCode()}")
+        }
+    }
+
+    private fun unzip(zipPath: Path, dest: Path) {
+        java.util.zip.ZipInputStream(Files.newInputStream(zipPath)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val out = dest.resolve(entry.name).normalize()
+                if (!out.startsWith(dest)) continue
+                if (entry.isDirectory) {
+                    Files.createDirectories(out)
+                } else {
+                    Files.createDirectories(out.parent)
+                    Files.copy(zip, out, StandardCopyOption.REPLACE_EXISTING)
+                }
+                zip.closeEntry()
+            }
+        }
+    }
+
+    private fun findExtractedBun(root: Path): Path? {
+        val exe = bunExecutableName()
+        Files.walk(root).use { stream ->
+            return stream
+                .filter { Files.isRegularFile(it) }
+                .filter { it.fileName.toString() == exe || it.fileName.toString() == "bun" }
+                .findFirst()
+                .orElse(null)
+        }
     }
 
     private fun whichInPath(name: String, pathEnv: String): String? {
@@ -319,9 +488,13 @@ class BridgeProcessManager {
             }
         }
 
+        val home = System.getProperty("user.home")
+        if (!home.isNullOrBlank()) {
+            push(Path.of(home, ".qenex", "runtime", "bun", "bin").toString())
+        }
+
         push(loginShellPath())
         push(System.getenv("PATH"))
-        val home = System.getProperty("user.home")
         if (!home.isNullOrBlank()) {
             for (rel in listOf(
                 ".bun/bin",
@@ -377,7 +550,7 @@ class BridgeProcessManager {
             .connectTimeout(java.time.Duration.ofSeconds(2))
             .build()
         val healthUri = URI.create("http://127.0.0.1:$port/health")
-        val deadline = System.currentTimeMillis() + 30_000
+        val deadline = System.currentTimeMillis() + 90_000
 
         while (System.currentTimeMillis() < deadline) {
             if (!child.isAlive) {
@@ -403,7 +576,7 @@ class BridgeProcessManager {
         }
 
         throw IllegalStateException(
-            "Bridge failed to become healthy on port $port within 30000ms",
+            "Bridge failed to become healthy on port $port within 90000ms",
         )
     }
 
@@ -426,6 +599,8 @@ class BridgeProcessManager {
     }
 
     companion object {
+        private const val BUN_PIN = "1.3.14"
+
         fun getInstance(): BridgeProcessManager =
             ApplicationManager.getApplication().getService(BridgeProcessManager::class.java)
     }

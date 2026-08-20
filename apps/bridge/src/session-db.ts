@@ -25,6 +25,8 @@ export type PersistedSessionRow = {
   thoughtLevelsJson: string | null;
   fastOptionsJson: string | null;
   configAxesJson: string | null;
+  /** Override launch argv when the session was created with agentCommand. */
+  agentCommand: string[] | null;
 };
 
 type SessionQueryRow = {
@@ -41,6 +43,7 @@ type SessionQueryRow = {
   config_axes_json: string | null;
   remote_session_id: string | null;
   resume_behavior: string | null;
+  agent_command_json: string | null;
 };
 
 function parseResumeBehavior(raw: string | null | undefined): ResumeBehavior {
@@ -107,6 +110,23 @@ function dedupeMessagesKeepLast(messages: UIMessage[]): UIMessage[] {
   return deduped;
 }
 
+function parseAgentCommand(raw: string | null | undefined): string[] | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every((part) => typeof part === "string")
+    ) {
+      return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function mapSessionRow(row: SessionQueryRow): PersistedSessionRow {
   return {
     sessionId: row.session_id,
@@ -122,6 +142,7 @@ function mapSessionRow(row: SessionQueryRow): PersistedSessionRow {
     thoughtLevelsJson: row.thought_levels_json ?? null,
     fastOptionsJson: row.fast_options_json ?? null,
     configAxesJson: row.config_axes_json ?? null,
+    agentCommand: parseAgentCommand(row.agent_command_json),
   };
 }
 
@@ -207,6 +228,9 @@ export class SessionDb {
     if (!columns.has("config_axes_json")) {
       this.#db.exec(`ALTER TABLE sessions ADD COLUMN config_axes_json TEXT`);
     }
+    if (!columns.has("agent_command_json")) {
+      this.#db.exec(`ALTER TABLE sessions ADD COLUMN agent_command_json TEXT`);
+    }
     this.#db.exec(`
       UPDATE sessions
       SET remote_session_id = session_id
@@ -235,18 +259,23 @@ export class SessionDb {
     configAxesJson?: string | null;
     remoteSessionId?: string | null;
     resumeBehavior?: ResumeBehavior | null;
+    agentCommand?: string[] | null;
   }): void {
     const updatedAt = row.updatedAt ?? row.createdAt;
     // null on update preserves an already-rotated remote id / resume strategy.
     const remoteSessionId = row.remoteSessionId ?? null;
     const resumeBehavior = row.resumeBehavior ?? null;
+    const agentCommandJson =
+      row.agentCommand && row.agentCommand.length > 0
+        ? JSON.stringify(row.agentCommand)
+        : null;
     this.#db
       .query(
         `INSERT INTO sessions (
           session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
           thought_levels_json, fast_options_json, config_axes_json,
-          remote_session_id, resume_behavior
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), COALESCE(?, 'native-load'))
+          remote_session_id, resume_behavior, agent_command_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), COALESCE(?, 'native-load'), ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           cwd = excluded.cwd,
@@ -258,7 +287,8 @@ export class SessionDb {
           fast_options_json = COALESCE(excluded.fast_options_json, sessions.fast_options_json),
           config_axes_json = COALESCE(excluded.config_axes_json, sessions.config_axes_json),
           remote_session_id = COALESCE(?, sessions.remote_session_id),
-          resume_behavior = COALESCE(?, sessions.resume_behavior)`,
+          resume_behavior = COALESCE(?, sessions.resume_behavior),
+          agent_command_json = COALESCE(excluded.agent_command_json, sessions.agent_command_json)`,
       )
       .run(
         row.sessionId,
@@ -275,6 +305,7 @@ export class SessionDb {
         remoteSessionId,
         row.sessionId,
         resumeBehavior,
+        agentCommandJson,
         remoteSessionId,
         resumeBehavior,
       );
@@ -310,7 +341,7 @@ export class SessionDb {
       .query(
         `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
                 thought_levels_json, fast_options_json, config_axes_json,
-                remote_session_id, resume_behavior
+                remote_session_id, resume_behavior, agent_command_json
          FROM sessions WHERE session_id = ?`,
       )
       .get(sessionId) as SessionQueryRow | null;
@@ -323,7 +354,7 @@ export class SessionDb {
       .query(
         `SELECT session_id, agent, cwd, title, created_at, updated_at, modes_json, models_json,
                 thought_levels_json, fast_options_json, config_axes_json,
-                remote_session_id, resume_behavior
+                remote_session_id, resume_behavior, agent_command_json
          FROM sessions
          ORDER BY updated_at DESC`,
       )

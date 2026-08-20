@@ -2,7 +2,7 @@
   "name": "qenex",
   "displayName": "Qenex",
   "description": "ACP Agent Center — multi-tab agent UI in VS Code",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "qenex",
   "license": "MIT",
   "engines": {

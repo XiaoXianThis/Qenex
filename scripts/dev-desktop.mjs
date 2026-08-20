@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureManagedBun } from "./lib/ensure-bun.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const bridgeEntry = join(root, "apps", "bridge", "src", "index.ts");
@@ -20,22 +21,9 @@ function run(command, args, options = {}) {
   }
 }
 
-function whichBun() {
-  if (process.env.QENEX_BUN_BIN?.trim()) {
-    return process.env.QENEX_BUN_BIN.trim();
-  }
-  const found = spawnSync("bun", ["--version"], { encoding: "utf8" });
-  if (found.status === 0) {
-    return "bun";
-  }
-  const homeBun = join(process.env.HOME ?? "", ".bun", "bin", "bun");
-  if (existsSync(homeBun)) {
-    return homeBun;
-  }
-  return null;
-}
-
-const bun = whichBun();
+const bun = await ensureManagedBun({
+  onProgress: (msg) => console.log(`[qenex] ${msg}`),
+});
 if (!bun) {
   console.error(
     "Bun not found. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.",
@@ -50,4 +38,4 @@ if (!existsSync(bridgeEntry)) {
 
 console.log(`Desktop Bun Bridge entry: ${bridgeEntry}`);
 console.log(`Using Bun: ${bun}`);
-run("bun", ["run", "--filter", "@qenex/desktop", "tauri:dev"]);
+run(bun, ["run", "--filter", "@qenex/desktop", "tauri:dev"]);

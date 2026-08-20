@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-08-20 - v0.3.5 Managed Bun, agent grades, hermetic CI
+
+### Added
+
+- Desktop / VS Code / JetBrains 首次启动把钉死版本 Bun 装到 `~/.qenex/runtime/bun`（规格见 `docs/runtime-bun.md`）
+- Agent 兼容分级（`compatGrade`）：discover / registry API 与设置页徽章；live 矩阵脚本 `QENEX_LIVE_AGENTS`
+- 封闭 CI 用的 stdio fake ACP：建会话、hibernate reopen、最小 chat 流
+
+### Changed
+
+- CI `test:bridge` 不再依赖本机 OpenCode；`setup-bun` 钉死 `runtime/bun-version`
+- Claude ACP / Codex ACP 升为 **verified**（live 矩阵打穿）
+- Bridge 装 Agent 优先用当前解释器（`process.execPath`）
+
+### Fixed
+
+- `GET /health` 的 `ok` 只表示进程在听，`opencode` 允许为 `null`
+
+---
+
 ## 2026-08-18 - v0.3.4 Session config axes, hibernation, set_mode fallback
 
 ### Added

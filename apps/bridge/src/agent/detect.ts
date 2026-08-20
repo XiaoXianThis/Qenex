@@ -5,9 +5,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BridgeError } from "../errors.ts";
-import { agentsDir } from "./paths.ts";
+import { agentsDir, resolveBunExecutable } from "./paths.ts";
 import { getInstalled } from "./installed-db.ts";
 import { preferredKindFor } from "./registry.ts";
+import { compatGradeFor } from "./compat/grades.ts";
 import type {
   AgentDetectedSource,
   AgentDistributionClass,
@@ -57,6 +58,12 @@ const NATIVES: NativeProfile[] = [
     pathBins: ["gemini"],
     argv: ["gemini", "--experimental-acp"],
   },
+  {
+    id: "qoder",
+    bin: "qodercli",
+    pathBins: ["qodercli", "qoder"],
+    argv: ["qodercli", "--acp"],
+  },
 ];
 
 const ADAPTERS: AdapterProfile[] = [
@@ -72,6 +79,12 @@ const ADAPTERS: AdapterProfile[] = [
     pathBins: ["codex-acp"],
     hostBins: ["codex"],
   },
+  {
+    id: "pi-acp",
+    package: "pi-acp",
+    pathBins: ["pi-acp"],
+    hostBins: ["pi"],
+  },
 ];
 
 export function canonicalAgentId(id: string): string {
@@ -82,6 +95,10 @@ export function canonicalAgentId(id: string): string {
       return "codex-acp";
     case "cursor":
       return "cursor-agent";
+    case "pi":
+      return "pi-acp";
+    case "qodercli":
+      return "qoder";
     default:
       return id.trim();
   }
@@ -134,6 +151,23 @@ export function authHintFor(agentId: string): string | null {
       return null;
     }
     return "Cursor 需要先执行 `agent login`（或设置 CURSOR_API_KEY）后再创建会话";
+  }
+  if (id === "pi-acp") {
+    if (
+      envNonempty("ANTHROPIC_API_KEY") ||
+      envNonempty("OPENAI_API_KEY") ||
+      homeFile(".pi") ||
+      homeFile(".config", "pi")
+    ) {
+      return null;
+    }
+    return "pi ACP 可能需要本机已登录的 pi CLI 或 API Key";
+  }
+  if (id === "qoder") {
+    if (homeFile(".qoder") || homeFile(".qodercli")) {
+      return null;
+    }
+    return "Qoder 需要先执行 `qodercli-login` 后再创建会话";
   }
   return null;
 }
@@ -261,7 +295,7 @@ export function rebuildManagedPackageCommand(
   if (!existsSync(installPath)) return null;
   const entry = findPackageEntry(installPath, pkg);
   if (!entry) return null;
-  const bun = Bun.which("bun") ?? "bun";
+  const bun = resolveBunExecutable();
   return [bun, entry, ...args];
 }
 
@@ -533,6 +567,7 @@ export async function discoverLocalAgents(
       detail: null,
       authHint,
       icon: icon ?? null,
+      compatGrade: compatGradeFor(cid),
     });
   };
 
@@ -555,6 +590,7 @@ export async function discoverLocalAgents(
         detail: status.detail,
         authHint: status.authHint,
         icon: agent.icon,
+        compatGrade: compatGradeFor(agent.id),
       });
     }
   }

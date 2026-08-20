@@ -707,6 +707,26 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                                   ? "适配层"
                                   : "原生"}
                               </span>
+                              {entry.compatGrade === "verified" ? (
+                                <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                                  已验证
+                                </span>
+                              ) : null}
+                              {entry.compatGrade === "experimental" ? (
+                                <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                                  实验
+                                </span>
+                              ) : null}
+                              {entry.compatGrade === "standard-acp" ? (
+                                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  标准 ACP
+                                </span>
+                              ) : null}
+                              {entry.compatGrade === "unsupported" ? (
+                                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  不支持
+                                </span>
+                              ) : null}
                               {readiness === "ready" ? (
                                 <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
                                   {onPath
@@ -745,6 +765,11 @@ export const AgentSettingsDialog: FC<AgentSettingsDialogProps> = ({
                             <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                               {entry.description}
                             </p>
+                            {entry.compatGrade === "experimental" ? (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                可创建会话；配置 / resume / 错误文案可能不完整，不要当成已验证主路径
+                              </p>
+                            ) : null}
                             {entry.distributionClass === "adapter" ? (
                               <p className="mt-1 text-[10px] text-muted-foreground">
                                 ACP 适配器；通常需要本机已登录 / 已有底层

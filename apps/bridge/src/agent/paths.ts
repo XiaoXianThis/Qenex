@@ -1,7 +1,7 @@
 /** Managed Qenex home layout under `~/.qenex`. */
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
 
 export function qenexHome(): string {
   return join(homedir(), ".qenex");
@@ -13,6 +13,22 @@ export function runtimeBunDir(): string {
 
 export function runtimeUvDir(): string {
   return join(qenexHome(), "runtime", "uv");
+}
+
+export function managedBunBin(): string {
+  const exe = process.platform === "win32" ? "bun.exe" : "bun";
+  return join(runtimeBunDir(), "bin", exe);
+}
+
+/** Prefer the interpreter that spawned this Bridge, then managed runtime, then PATH. */
+export function resolveBunExecutable(): string {
+  const exec = process.execPath;
+  if (typeof exec === "string" && /bun/i.test(exec) && existsSync(exec)) {
+    return exec;
+  }
+  const managed = managedBunBin();
+  if (existsSync(managed)) return managed;
+  return Bun.which("bun") ?? "bun";
 }
 
 export function agentsDir(): string {

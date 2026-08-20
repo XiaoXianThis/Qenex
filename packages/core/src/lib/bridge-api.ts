@@ -463,7 +463,14 @@ export type RegistryAgentEntry = {
   installed?: InstalledAgentInfo | null;
   updateAvailable: boolean;
   host?: AgentHostStatus | null;
+  compatGrade?: CompatGrade;
 };
+
+export type CompatGrade =
+  | "verified"
+  | "experimental"
+  | "standard-acp"
+  | "unsupported";
 
 export type DiscoveredAgentEntry = {
   id: string;
@@ -476,6 +483,7 @@ export type DiscoveredAgentEntry = {
   detail?: string | null;
   authHint?: string | null;
   icon?: string | null;
+  compatGrade?: CompatGrade;
 };
 
 export type DiscoverAgentsResponse = {

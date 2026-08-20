@@ -18,6 +18,7 @@ import {
   currentPlatformKey,
   loadRegistryDocument,
 } from "./registry.ts";
+import { compatGradeFor } from "./compat/grades.ts";
 import type { RegistryAgentEntry } from "./types.ts";
 
 async function readJson(req: Request): Promise<unknown> {
@@ -91,6 +92,7 @@ export async function handleAgentRoutes(
           installed: status.managed ?? null,
           updateAvailable: status.updateAvailable,
           host: null,
+          compatGrade: compatGradeFor(raw.id),
         };
       });
       return Response.json({

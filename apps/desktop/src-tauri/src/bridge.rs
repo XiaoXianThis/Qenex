@@ -15,7 +15,8 @@ use tauri_plugin_store::StoreExt;
 const STORE_FILE: &str = "qenex.json";
 const STORAGE_PREFIX: &str = "qenex:";
 const LAST_WORKSPACE_KEY: &str = "lastWorkspace";
-const HEALTH_TIMEOUT_MS: u64 = 30_000;
+const HEALTH_TIMEOUT_MS: u64 = 90_000;
+const BUN_PIN: &str = include_str!("../../../../runtime/bun-version");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +110,7 @@ fn spawn_bridge(app: &AppHandle) -> Result<(String, Child), String> {
     let base_url = format!("http://127.0.0.1:{port}");
     let cors = resolve_cors_origins(app, port);
     let path = augmented_path();
-    let bun = find_bun(&path)?;
+    let bun = ensure_bun(&path)?;
     let entry = resolve_bridge_entry(app)?;
     let entry_path = Path::new(&entry);
     let bridge_cwd = if entry_path.file_name() == Some(OsStr::new("index.js")) {
@@ -270,7 +271,66 @@ fn tracing_log(message: &str) {
     eprintln!("[qenex-desktop] {message}");
 }
 
-fn find_bun(path: &OsStr) -> Result<String, String> {
+fn bun_pin() -> String {
+    std::env::var("QENEX_BUN_VERSION")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| BUN_PIN.trim().to_string())
+}
+
+fn bun_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "bun.exe"
+    } else {
+        "bun"
+    }
+}
+
+fn managed_bun_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".qenex").join("runtime").join("bun"))
+}
+
+fn managed_bun_bin() -> Option<PathBuf> {
+    managed_bun_root().map(|root| root.join("bin").join(bun_executable_name()))
+}
+
+/// Resolve order: QENEX_BUN_BIN → ~/.qenex/runtime/bun → download pin → PATH / ~/.bun
+/// Download: https://github.com/oven-sh/bun/releases/download/bun-v{version}/bun-{os}-{arch}.zip
+fn bun_asset_name() -> Result<&'static str, String> {
+    let asset = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "bun-darwin-aarch64"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "bun-darwin-x64"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "bun-linux-aarch64"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "bun-linux-x64"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "bun-windows-x64"
+    } else {
+        return Err(format!(
+            "No official Bun zip for this platform. Set QENEX_BUN_BIN to a bun executable."
+        ));
+    };
+    Ok(asset)
+}
+
+fn bun_download_url(version: &str) -> Result<String, String> {
+    let asset = bun_asset_name()?;
+    Ok(format!(
+        "https://github.com/oven-sh/bun/releases/download/bun-v{version}/{asset}.zip"
+    ))
+}
+
+fn bun_missing_error(version: &str, target: &Path) -> String {
+    format!(
+        "Bun {version} is not installed at {}. Qenex tried to download the official zip and failed. Install Bun, or set QENEX_BUN_BIN to a bun executable.",
+        target.display()
+    )
+}
+
+fn ensure_bun(path: &OsStr) -> Result<String, String> {
     if let Ok(override_bin) = std::env::var("QENEX_BUN_BIN") {
         let trimmed = override_bin.trim();
         if !trimmed.is_empty() {
@@ -281,19 +341,175 @@ fn find_bun(path: &OsStr) -> Result<String, String> {
         }
     }
 
-    let executable = if cfg!(windows) { "bun.exe" } else { "bun" };
-    if let Some(found) = which_in_path(executable, path) {
-        return Ok(found);
-    }
-
-    if let Some(home) = dirs::home_dir() {
-        let candidate = home.join(".bun").join("bin").join(executable);
-        if candidate.is_file() {
-            return Ok(candidate.to_string_lossy().into_owned());
+    let pin = bun_pin();
+    let target = managed_bun_bin().ok_or_else(|| "Could not resolve home directory".to_string())?;
+    let version_file = managed_bun_root()
+        .ok_or_else(|| "Could not resolve home directory".to_string())?
+        .join(".version");
+    if target.is_file() {
+        let installed = fs::read_to_string(&version_file)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if installed.is_empty() || installed == pin {
+            return Ok(target.to_string_lossy().into_owned());
         }
     }
 
-    Err("Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.".to_string())
+    match install_managed_bun(&pin, &target, &version_file) {
+        Ok(bin) => Ok(bin),
+        Err(error) => {
+            if let Some(fallback) = fallback_bun(path) {
+                tracing_log(&format!(
+                    "Managed Bun download failed ({error}); using {fallback}"
+                ));
+                Ok(fallback)
+            } else {
+                Err(format!("{} ({error})", bun_missing_error(&pin, &target)))
+            }
+        }
+    }
+}
+
+fn fallback_bun(path: &OsStr) -> Option<String> {
+    let executable = bun_executable_name();
+    if let Some(found) = which_in_path(executable, path) {
+        return Some(found);
+    }
+    if let Some(home) = dirs::home_dir() {
+        let candidate = home.join(".bun").join("bin").join(executable);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+fn install_managed_bun(pin: &str, target: &Path, version_file: &Path) -> Result<String, String> {
+    let url = bun_download_url(pin)?;
+    tracing_log(&format!("Downloading Bun {pin} from {url}"));
+    let staging = std::env::temp_dir().join(format!(
+        "qenex-bun-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    let zip_path = staging.join("bun.zip");
+    let extract_dir = staging.join("extract");
+    let result = (|| {
+        download_file(&url, &zip_path)?;
+        extract_zip(&zip_path, &extract_dir)?;
+        let extracted = find_extracted_bun(&extract_dir)
+            .ok_or_else(|| format!("zip from {url} did not contain a bun binary"))?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(&extracted, target).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(target)
+                .map_err(|e| e.to_string())?
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(target, perms).map_err(|e| e.to_string())?;
+        }
+        if let Some(parent) = version_file.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(version_file, format!("{pin}\n")).map_err(|e| e.to_string())?;
+        tracing_log(&format!("Installed Bun {pin} to {}", target.display()));
+        Ok(target.to_string_lossy().into_owned())
+    })();
+    let _ = fs::remove_dir_all(&staging);
+    result
+}
+
+fn download_file(url: &str, dest: &Path) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("download {url} failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("download {url} failed: HTTP {}", response.status()));
+    }
+    let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
+    std::io::copy(&mut response, &mut file).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let status = if cfg!(windows) {
+        StdCommand::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Expand-Archive -Force -LiteralPath '{}' -DestinationPath '{}'",
+                    zip_path.display(),
+                    dest.display()
+                ),
+            ])
+            .status()
+    } else if cfg!(target_os = "macos") {
+        let ditto = StdCommand::new("ditto")
+            .args(["-x", "-k"])
+            .arg(zip_path)
+            .arg(dest)
+            .status();
+        if ditto.as_ref().map(|s| s.success()).unwrap_or(false) {
+            ditto
+        } else {
+            StdCommand::new("unzip")
+                .args(["-o"])
+                .arg(zip_path)
+                .arg("-d")
+                .arg(dest)
+                .status()
+        }
+    } else {
+        StdCommand::new("unzip")
+            .args(["-o"])
+            .arg(zip_path)
+            .arg("-d")
+            .arg(dest)
+            .status()
+    }
+    .map_err(|e| format!("failed to extract Bun zip: {e}"))?;
+    if !status.success() {
+        return Err(format!("failed to extract Bun zip ({status})"));
+    }
+    Ok(())
+}
+
+fn find_extracted_bun(root: &Path) -> Option<PathBuf> {
+    let exe = bun_executable_name();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if entry.file_name() == exe || entry.file_name() == "bun" {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[allow(dead_code)]
+fn find_bun(path: &OsStr) -> Result<String, String> {
+    ensure_bun(path)
 }
 
 fn which_in_path(name: &str, path: &OsStr) -> Option<String> {
@@ -398,6 +614,10 @@ fn augmented_path() -> OsString {
             }
         }
     };
+
+    if let Some(home) = dirs::home_dir() {
+        push(home.join(".qenex").join("runtime").join("bun").join("bin").as_os_str());
+    }
 
     if let Some(login_path) = login_shell_path() {
         push(login_path.as_os_str());

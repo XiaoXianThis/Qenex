@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BridgeError } from "../src/errors.ts";
+import { BridgeError, resolveOpenCodeBin } from "../src/errors.ts";
 import { createBridgeHandler, startBridgeServer } from "../src/server.ts";
 import { SessionDb } from "../src/session-db.ts";
 import { SessionStore } from "../src/session-store.ts";
@@ -120,7 +120,9 @@ describe("POST /api/sessions/:id/hibernate", () => {
     store.closeDb();
   });
 
-  test("hibernate then ensureOpen reopens a live session", async () => {
+  test.skipIf(!resolveOpenCodeBin())(
+    "hibernate then ensureOpen reopens a live session",
+    async () => {
     const server = startBridgeServer({
       hostname: "127.0.0.1",
       port: 0,
@@ -151,5 +153,7 @@ describe("POST /api/sessions/:id/hibernate", () => {
     } finally {
       server.stop({ wipe: true });
     }
-  }, 120_000);
+    },
+    120_000,
+  );
 });

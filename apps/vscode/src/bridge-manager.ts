@@ -3,8 +3,9 @@ import { createServer, type AddressInfo } from "node:net";
 import { access } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { ExtensionContext } from "vscode";
 import { homedir } from "node:os";
+import { ProgressLocation, window, type ExtensionContext } from "vscode";
+import { ensureManagedBun, managedBunRoot } from "./ensure-bun";
 
 /**
  * Spawns Bun Bridge — same contract as Desktop bridge.rs / JetBrains BridgeProcessManager (M9).
@@ -31,7 +32,18 @@ export class BridgeManager {
     if (this.startPromise) {
       return this.startPromise;
     }
-    this.startPromise = this.doStart(cspSource);
+    this.startPromise = window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: "Qenex",
+      },
+      async (progress) => {
+        progress.report({ message: "正在安装 Bun" });
+        return await this.doStart(cspSource, (message) => {
+          progress.report({ message });
+        });
+      },
+    );
     try {
       return await this.startPromise;
     } finally {
@@ -58,10 +70,25 @@ export class BridgeManager {
     }
   }
 
-  private async doStart(cspSource: string): Promise<string> {
+  private async doStart(
+    cspSource: string,
+    onProgress: (message: string) => void,
+  ): Promise<string> {
     const port = await findFreePort();
     const pathEnv = augmentedPath();
-    const bun = findBun(pathEnv);
+    const bun = await ensureManagedBun({
+      pathEnv,
+      searchRoots: [
+        path.resolve(this.context.extensionPath, "../.."),
+        path.resolve(this.context.extensionPath, "../../.."),
+        this.context.extensionPath,
+      ],
+      onProgress: (message) => {
+        console.log("[qenex]", message);
+        onProgress(message);
+      },
+    });
+    onProgress("Starting Bun Bridge…");
     const entry = await resolveBridgeEntry(this.context.extensionPath);
     const bridgeCwd = entry.endsWith(`${path.sep}index.js`)
       ? path.dirname(entry)
@@ -112,7 +139,7 @@ export class BridgeManager {
 
     this.process = child;
     try {
-      await waitForHealth(port, 30_000, () => exitedEarly);
+      await waitForHealth(port, 90_000, () => exitedEarly);
       if (this.process !== child || !this.isRunning()) {
         throw exitedEarly ?? new Error("Bridge exited during startup");
       }
@@ -127,32 +154,6 @@ export class BridgeManager {
       throw error;
     }
   }
-}
-
-function findBun(pathEnv: string): string {
-  const override = process.env.QENEX_BUN_BIN?.trim();
-  if (override) {
-    if (existsSync(override) || whichInPath(override, pathEnv)) {
-      return override;
-    }
-    throw new Error(`QENEX_BUN_BIN not found: ${override}`);
-  }
-  const fromPath = whichInPath("bun", pathEnv);
-  if (fromPath) return fromPath;
-  if (process.platform === "win32") {
-    const fromPathExe = whichInPath("bun.exe", pathEnv);
-    if (fromPathExe) return fromPathExe;
-  }
-  const homeBun = path.join(
-    homedir(),
-    ".bun",
-    "bin",
-    process.platform === "win32" ? "bun.exe" : "bun",
-  );
-  if (existsSync(homeBun)) return homeBun;
-  throw new Error(
-    "Bun not found on PATH. Install Bun (https://bun.sh) or set QENEX_BUN_BIN.",
-  );
 }
 
 /** Normalize VS Code cspSource into Bridge CORS allow-list entries. */
@@ -232,6 +233,7 @@ function augmentedPath(): string {
     }
   };
 
+  push(path.join(managedBunRoot(), "bin"));
   if (process.platform !== "win32") {
     try {
       const shell = process.env.SHELL || "/bin/zsh";

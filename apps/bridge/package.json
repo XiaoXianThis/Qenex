@@ -1,6 +1,6 @@
 {
   "name": "@qenex/bridge",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "module": "src/index.ts",
@@ -8,6 +8,8 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "test": "bun test ./test",
+    "test:live": "bun run test:acceptance && bun run test:phase3 && bun run test:m4 && bun run test:m5 && bun run test:m6",
+    "test:live-matrix": "bun run test/live-agent-matrix.ts",
     "test:acceptance": "bun run test/acceptance-curl.ts",
     "test:phase3": "bun run test/phase3-acceptance.ts",
     "test:phase4": "bun run test/phase4-acceptance.ts",

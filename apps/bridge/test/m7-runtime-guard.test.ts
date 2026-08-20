@@ -33,7 +33,7 @@ describe("M7 · Desktop Bun Bridge", () => {
     expect(bridge).not.toContain("sidecar(");
     expect(bridge).toContain("QENEX_BRIDGE_PORT");
     expect(bridge).toContain("QENEX_CORS_ORIGINS");
-    expect(bridge).toContain("find_bun");
+    expect(bridge).toContain("ensure_bun");
     expect(bridge).toContain("resolve_bridge_entry");
   });
 
@@ -92,8 +92,41 @@ describe("Cross-platform runtime stability", () => {
     expect(bridge).toContain("restart_bridge");
     expect(bridge).toContain("generation");
     expect(bridge).toContain("std::env::split_paths");
-    expect(bridge).toContain('if cfg!(windows) { "bun.exe" }');
+    expect(bridge).toContain("bun.exe");
     expect(bridge).not.toContain("bun install");
+  });
+
+  test("hosts install pinned Bun into ~/.qenex/runtime/bun", () => {
+    const pin = read("runtime/bun-version").trim();
+    expect(pin).toMatch(/^\d+\.\d+\.\d+$/);
+    const desktop = read("apps/desktop/src-tauri/src/bridge.rs");
+    const vscode = read("apps/vscode/src/ensure-bun.ts");
+    const jetbrains = read(
+      "apps/jetbrains/src/main/kotlin/com/qenex/BridgeProcessManager.kt",
+    );
+    const script = read("scripts/lib/ensure-bun.mjs");
+    for (const src of [desktop, vscode, jetbrains, script]) {
+      expect(src).toContain("QENEX_BUN_BIN");
+      expect(src).toContain(".qenex");
+      expect(src).toContain("runtime");
+      expect(src).toContain("https://github.com/oven-sh/bun/releases/download/bun-v");
+      expect(src).toContain("bun-darwin-aarch64");
+      expect(src).toContain("bun-linux-x64");
+      expect(src).toContain("bun-windows-x64");
+    }
+    expect(desktop).toContain("ensure_bun");
+    expect(vscode).toContain(pin);
+    expect(jetbrains).toContain(pin);
+    expect(script).toContain(pin);
+    expect(read("apps/vscode/src/bridge-manager.ts")).toContain("managedBunRoot");
+    expect(read("apps/vscode/src/bridge-manager.ts")).toContain("正在安装 Bun");
+    expect(jetbrains).toContain("正在安装 Bun");
+    expect(read("apps/bridge/src/agent/install.ts")).toContain(
+      "resolveBunExecutable",
+    );
+    expect(read("apps/bridge/src/agent/detect.ts")).toContain(
+      "resolveBunExecutable",
+    );
   });
 
   test("IDE hosts report startup failures and invalidate dead Bridge URLs", () => {
@@ -106,7 +139,6 @@ describe("Cross-platform runtime stability", () => {
       "apps/jetbrains/webview/src/host/jetbrains-host.ts",
     );
 
-    expect(vscodeManager).toContain("bun.exe");
     expect(vscodeManager).toContain("exitedEarly");
     expect(vscodeHost).toContain('case "bridge-error"');
     expect(vscodeHost).toContain("bridgeBaseUrl = null");

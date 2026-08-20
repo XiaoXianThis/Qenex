@@ -20,10 +20,10 @@
 3. 打 tag 并推送：
 
 ```bash
-git checkout fusion
+git checkout main
 git pull
-git tag v0.3.4
-git push origin v0.3.4
+git tag v0.3.5
+git push origin v0.3.5
 ```
 
 4. 打开 Actions → **Release** workflow，等待矩阵完成
@@ -33,20 +33,20 @@ git push origin v0.3.4
 
 Actions → Release → Run workflow：
 
-- `version`：如 `0.3.4`
-- `publish`：勾选则创建草稿 Release**（`v0.3.4`）；不勾选只上传 Artifacts
+- `version`：如 `0.3.5`
+- `publish`：勾选则创建草稿 Release**（`v0.3.5`）；不勾选只上传 Artifacts
 
 ## 本地打包
 
 ```bash
 # 全量（当前 OS Desktop + 全端）
-bun run ci:release -- --platform darwin-arm64 --version 0.3.4
+bun run ci:release -- --platform darwin-arm64 --version 0.3.5
 
 # 仅 server + IDE（适合 Ubuntu / 本机预检）
-bun run ci:release -- --platform linux-x64 --version 0.3.4 --products server,vscode,jetbrains
+bun run ci:release -- --platform linux-x64 --version 0.3.5 --products server,vscode,jetbrains
 
 # 仅 Desktop
-bun run ci:release -- --platform darwin-arm64 --version 0.3.4 --products desktop
+bun run ci:release -- --platform darwin-arm64 --version 0.3.5 --products desktop
 ```
 
 产物目录：`dist-artifacts/`（已 gitignore）。

@@ -66,30 +66,11 @@
 
 ### LocalStorage
 - 键前缀 `qenex:`（以及历史遗留的 `agent-center-*`）
-- 存 tab 元数据；**消息内容**在 M1 仅存 Bridge 进程内存（M4 再做 SQLite 持久化）
+- 存 tab 元数据；**消息内容**在 Bridge SQLite（M4）
 
 ### Bridge session
-- Tab 的 `taskId` 在绑定后存 Bun Bridge `sessionId`（形如 `ses_…`）
+- Tab 绑定 Bun Bridge `sessionId`（形如 `ses_…`）
 - 删除 tab / 丢弃无内容 tab → `DELETE /api/sessions/:id` + 清 boot cache
-
----
-
-## 🔮 后续里程碑
-
-| 项 | 里程碑 |
-|----|--------|
-| 历史消息恢复（刷新后） | M4 |
-| Markdown / 工具卡 / Reasoning / `@` / 附件 | M3 |
-| mode / model SessionConfig | M5 |
-| 审批卡片 | M2 |
-
----
-
-## 🐛 已知限制（M1）
-
-1. **恢复会话时历史为空**：Bridge 内存 session，进程重启即无；M4 持久化。
-2. **富消息 UI**：当前 `AisdkThreadMessages` 只拼 text parts；M3 接 ThreadPrimitive。
-3. **Strict Mode**：`ensureAisdkSession` 按 `tabId::cwd` 去重，避免双 `POST /api/sessions`。
 
 ---
 
@@ -97,5 +78,5 @@
 
 - [x] 创建 / 切换 / 关闭 / 恢复 tabs
 - [x] M1：流式对话 + 停止（见 [`M1.md`](../../docs/archive/bridge-milestones/M1.md)、`bun run test:m1`）
-- [ ] 恢复会话后查看历史消息（M4）
-- [ ] 富 UI 不回归（M3）
+- [x] 恢复会话后查看历史消息（M4）
+- [x] 富 UI 不回归（M3）

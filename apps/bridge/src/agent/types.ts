@@ -9,6 +9,11 @@ export type AgentReadiness =
   | "unavailable";
 export type AgentDistributionClass = "native" | "adapter";
 export type AgentDetectedSource = "path" | "vendor" | "managed" | "none";
+export type CompatGrade =
+  | "verified"
+  | "experimental"
+  | "standard-acp"
+  | "unsupported";
 
 export type InstalledAgentInfo = {
   agentId: string;
@@ -86,6 +91,7 @@ export type DiscoveredAgentEntry = {
   detail?: string | null;
   authHint?: string | null;
   icon?: string | null;
+  compatGrade?: CompatGrade;
 };
 
 export type RegistryAgentEntry = {
@@ -110,6 +116,7 @@ export type RegistryAgentEntry = {
   installed?: InstalledAgentInfo | null;
   updateAvailable: boolean;
   host?: null;
+  compatGrade?: CompatGrade;
 };
 
 export type EnsureReadyResult = {

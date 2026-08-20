@@ -19,10 +19,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read pinned Bun version
+        id: bunver
+        run: echo "version=$(tr -d '[:space:]' < runtime/bun-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bunver.outputs.version }}
 
       - name: Setup Rust (Desktop Tauri shell only)
         uses: dtolnay/rust-toolchain@stable
@@ -40,6 +44,9 @@ jobs:
 
       - name: Bridge unit tests
         run: bun run test:bridge
+
+      - name: Core and UI unit tests
+        run: bun run test:core && bun run test:ui
 
       - name: CORS + M9 guards
         run: bun test apps/bridge/test/cors.test.ts && bun run --filter @qenex/bridge test:m9

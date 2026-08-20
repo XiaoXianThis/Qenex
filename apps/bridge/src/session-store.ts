@@ -793,6 +793,7 @@ export class SessionStore {
         title: null,
         createdAt,
         updatedAt: createdAt,
+        agentCommand: spawned.command,
         ...catalogPersistFields({
           modes,
           models,
@@ -908,10 +909,12 @@ export class SessionStore {
     const compat = resolveAgentCompat(agentId);
     const storedRemote = row.remoteSessionId || sessionId;
     const tryLoad = compat.resume === "native-load";
+    const agentCommand = row.agentCommand ?? undefined;
 
     let spawned = spawnAgentProvider({
       cwd,
       agentId,
+      agentCommand,
       existingSessionId: tryLoad ? storedRemote : undefined,
       persistSession: true,
     });
@@ -930,6 +933,7 @@ export class SessionStore {
             spawned = spawnAgentProvider({
               cwd,
               agentId,
+              agentCommand,
               existingSessionId: tryLoad ? storedRemote : undefined,
               persistSession: true,
             });
@@ -945,6 +949,7 @@ export class SessionStore {
         spawned = spawnAgentProvider({
           cwd,
           agentId,
+          agentCommand,
           persistSession: true,
         });
         provider = spawned.provider;
@@ -957,6 +962,7 @@ export class SessionStore {
             spawned = spawnAgentProvider({
               cwd,
               agentId,
+              agentCommand,
               persistSession: true,
             });
             provider = spawned.provider;

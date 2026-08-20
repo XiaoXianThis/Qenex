@@ -9,7 +9,7 @@ on:
       version:
         description: "Semver without v prefix (workflow_dispatch only; tags use tag name)"
         required: false
-        default: "0.3.4"
+        default: "0.3.5"
       publish:
         description: "Create/update GitHub Release (even without tag)"
         type: boolean
@@ -30,10 +30,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read pinned Bun version
+        id: bunver
+        run: echo "version=$(tr -d '[:space:]' < runtime/bun-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bunver.outputs.version }}
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -53,7 +57,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${{ inputs.version || '0.3.4' }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version || '0.3.5' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build shared artifacts
@@ -89,10 +93,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read pinned Bun version
+        id: bunver
+        run: echo "version=$(tr -d '[:space:]' < runtime/bun-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bunver.outputs.version }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -124,7 +132,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${{ inputs.version || '0.3.4' }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version || '0.3.5' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Desktop artifacts

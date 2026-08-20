@@ -1,6 +1,6 @@
 # Qenex 路线图
 
-> **v0.3.4（当前）**：fusion UI − Git 检查点；协议/后端 = **AI SDK + Bun + UIMessage**。  
+> **v0.3.5（当前）**：fusion UI − Git 检查点；协议/后端 = **AI SDK + Bun + UIMessage**。  
 > 详见 [`重构指导.md`](./重构指导.md)、[`docs/agent-compat.md`](./docs/agent-compat.md) 与 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 ## v0.3.0 已交付

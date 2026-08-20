@@ -34,6 +34,28 @@ describe("SessionDb", () => {
     expect(db.getSession("ses_a")).toBeNull();
   });
 
+  test("persists agentCommand across reopen", () => {
+    db.upsertSession({
+      sessionId: "ses_cmd",
+      agent: "fake-acp",
+      cwd: "/tmp/cmd",
+      createdAt: "2026-08-20T00:00:00.000Z",
+      agentCommand: ["/usr/bin/bun", "/tmp/fake-acp.ts"],
+    });
+    expect(db.getSession("ses_cmd")?.agentCommand).toEqual([
+      "/usr/bin/bun",
+      "/tmp/fake-acp.ts",
+    ]);
+    db.close();
+    const again = new SessionDb(path);
+    expect(again.getSession("ses_cmd")?.agentCommand).toEqual([
+      "/usr/bin/bun",
+      "/tmp/fake-acp.ts",
+    ]);
+    again.close();
+    db = new SessionDb(path);
+  });
+
   test("replaceMessages round-trip preserves parts + metadata", () => {
     db.upsertSession({
       sessionId: "ses_m",

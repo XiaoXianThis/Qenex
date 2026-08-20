@@ -163,7 +163,9 @@ URL、路由参数、SQLite PK 用 **local** `session_id`。ACP RPC、fs handler
 | **experimental** | 能起进程，config / resume / 错误可能残缺；不要在 UI 假装完整 |
 | **unsupported** | 明确不跟；不要为它加空 Compat 或 UI 特判 |
 
-当前：**OpenCode = verified**（含 per-model 思考探测）；**Cursor = verified**（probe fallback + reconnect-fresh）；**Codex / pi ACP / Claude / Qoder = experimental**（已有 Compat：目录拆分 / thinking-as-mode / 显示名 / reconnect-fresh，主路径尚未按 verified 标准打穿）；Gemini 仍为 **standard-acp**（Generic；个人 Google 登录已停用，需 API Key 或 Antigravity）。未单开模块的 Registry 项默认为 **standard-acp**，直到有人用 Generic 打过主路径。升级或降级写在本文件本节，不要写进 UI。
+当前分级以 [`apps/bridge/src/agent/compat/grades.ts`](../apps/bridge/src/agent/compat/grades.ts) 为准（discover / registry API 的 `compatGrade`，设置页徽章）。升级或降级先改那张表并同步本节。**verified 的唯一标准**是 `QENEX_LIVE_AGENTS=… bun run test:bridge:live-matrix` 打穿 §11 清单。
+
+当前：**OpenCode = verified**（含 per-model 思考探测）；**Cursor = verified**（probe fallback + reconnect-fresh）；**Claude ACP / Codex ACP = verified**（`QENEX_LIVE_AGENTS=claude-acp,codex-acp bun run test:bridge:live-matrix`：建会话、流式 chat、停止、config / model-config、hibernate resume；Ask 审批本机未发 permission 记 skip）；**pi ACP / Qoder = experimental**（已有 Compat：thinking-as-mode / reconnect-fresh，主路径尚未按 verified 标准打穿）；Gemini 仍为 **standard-acp**（Generic；个人 Google 登录已停用，需 API Key 或 Antigravity）。未单开模块的 Registry 项默认为 **standard-acp**，直到有人用 Generic 打过主路径。
 
 ---
 
