@@ -20,6 +20,7 @@
 - M9 验收走 fake ACP，CI 不再要求 PATH 上有 OpenCode
 - Puck 预览 iframe 选择器补上 `HTMLIFrameElement` 泛型，修复 `tsc -b` 发包失败
 - Release workflow 用 bash 读 `runtime/bun-version`，避免 Windows PowerShell 解析 `<`
+- CI 安装 WebKitGTK，使 `verify:desktop` 的 `cargo check` 能在 Ubuntu runner 上通过
 
 ---
 
