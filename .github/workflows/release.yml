@@ -32,6 +32,7 @@ jobs:
 
       - name: Read pinned Bun version
         id: bunver
+        shell: bash
         run: echo "version=$(tr -d '[:space:]' < runtime/bun-version)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun
@@ -95,6 +96,7 @@ jobs:
 
       - name: Read pinned Bun version
         id: bunver
+        shell: bash
         run: echo "version=$(tr -d '[:space:]' < runtime/bun-version)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun

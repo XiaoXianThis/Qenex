@@ -17,6 +17,9 @@
 ### Fixed
 
 - `GET /health` 的 `ok` 只表示进程在听，`opencode` 允许为 `null`
+- M9 验收走 fake ACP，CI 不再要求 PATH 上有 OpenCode
+- Puck 预览 iframe 选择器补上 `HTMLIFrameElement` 泛型，修复 `tsc -b` 发包失败
+- Release workflow 用 bash 读 `runtime/bun-version`，避免 Windows PowerShell 解析 `<`
 
 ---
 

@@ -86,9 +86,12 @@ function PuckIframeThemeBridge() {
     let cancelled = false;
     let iframe: HTMLIFrameElement | null = null;
 
+    const previewFrame = () =>
+      document.querySelector<HTMLIFrameElement>("iframe#preview-frame");
+
     const paint = () => {
       if (cancelled) return;
-      iframe = document.querySelector("iframe#preview-frame");
+      iframe = previewFrame();
       const doc = iframe?.contentDocument;
       if (!doc?.body) return;
       paintIframeDocumentTheme(doc);
@@ -101,7 +104,7 @@ function PuckIframeThemeBridge() {
     const stopPoll = window.setTimeout(() => window.clearInterval(poll), 2500);
 
     const attach = () => {
-      const next = document.querySelector("iframe#preview-frame");
+      const next = previewFrame();
       if (next === iframe) return;
       iframe?.removeEventListener("load", onLoad);
       iframe = next;

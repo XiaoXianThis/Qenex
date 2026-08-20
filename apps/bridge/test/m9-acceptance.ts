@@ -1,5 +1,6 @@
 /**
  * Live M9 acceptance: IDE Bun Bridge spawn contract (JetBrains + VS Code).
+ * Chat surface uses the hermetic fake ACP so CI does not need OpenCode.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +13,15 @@ const repoRoot = resolve(
   "../../..",
 );
 const bridgeEntry = resolve(repoRoot, "apps/bridge/src/index.ts");
+const fakeAcp = resolve(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "fixtures/fake-acp.ts",
+);
 const workspace = mkdtempSync(join(tmpdir(), "qenex-m9-ws-"));
+
+function fakeCommand(): string[] {
+  return [process.execPath, fakeAcp];
+}
 
 async function waitHealth(baseUrl: string, timeoutMs = 25_000) {
   const deadline = Date.now() + timeoutMs;
@@ -104,7 +113,11 @@ async function assertChatSurface(
       "content-type": "application/json",
       origin,
     },
-    body: JSON.stringify({ cwd: workspace }),
+    body: JSON.stringify({
+      cwd: workspace,
+      agentId: "fake-acp",
+      agentCommand: fakeCommand(),
+    }),
   });
   const created = await readJson(create);
   if (!create.ok || typeof created.sessionId !== "string") {
